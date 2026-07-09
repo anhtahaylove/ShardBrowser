@@ -16,6 +16,7 @@ function detectHostOs(): "macOS" | "Windows" | "Linux" {
   return "macOS";
 }
 const HOST_OS = detectHostOs();
+const CUSTOM_BUILD_LABEL = "custom build";
 
 // OS clipboard via Tauri plugin (webview navigator.clipboard throws).
 const clip = {
@@ -3693,7 +3694,7 @@ function VersionPill() {
       <ShardMini />
       <div className="version-pill-text">
         <div className="version-pill-current">
-          ShardX Launcher v{info?.current ?? "…"}
+          ShardX Launcher v{info?.current ?? "…"} <span className="version-pill-label">{CUSTOM_BUILD_LABEL}</span>
         </div>
         <div className="version-pill-sub">
           {info === null

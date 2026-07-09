@@ -337,6 +337,7 @@ textarea { resize: vertical; min-height: 60px; line-height: 1.5; }
 .version-pill .shard-mini           { color: var(--accent); flex: 0 0 auto; }
 .version-pill-text                  { display: flex; flex-direction: column; min-width: 0; }
 .version-pill-current               { font-size: 12px; font-weight: 500; }
+.version-pill-label                 { color: var(--accent); font-size: 10.5px; font-weight: 600; }
 .version-pill-sub                   { font-size: 10.5px; color: var(--tx-4); }
 
 .version-pill.update-available {

@@ -64,3 +64,50 @@ pub async fn download_mcp(dir: &Path) -> Result<PathBuf> {
     }
     Ok(dest)
 }
+
+pub fn is_mcp_dir(dir: &Path) -> bool {
+    if !dir.join("index.js").is_file() || !dir.join("package.json").is_file() {
+        return false;
+    }
+    std::fs::read_to_string(dir.join("package.json"))
+        .map(|s| s.contains("\"shardx-mcp\""))
+        .unwrap_or(false)
+}
+
+pub fn find_existing_mcp() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(dir) = dirs::document_dir() {
+        candidates.extend([
+            dir.join("MCP").join("ShardBrowser").join("mcp"),
+            dir.join("MCP").join("mcp"),
+            dir.join("ShardBrowser").join("mcp"),
+            dir.join("GitHub").join("ShardBrowser").join("mcp"),
+            dir.join("mcp"),
+        ]);
+    }
+    if let Some(dir) = dirs::download_dir() {
+        candidates.push(dir.join("mcp"));
+    }
+    if let Some(dir) = dirs::desktop_dir() {
+        candidates.push(dir.join("mcp"));
+    }
+    candidates.into_iter().find(|p| is_mcp_dir(p))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_mcp_dir;
+
+    #[test]
+    fn detects_downloaded_mcp_folder() {
+        let dir = std::env::temp_dir().join(format!("shardx-mcp-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.js"), "").unwrap();
+        std::fs::write(dir.join("package.json"), r#"{ "name": "shardx-mcp" }"#).unwrap();
+
+        assert!(is_mcp_dir(&dir));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

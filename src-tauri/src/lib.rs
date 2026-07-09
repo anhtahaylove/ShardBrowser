@@ -61,18 +61,38 @@ async fn mcp_download(dir: String) -> Result<String, String> {
 
 #[tauri::command]
 fn mcp_status() -> Result<Value, String> {
-    let s = settings::load().map_err(|e| e.to_string())?;
-    Ok(match s.mcp_path {
-        Some(path) => {
-            let dir = std::path::Path::new(&path);
-            let installed = dir.join("index.js").is_file() && dir.join("package.json").is_file();
-            serde_json::json!({
+    let mut s = settings::load().map_err(|e| e.to_string())?;
+    if let Some(path) = &s.mcp_path {
+        let installed = mcp_setup::is_mcp_dir(std::path::Path::new(path));
+        if installed {
+            return Ok(serde_json::json!({
                 "path": path,
-                "installed": installed,
-                "state": if installed { "ready" } else { "missing" },
-                "message": if installed { "MCP server files are downloaded." } else { "Saved MCP folder is missing index.js or package.json." },
-            })
+                "installed": true,
+                "state": "ready",
+                "message": "MCP server files are downloaded.",
+            }));
         }
+    }
+
+    if let Some(path) = mcp_setup::find_existing_mcp() {
+        let path = path.display().to_string();
+        s.mcp_path = Some(path.clone());
+        settings::save(&s).map_err(|e| e.to_string())?;
+        return Ok(serde_json::json!({
+            "path": path,
+            "installed": true,
+            "state": "ready",
+            "message": "Found existing MCP server files from a previous download.",
+        }));
+    }
+
+    Ok(match s.mcp_path {
+        Some(path) => serde_json::json!({
+            "path": path,
+            "installed": false,
+            "state": "missing",
+            "message": "Saved MCP folder is missing index.js or package.json.",
+        }),
         None => serde_json::json!({
             "path": null,
             "installed": false,
