@@ -19,9 +19,22 @@ const MCP_ARCHIVE_URL: &str =
 /// Top-level directory inside the tarball that wraps the actual files.
 const MCP_TOP_DIR: &str = "ShardX-MCP";
 
+fn download_destination(dir: &Path) -> PathBuf {
+    // The picker text says "choose a folder" while the status box shows the
+    // actual `mcp` folder. If the user repairs by selecting that shown folder,
+    // update it in place instead of creating `mcp/mcp`.
+    if is_mcp_dir(dir) || dir.file_name().is_some_and(|name| name == "mcp") {
+        dir.to_path_buf()
+    } else {
+        dir.join("mcp")
+    }
+}
+
 /// Download the MCP server into `<dir>/mcp` and return that path.
+///
+/// If `<dir>` already is the MCP folder, repair/update it in place.
 pub async fn download_mcp(dir: &Path) -> Result<PathBuf> {
-    let dest = dir.join("mcp");
+    let dest = download_destination(dir);
     let bytes = reqwest::get(MCP_ARCHIVE_URL)
         .await
         .context("download MCP archive")?
@@ -104,7 +117,7 @@ pub fn find_existing_mcp() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_mcp_dir;
+    use super::{download_destination, is_mcp_dir};
 
     #[test]
     fn detects_downloaded_mcp_folder() {
@@ -118,5 +131,28 @@ mod tests {
         assert_eq!(super::resolve_mcp_dir(&dir).as_deref(), Some(dir.as_path()));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn download_destination_avoids_nested_mcp_when_repairing() {
+        let base = std::env::temp_dir().join(format!(
+            "shardx-mcp-destination-test-{}",
+            std::process::id()
+        ));
+        let normal_parent = base.join("ShardBrowser");
+        let existing_mcp = normal_parent.join("mcp");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&existing_mcp).unwrap();
+        std::fs::write(existing_mcp.join("index.js"), "").unwrap();
+        std::fs::write(
+            existing_mcp.join("package.json"),
+            r#"{ "name": "shardx-mcp" }"#,
+        )
+        .unwrap();
+
+        assert_eq!(download_destination(&normal_parent), existing_mcp);
+        assert_eq!(download_destination(&existing_mcp), existing_mcp);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

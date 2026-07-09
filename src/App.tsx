@@ -4762,7 +4762,12 @@ function SettingsView() {
   useEffect(() => { refreshMcp(); }, []);
   // Download MCP server source; user manages install + client setup.
   const downloadMcp = async () => {
-    const dir = await open({ directory: true, title: "Where to download the MCP server" });
+    const dir = await open({
+      directory: true,
+      title: mcpStatus?.installed
+        ? "Choose an MCP folder to repair, or a parent folder to download into"
+        : "Where to download the MCP server",
+    });
     if (typeof dir !== "string") return;
     setMcpBusy(true);
     try {
@@ -4777,12 +4782,14 @@ function SettingsView() {
   const useExistingMcp = async () => {
     const dir = await open({ directory: true, title: "Select an existing ShardX MCP folder" });
     if (typeof dir !== "string") return;
+    setMcpBusy(true);
     try {
       const status = await invoke<McpStatus>("mcp_set_path", { dir });
       applyMcpStatus(status);
       setS((cur) => ({ ...cur, mcp_path: status.path }));
       toast.ok(`Using MCP at ${status.path}`);
     } catch (e) { toast.err(String(e)); }
+    finally { setMcpBusy(false); }
   };
   const mcpIndexPath = (dir: string) => {
     const clean = dir.replace(/[\\/]+$/, "");
@@ -4921,7 +4928,7 @@ function SettingsView() {
           <span>{mcpStatus?.message ?? "Checking MCP status…"}</span>
         </div>
         <ol className="settings-steps">
-          <li>{mcpReady ? "MCP files are already downloaded." : "Download the server once."}</li>
+          <li>{mcpReady ? "MCP files are already downloaded; use existing folder to switch without re-downloading." : "Download the server once."}</li>
           <li>Run <code>npm install</code> inside the downloaded folder.</li>
           <li>Set <code>SHARDX_TOKEN</code> in your user environment, restart your MCP client, then register <code>index.js</code>.</li>
         </ol>
@@ -4948,9 +4955,24 @@ function SettingsView() {
               <button className="btn-ghost btn-sm" onClick={copyMcpInstall}>Copy install command</button>
               <button className="btn-ghost btn-sm" onClick={copyMcpConfig}>Copy MCP config</button>
               {mcpReady && (
-                <button className="btn-ghost btn-sm" onClick={downloadMcp} disabled={mcpBusy}>
-                  <Icon.Refresh /> {mcpBusy ? "Downloading…" : "Change / repair…"}
-                </button>
+                <>
+                  <button
+                    className="btn-ghost btn-sm"
+                    onClick={useExistingMcp}
+                    disabled={mcpBusy}
+                    title="Point Settings at another already-downloaded MCP folder"
+                  >
+                    Use existing folder…
+                  </button>
+                  <button
+                    className="btn-ghost btn-sm"
+                    onClick={downloadMcp}
+                    disabled={mcpBusy}
+                    title="Download a fresh copy or repair the selected MCP folder in place"
+                  >
+                    <Icon.Refresh /> {mcpBusy ? "Downloading…" : "Download / repair…"}
+                  </button>
+                </>
               )}
             </div>
           </div>
