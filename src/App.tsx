@@ -4747,6 +4747,7 @@ function SettingsView() {
   };
 
   const [mcpBusy, setMcpBusy] = useState(false);
+  const [mcpPath, setMcpPath] = useState("");
   // Download MCP server source; user manages install + client setup.
   const downloadMcp = async () => {
     const dir = await open({ directory: true, title: "Where to download the MCP server" });
@@ -4754,9 +4755,37 @@ function SettingsView() {
     setMcpBusy(true);
     try {
       const path = await invoke<string>("mcp_download", { dir });
+      setMcpPath(path);
       toast.ok(`MCP downloaded to ${path}`);
     } catch (e) { toast.err("MCP download failed: " + String(e)); }
     finally { setMcpBusy(false); }
+  };
+  const mcpIndexPath = (dir: string) => {
+    const clean = dir.replace(/[\\/]+$/, "");
+    return `${clean}${clean.includes("\\") ? "\\" : "/"}index.js`;
+  };
+  const copyMcpInstall = async () => {
+    if (!mcpPath) return;
+    try {
+      await clip.write(`cd '${mcpPath.replace(/'/g, "''")}'; npm install`);
+      toast.ok("Copied MCP install command");
+    } catch (e) { toast.err(String(e)); }
+  };
+  const copyMcpConfig = async () => {
+    if (!mcpPath) return;
+    const snippet = {
+      mcpServers: {
+        shardx: {
+          command: "node",
+          args: [mcpIndexPath(mcpPath)],
+          env: { SHARDX_API: api?.base_url ?? "http://127.0.0.1:40325" },
+        },
+      },
+    };
+    try {
+      await clip.write(JSON.stringify(snippet, null, 2));
+      toast.ok("Copied MCP config snippet");
+    } catch (e) { toast.err(String(e)); }
   };
   const save = async () => {
     try { await invoke("settings_save", { value: s }); toast.ok("Settings saved"); }
@@ -4860,9 +4889,29 @@ function SettingsView() {
           it — install its deps and register it with your MCP client per the included
           README. Requires Node.js.
         </p>
+        <ol className="settings-steps">
+          <li>Download the server.</li>
+          <li>Run <code>npm install</code> inside the downloaded folder.</li>
+          <li>Register <code>index.js</code> with your MCP client and keep the token in <code>SHARDX_TOKEN</code>.</li>
+        </ol>
         <button className="btn-ghost" onClick={downloadMcp} disabled={mcpBusy}>
           <Icon.Download /> {mcpBusy ? "Downloading…" : "Download MCP server"}
         </button>
+        {mcpPath && (
+          <div className="mcp-setup-box">
+            <label>
+              <span className="lbl">Downloaded folder</span>
+              <CopyField value={mcpPath} />
+            </label>
+            <div className="row-inline mcp-setup-actions">
+              <button className="btn-ghost btn-sm" onClick={() => openPath(mcpPath).catch((e) => toast.err(String(e)))}>
+                Open folder
+              </button>
+              <button className="btn-ghost btn-sm" onClick={copyMcpInstall}>Copy install command</button>
+              <button className="btn-ghost btn-sm" onClick={copyMcpConfig}>Copy MCP config</button>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="card-actions">

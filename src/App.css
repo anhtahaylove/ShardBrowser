@@ -1118,6 +1118,26 @@ textarea { resize: vertical; min-height: 60px; line-height: 1.5; }
 }
 .copy-icon:hover { color: var(--tx-1); background: var(--bg-1); }
 
+.settings-steps {
+  margin: 10px 0 12px;
+  padding-left: 20px;
+  color: var(--tx-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.settings-steps code { color: var(--tx-1); }
+.mcp-setup-box {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--bd-1);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+}
+.mcp-setup-actions {
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
 /* Confirm modal */
 .dialog-confirm { max-width: 440px; }
 .confirm-msg { color: var(--tx-2); font-size: 13px; line-height: 1.5; margin: 0; }
