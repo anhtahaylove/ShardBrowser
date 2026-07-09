@@ -1017,6 +1017,7 @@ function BrowsersView() {
   // both as a truthy flag (any number = running) and as the anchor for the
   // ticking uptime display in the Status column.
   const [running, setRunning] = useState<Record<string, number>>({});
+  const [launchErrors, setLaunchErrors] = useState<Record<string, string>>({});
   // Re-render trigger so the uptime label ticks every second without
   // re-fetching the process list (which polls every 2s).
   const [, setUptimeTick] = useState(0);
@@ -1091,6 +1092,18 @@ function BrowsersView() {
         const list = await invoke<{ profile_id: string; pid: number; uptime_ms: number }[]>("process_list");
         if (cancelled) return;
         const now = Date.now();
+        if (list.length > 0) {
+          setLaunchErrors((errors) => {
+            let next: Record<string, string> | null = null;
+            for (const r of list) {
+              if (errors[r.profile_id]) {
+                next ??= { ...errors };
+                delete next[r.profile_id];
+              }
+            }
+            return next ?? errors;
+          });
+        }
         setRunning((prev) => {
           const next: Record<string, number> = {};
           for (const r of list) {
@@ -1172,10 +1185,18 @@ function BrowsersView() {
   // state for the whole window is what the user sees as "did it work?".
   // On failure we unlock immediately and toast the error.
   const [startBusy, setStartBusy] = useState<Set<string>>(new Set());
+  const clearLaunchError = (id: string) =>
+    setLaunchErrors((errors) => {
+      if (!(id in errors)) return errors;
+      const next = { ...errors };
+      delete next[id];
+      return next;
+    });
   const startStop = async (p: ProfileMeta) => {
     if (running[p.id]) {
       try {
         await invoke<boolean>("process_kill", { profileId: p.id });
+        clearLaunchError(p.id);
       } catch (e) {
         toast.err(String(e));
       }
@@ -1183,12 +1204,15 @@ function BrowsersView() {
     }
     if (startBusy.has(p.id)) return;
     setStartBusy((s) => new Set([...s, p.id]));
+    clearLaunchError(p.id);
     try {
       await invoke<number>("launch", { profileId: p.id });
       // Don't optimistically flip `running` here; the 2s poll above picks
       // up the new child immediately and anchors the uptime clock.
     } catch (e) {
-      toast.err(String(e));
+      const msg = String(e);
+      setLaunchErrors((errors) => ({ ...errors, [p.id]: msg }));
+      toast.err(`Launch failed: ${msg}`);
     } finally {
       setStartBusy((s) => {
         const n = new Set(s);
@@ -1324,11 +1348,26 @@ function BrowsersView() {
   };
 
   const bulkLaunch = async () => {
+    let failed = 0;
     for (const id of selected) {
       if (running[id]) continue;
-      try { await invoke<number>("launch", { profileId: id }); } catch {}
+      setStartBusy((s) => new Set([...s, id]));
+      clearLaunchError(id);
+      try {
+        await invoke<number>("launch", { profileId: id });
+      } catch (e) {
+        failed += 1;
+        setLaunchErrors((errors) => ({ ...errors, [id]: String(e) }));
+      } finally {
+        setStartBusy((s) => {
+          const n = new Set(s);
+          n.delete(id);
+          return n;
+        });
+      }
     }
     setSelected(new Set());
+    if (failed > 0) toast.err(`Failed to launch ${failed} profile${failed === 1 ? "" : "s"}`);
   };
 
   const bulkStop = async () => {
@@ -1608,6 +1647,7 @@ function BrowsersView() {
         {paged.map((p) => {
           const px = p.proxy_id ? proxyMap[p.proxy_id] : null;
           const isRunning = !!running[p.id];
+          const launchError = launchErrors[p.id];
           const isExpanded = expanded === p.id;
           const isSel = selected.has(p.id);
           return (
@@ -1653,10 +1693,21 @@ function BrowsersView() {
                   <div className="name-sub">{p.id.slice(0, 8)}</div>
                 </div>
                 <div>
-                  <span className={`pill-status ${isRunning ? "ps-on" : "ps-off"}`}>
-                    <i className="dot" />
-                    {isRunning ? "Running" : "Idle"}
-                  </span>
+                  <div className="status-stack">
+                    <span className={`pill-status ${isRunning ? "ps-on" : launchError ? "ps-err" : "ps-off"}`}>
+                      <i className="dot" />
+                      {isRunning ? "Running" : launchError ? "Launch failed" : "Idle"}
+                    </span>
+                    {launchError && !isRunning && (
+                      <button
+                        className="status-error"
+                        onClick={() => toast.err(launchError)}
+                        title={launchError}
+                      >
+                        Details
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="cell-click" onClick={() => setQuickEdit({ kind: "proxy", profile: p })} title="Change proxy">
                   {px ? (
@@ -1696,7 +1747,13 @@ function BrowsersView() {
                     className={`btn-launch ${isRunning ? "btn-launch-stop" : ""}`}
                     onClick={() => startStop(p)}
                     disabled={!isRunning && startBusy.has(p.id)}
-                    title={!isRunning && startBusy.has(p.id) ? "Starting (UDP probe + geo + spawn)…" : undefined}
+                    title={
+                      !isRunning && startBusy.has(p.id)
+                        ? "Starting (UDP probe + geo + spawn)…"
+                        : launchError
+                          ? launchError
+                          : undefined
+                    }
                   >
                     {isRunning ? (
                       <><span className="btn-launch-ico"><Icon.Stop size={10} /></span><span>Stop</span></>
