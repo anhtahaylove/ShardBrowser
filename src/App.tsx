@@ -4801,11 +4801,35 @@ function SettingsView() {
     api_port: 40325,
   });
   const [api, setApi] = useState<ApiInfo | null>(null);
+  const [tokenBusy, setTokenBusy] = useState(false);
   const refreshApi = () => invoke<ApiInfo>("api_info").then(setApi).catch(() => {});
   useEffect(() => { invoke<Settings>("settings_get").then(setS); refreshApi(); }, []);
   const regenToken = async () => {
-    try { setApi(await invoke<ApiInfo>("api_regenerate_token")); toast.ok("Token regenerated"); }
+    const ok = await confirmModal({
+      title: "Regenerate Automation API token",
+      message:
+        "Existing MCP, Codex, SDK, and script clients using the current token will stop working immediately. Generate a new token?",
+      buttons: [
+        { label: "Cancel", value: false },
+        { label: "Regenerate token", value: true, danger: true },
+      ],
+    });
+    if (ok !== true) return;
+    setTokenBusy(true);
+    try {
+      setApi(await invoke<ApiInfo>("api_regenerate_token"));
+      toast.ok("Token regenerated — update MCP/Codex clients");
+    }
     catch (e) { toast.err(String(e)); }
+    finally { setTokenBusy(false); }
+  };
+  const copyCodexTokenEnv = async () => {
+    if (!api?.token) return;
+    const escapedToken = api.token.replace(/'/g, "''");
+    try {
+      await clip.write(`[Environment]::SetEnvironmentVariable('SHARDX_TOKEN','${escapedToken}','User')`);
+      toast.ok("Copied SHARDX_TOKEN User env command");
+    } catch (e) { toast.err(String(e)); }
   };
 
   const [mcpBusy, setMcpBusy] = useState(false);
@@ -4881,6 +4905,9 @@ function SettingsView() {
   };
   const mcpReady = !!mcpStatus?.installed;
   const mcpMissing = mcpStatus?.state === "missing";
+  const requestedApiEnabled = s.api_enabled ?? true;
+  const requestedApiPort = s.api_port ?? 40325;
+  const apiRestartPending = !!api && (requestedApiEnabled !== api.enabled || requestedApiPort !== api.port);
   return (
     <section className="page settings-page">
       <Topbar crumbs={["System", "Settings"]} search="" onSearch={() => {}} />
@@ -4946,12 +4973,22 @@ function SettingsView() {
           <span className="lbl">Port</span>
           <input
             type="number"
-            value={s.api_port ?? 40325}
+            value={requestedApiPort}
             onChange={(e) => setS({ ...s, api_port: Number(e.target.value) || 40325 })}
           />
         </label>
         {api && (
           <>
+            <div className={`api-state ${api.enabled ? "api-state-on" : "api-state-off"}`}>
+              <strong>{api.enabled ? "Server running" : "Server disabled"}</strong>
+              <span>{api.enabled ? api.base_url : "Enable it, save settings, then restart the app."}</span>
+            </div>
+            {apiRestartPending && (
+              <div className="settings-note settings-note-warn">
+                Enable/port edits apply after <strong>Save settings</strong> and app restart. The current API is still{" "}
+                {api.enabled ? <code>{api.base_url}</code> : "disabled"}.
+              </div>
+            )}
             <label>
               <span className="lbl">Base URL</span>
               <CopyField value={api.base_url} />
@@ -4960,8 +4997,17 @@ function SettingsView() {
               <span className="lbl">Bearer token</span>
               <CopyField value={api.token} secret />
             </label>
+            <div className="settings-note codex-env-row">
+              <span>
+                For Codex on Windows, store this in the User environment as <code>SHARDX_TOKEN</code> instead of
+                pasting it into MCP config files.
+              </span>
+              <button className="btn-ghost btn-sm" onClick={copyCodexTokenEnv}>Copy PowerShell env command</button>
+            </div>
             <div className="row-inline" style={{ marginTop: 10, gap: 10 }}>
-              <button className="btn-ghost" onClick={regenToken}>Regenerate token</button>
+              <button className="btn-ghost" onClick={regenToken} disabled={tokenBusy}>
+                {tokenBusy ? "Regenerating…" : "Regenerate token…"}
+              </button>
               <span className="muted small">Invalidates the current token immediately.</span>
             </div>
             <p className="muted small" style={{ marginTop: 8 }}>
