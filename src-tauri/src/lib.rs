@@ -60,6 +60,23 @@ async fn mcp_download(dir: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn mcp_set_path(dir: String) -> Result<Value, String> {
+    let path = mcp_setup::resolve_mcp_dir(std::path::Path::new(&dir))
+        .ok_or_else(|| "Selected folder is not a ShardX MCP server folder.".to_string())?;
+    let path = path.display().to_string();
+    let mut s = settings::load().map_err(|e| e.to_string())?;
+    s.mcp_path = Some(path.clone());
+    settings::save(&s).map_err(|e| e.to_string())?;
+    notify_store_changed("settings");
+    Ok(serde_json::json!({
+        "path": path,
+        "installed": true,
+        "state": "ready",
+        "message": "Using existing MCP server files.",
+    }))
+}
+
+#[tauri::command]
 fn mcp_status() -> Result<Value, String> {
     let mut s = settings::load().map_err(|e| e.to_string())?;
     if let Some(path) = &s.mcp_path {
@@ -1251,6 +1268,7 @@ pub fn run() {
             cookies_export_to_file,
             cookies_import,
             mcp_download,
+            mcp_set_path,
             mcp_status,
             runtime::runtime_status,
             runtime::runtime_install,

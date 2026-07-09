@@ -4774,6 +4774,16 @@ function SettingsView() {
     } catch (e) { toast.err("MCP download failed: " + String(e)); }
     finally { setMcpBusy(false); }
   };
+  const useExistingMcp = async () => {
+    const dir = await open({ directory: true, title: "Select an existing ShardX MCP folder" });
+    if (typeof dir !== "string") return;
+    try {
+      const status = await invoke<McpStatus>("mcp_set_path", { dir });
+      applyMcpStatus(status);
+      setS((cur) => ({ ...cur, mcp_path: status.path }));
+      toast.ok(`Using MCP at ${status.path}`);
+    } catch (e) { toast.err(String(e)); }
+  };
   const mcpIndexPath = (dir: string) => {
     const clean = dir.replace(/[\\/]+$/, "");
     return `${clean}${clean.includes("\\") ? "\\" : "/"}index.js`;
@@ -4916,9 +4926,14 @@ function SettingsView() {
           <li>Set <code>SHARDX_TOKEN</code> in your user environment, restart your MCP client, then register <code>index.js</code>.</li>
         </ol>
         {!mcpReady && (
-          <button className="btn-ghost" onClick={downloadMcp} disabled={mcpBusy}>
-            <Icon.Download /> {mcpBusy ? "Downloading…" : mcpMissing ? "Repair / choose folder…" : "Download MCP server"}
-          </button>
+          <div className="row-inline" style={{ gap: 10 }}>
+            <button className="btn-ghost" onClick={downloadMcp} disabled={mcpBusy}>
+              <Icon.Download /> {mcpBusy ? "Downloading…" : mcpMissing ? "Repair / choose folder…" : "Download MCP server"}
+            </button>
+            <button className="btn-ghost" onClick={useExistingMcp} disabled={mcpBusy}>
+              Use existing folder…
+            </button>
+          </div>
         )}
         {(mcpPath || mcpReady) && (
           <div className="mcp-setup-box">

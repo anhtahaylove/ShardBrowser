@@ -74,6 +74,14 @@ pub fn is_mcp_dir(dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
+pub fn resolve_mcp_dir(dir: &Path) -> Option<PathBuf> {
+    if is_mcp_dir(dir) {
+        return Some(dir.to_path_buf());
+    }
+    let nested = dir.join("mcp");
+    is_mcp_dir(&nested).then_some(nested)
+}
+
 pub fn find_existing_mcp() -> Option<PathBuf> {
     let mut candidates = Vec::new();
     if let Some(dir) = dirs::document_dir() {
@@ -91,7 +99,7 @@ pub fn find_existing_mcp() -> Option<PathBuf> {
     if let Some(dir) = dirs::desktop_dir() {
         candidates.push(dir.join("mcp"));
     }
-    candidates.into_iter().find(|p| is_mcp_dir(p))
+    candidates.into_iter().find_map(|p| resolve_mcp_dir(&p))
 }
 
 #[cfg(test)]
@@ -107,6 +115,7 @@ mod tests {
         std::fs::write(dir.join("package.json"), r#"{ "name": "shardx-mcp" }"#).unwrap();
 
         assert!(is_mcp_dir(&dir));
+        assert_eq!(super::resolve_mcp_dir(&dir).as_deref(), Some(dir.as_path()));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
