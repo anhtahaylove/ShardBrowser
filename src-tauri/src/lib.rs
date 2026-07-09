@@ -48,10 +48,38 @@ pub fn notify_store_changed(kind: &str) {
 /// Download MCP server source into `<dir>/mcp`; user manages registration.
 #[tauri::command]
 async fn mcp_download(dir: String) -> Result<String, String> {
-    mcp_setup::download_mcp(std::path::Path::new(&dir))
+    let path = mcp_setup::download_mcp(std::path::Path::new(&dir))
         .await
-        .map(|p| p.display().to_string())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let path_string = path.display().to_string();
+    let mut s = settings::load().map_err(|e| e.to_string())?;
+    s.mcp_path = Some(path_string.clone());
+    settings::save(&s).map_err(|e| e.to_string())?;
+    notify_store_changed("settings");
+    Ok(path_string)
+}
+
+#[tauri::command]
+fn mcp_status() -> Result<Value, String> {
+    let s = settings::load().map_err(|e| e.to_string())?;
+    Ok(match s.mcp_path {
+        Some(path) => {
+            let dir = std::path::Path::new(&path);
+            let installed = dir.join("index.js").is_file() && dir.join("package.json").is_file();
+            serde_json::json!({
+                "path": path,
+                "installed": installed,
+                "state": if installed { "ready" } else { "missing" },
+                "message": if installed { "MCP server files are downloaded." } else { "Saved MCP folder is missing index.js or package.json." },
+            })
+        }
+        None => serde_json::json!({
+            "path": null,
+            "installed": false,
+            "state": "not_downloaded",
+            "message": "MCP server has not been downloaded yet.",
+        }),
+    })
 }
 
 // ---- Profiles ----
@@ -1203,6 +1231,7 @@ pub fn run() {
             cookies_export_to_file,
             cookies_import,
             mcp_download,
+            mcp_status,
             runtime::runtime_status,
             runtime::runtime_install,
             runtime::launcher_update_check,

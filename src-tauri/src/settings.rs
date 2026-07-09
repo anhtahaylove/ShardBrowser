@@ -33,6 +33,9 @@ pub struct Settings {
     /// (see `ensure_secret`); rotating it invalidates issued tokens.
     #[serde(default)]
     pub api_secret: String,
+    /// Last downloaded MCP server folder, if any.
+    #[serde(default)]
+    pub mcp_path: Option<String>,
 }
 
 fn default_theme() -> String {
@@ -63,6 +66,7 @@ pub fn load() -> Result<Settings> {
             api_enabled: default_api_enabled(),
             api_port: default_api_port(),
             api_secret: String::new(),
+            mcp_path: None,
         });
     }
     let body = fs::read_to_string(&path)?;

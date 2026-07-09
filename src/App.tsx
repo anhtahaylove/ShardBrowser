@@ -280,12 +280,19 @@ type Settings = {
   api_enabled?: boolean;
   api_port?: number;
   api_secret?: string;
+  mcp_path?: string | null;
 };
 type ApiInfo = {
   enabled: boolean;
   port: number;
   base_url: string;
   token: string;
+};
+type McpStatus = {
+  path: string | null;
+  installed: boolean;
+  state: "not_downloaded" | "ready" | "missing";
+  message: string;
 };
 type Section = "browsers" | "proxies" | "proxyshard" | "fingerprints" | "settings";
 
@@ -701,22 +708,15 @@ function Sidebar({
 
   // Automation/MCP quick widget (fills the sidebar's lower space).
   const [autoUrl, setAutoUrl] = useState("");
-  const [mcpBusy, setMcpBusy] = useState(false);
+  const [mcp, setMcp] = useState<McpStatus | null>(null);
+  const refreshMcp = () => invoke<McpStatus>("mcp_status").then(setMcp).catch(() => {});
   useEffect(() => {
     invoke<{ base_url: string; enabled: boolean }>("api_info")
       .then((i) => setAutoUrl(i.enabled ? i.base_url : ""))
       .catch(() => {});
+    refreshMcp();
   }, []);
-  const downloadMcp = async () => {
-    const dir = await open({ directory: true, title: "Where to download the MCP server" });
-    if (typeof dir !== "string") return;
-    setMcpBusy(true);
-    try {
-      const p = await invoke<string>("mcp_download", { dir });
-      toast.ok(`MCP downloaded to ${p}`);
-    } catch (e) { toast.err("MCP download failed: " + String(e)); }
-    finally { setMcpBusy(false); }
-  };
+  useStoreChanged(refreshMcp);
 
   return (
     <aside className="sidebar">
@@ -757,8 +757,12 @@ function Sidebar({
           ) : (
             <div className="side-auto-off">API off — enable in Settings</div>
           )}
-          <button className="side-auto-btn" onClick={downloadMcp} disabled={mcpBusy}>
-            <Icon.Download /> {mcpBusy ? "Downloading…" : "Download MCP"}
+          <button
+            className={`side-auto-btn ${mcp?.installed ? "side-auto-btn-ok" : ""}`}
+            onClick={() => onSelect("settings")}
+            title={mcp?.message ?? "Set up MCP server in Settings"}
+          >
+            {mcp?.installed ? "✓" : <Icon.Download />} {mcp?.installed ? "MCP downloaded" : "Set up MCP"}
           </button>
           <button
             className="side-auto-btn"
@@ -4748,6 +4752,13 @@ function SettingsView() {
 
   const [mcpBusy, setMcpBusy] = useState(false);
   const [mcpPath, setMcpPath] = useState("");
+  const [mcpStatus, setMcpStatus] = useState<McpStatus | null>(null);
+  const applyMcpStatus = (status: McpStatus) => {
+    setMcpStatus(status);
+    setMcpPath(status.path ?? "");
+  };
+  const refreshMcp = () => invoke<McpStatus>("mcp_status").then(applyMcpStatus).catch(() => {});
+  useEffect(() => { refreshMcp(); }, []);
   // Download MCP server source; user manages install + client setup.
   const downloadMcp = async () => {
     const dir = await open({ directory: true, title: "Where to download the MCP server" });
@@ -4756,6 +4767,8 @@ function SettingsView() {
     try {
       const path = await invoke<string>("mcp_download", { dir });
       setMcpPath(path);
+      setS((cur) => ({ ...cur, mcp_path: path }));
+      await refreshMcp();
       toast.ok(`MCP downloaded to ${path}`);
     } catch (e) { toast.err("MCP download failed: " + String(e)); }
     finally { setMcpBusy(false); }
@@ -4791,6 +4804,8 @@ function SettingsView() {
     try { await invoke("settings_save", { value: s }); toast.ok("Settings saved"); }
     catch (e) { toast.err(String(e)); }
   };
+  const mcpReady = !!mcpStatus?.installed;
+  const mcpMissing = mcpStatus?.state === "missing";
   return (
     <section className="page settings-page">
       <Topbar crumbs={["System", "Settings"]} search="" onSearch={() => {}} />
@@ -4889,15 +4904,23 @@ function SettingsView() {
           it — install its deps and register it with your MCP client per the included
           README. Requires Node.js.
         </p>
+        <div className={`mcp-status mcp-status-${mcpStatus?.state ?? "unknown"}`}>
+          <strong>
+            {mcpReady ? "MCP server downloaded" : mcpMissing ? "MCP folder missing" : "MCP server not downloaded"}
+          </strong>
+          <span>{mcpStatus?.message ?? "Checking MCP status…"}</span>
+        </div>
         <ol className="settings-steps">
-          <li>Download the server.</li>
+          <li>{mcpReady ? "MCP files are already downloaded." : "Download the server once."}</li>
           <li>Run <code>npm install</code> inside the downloaded folder.</li>
           <li>Register <code>index.js</code> with your MCP client and keep the token in <code>SHARDX_TOKEN</code>.</li>
         </ol>
-        <button className="btn-ghost" onClick={downloadMcp} disabled={mcpBusy}>
-          <Icon.Download /> {mcpBusy ? "Downloading…" : "Download MCP server"}
-        </button>
-        {mcpPath && (
+        {!mcpReady && (
+          <button className="btn-ghost" onClick={downloadMcp} disabled={mcpBusy}>
+            <Icon.Download /> {mcpBusy ? "Downloading…" : mcpMissing ? "Repair / choose folder…" : "Download MCP server"}
+          </button>
+        )}
+        {(mcpPath || mcpReady) && (
           <div className="mcp-setup-box">
             <label>
               <span className="lbl">Downloaded folder</span>
@@ -4909,6 +4932,11 @@ function SettingsView() {
               </button>
               <button className="btn-ghost btn-sm" onClick={copyMcpInstall}>Copy install command</button>
               <button className="btn-ghost btn-sm" onClick={copyMcpConfig}>Copy MCP config</button>
+              {mcpReady && (
+                <button className="btn-ghost btn-sm" onClick={downloadMcp} disabled={mcpBusy}>
+                  <Icon.Refresh /> {mcpBusy ? "Downloading…" : "Change / repair…"}
+                </button>
+              )}
             </div>
           </div>
         )}

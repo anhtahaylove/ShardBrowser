@@ -282,6 +282,11 @@ textarea { resize: vertical; min-height: 60px; line-height: 1.5; }
 }
 .side-auto-btn:hover { border-color: var(--accent); }
 .side-auto-btn:disabled { opacity: .5; cursor: default; }
+.side-auto-btn-ok {
+  background: #4ade8014;
+  color: var(--ok);
+}
+.side-auto-btn-ok:hover { border-color: #4ade8055; }
 
 /* Theme switch — a 2-segment pill (Light | Dark) sitting just above
    the user pill.  The active half gets the accent fill; clicking
@@ -1126,6 +1131,24 @@ textarea { resize: vertical; min-height: 60px; line-height: 1.5; }
   line-height: 1.5;
 }
 .settings-steps code { color: var(--tx-1); }
+.mcp-status {
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--bd-1);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+.mcp-status strong { color: var(--tx-1); white-space: nowrap; }
+.mcp-status span { color: var(--tx-3); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcp-status-ready { border-color: #4ade8033; }
+.mcp-status-ready strong { color: var(--ok); }
+.mcp-status-missing { border-color: #f59e0b55; }
+.mcp-status-missing strong { color: #fbbf24; }
 .mcp-setup-box {
   margin-top: 10px;
   padding: 10px;
