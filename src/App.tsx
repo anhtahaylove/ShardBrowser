@@ -4901,8 +4901,7 @@ function SettingsView() {
         <p className="muted small">
           Download the <strong>MCP</strong> server source (lets an AI client drive
           profiles and a CDP browser) into a folder you choose. The app does not run
-          it — install its deps and register it with your MCP client per the included
-          README. Requires Node.js.
+          it — install deps, set SHARDX_TOKEN in your user environment, restart your MCP client, then register it. Requires Node.js.
         </p>
         <div className={`mcp-status mcp-status-${mcpStatus?.state ?? "unknown"}`}>
           <strong>
@@ -4913,7 +4912,7 @@ function SettingsView() {
         <ol className="settings-steps">
           <li>{mcpReady ? "MCP files are already downloaded." : "Download the server once."}</li>
           <li>Run <code>npm install</code> inside the downloaded folder.</li>
-          <li>Register <code>index.js</code> with your MCP client and keep the token in <code>SHARDX_TOKEN</code>.</li>
+          <li>Set <code>SHARDX_TOKEN</code> in your user environment, restart your MCP client, then register <code>index.js</code>.</li>
         </ol>
         {!mcpReady && (
           <button className="btn-ghost" onClick={downloadMcp} disabled={mcpBusy}>
