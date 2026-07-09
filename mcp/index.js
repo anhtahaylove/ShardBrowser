@@ -99,15 +99,93 @@ const text = (v) => ({
   content: [{ type: "text", text: typeof v === "string" ? v : JSON.stringify(v, null, 2) }],
 });
 
+function profileSummary(profile, match) {
+  return {
+    id: profile.id,
+    name: profile.name,
+    folder: profile.folder,
+    notes: profile.notes,
+    running: !!profile.running,
+    cdp: profile.cdp,
+    ...(match ? { match } : {}),
+  };
+}
+
 const server = new McpServer({ name: "shardx", version: "0.1.0" });
 
 // ================= API tools =================
+
+server.tool(
+  "health_check",
+  "Check that the ShardX Launcher API is reachable and, when SHARDX_TOKEN is set, authenticated.",
+  {},
+  async () => {
+    const health = await api("/health");
+    if (!TOKEN) {
+      return text({
+        ok: false,
+        api: API,
+        launcher: health,
+        token_present: false,
+        authenticated: false,
+      });
+    }
+    try {
+      const [profiles, running] = await Promise.all([api("/profiles"), api("/running")]);
+      return text({
+        ok: true,
+        api: API,
+        launcher: health,
+        token_present: true,
+        authenticated: true,
+        profiles_count: profiles.length,
+        running_count: running.length,
+      });
+    } catch (error) {
+      return text({
+        ok: false,
+        api: API,
+        launcher: health,
+        token_present: true,
+        authenticated: false,
+        error: String(error?.message || error),
+      });
+    }
+  },
+);
 
 server.tool(
   "list_profiles",
   "List persistent profiles with their running state and CDP endpoint.",
   {},
   async () => text(await api("/profiles")),
+);
+
+server.tool(
+  "find_profile_by_name",
+  "Find profiles by id or profile name. Returns safe profile summaries, not full fingerprint config.",
+  {
+    query: z.string(),
+    exact: z.boolean().optional(),
+    limit: z.number().int().positive().max(50).optional(),
+  },
+  async ({ query, exact, limit }) => {
+    const q = query.trim().toLowerCase();
+    if (!q) return text([]);
+    const profiles = await api("/profiles");
+    const matches = [];
+    for (const profile of profiles) {
+      const id = String(profile.id || "");
+      const name = String(profile.name || "");
+      const lower = name.toLowerCase();
+      let match = null;
+      if (id === query) match = "id";
+      else if (exact ? lower === q : lower.includes(q)) match = exact ? "name_exact" : "name";
+      if (match) matches.push(profileSummary(profile, match));
+      if (matches.length >= (limit || 10)) break;
+    }
+    return text(matches);
+  },
 );
 
 server.tool(
