@@ -200,7 +200,6 @@ pub async fn launch_profile(
     cmd.stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
         // 0x08000000 = CREATE_NO_WINDOW — suppress the brief console flash
         // when a Tauri GUI app spawns the engine binary.
         cmd.creation_flags(0x08000000);
