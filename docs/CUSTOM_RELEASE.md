@@ -34,7 +34,11 @@ signature reports `Valid`.
 ## Internal and public runs
 
 - **Internal signed build:** run the Release workflow manually and leave
-  `publish_release` disabled. Download the per-platform workflow artifacts.
+  `publish_release` disabled. Select the branch or ref that contains this
+  custom workflow, pass the matching tag such as `v0.1.12`, and download the
+  per-platform workflow artifacts. The workflow rejects manual runs when the
+  requested tag does not match the package versions, and artifact names include
+  the tag to avoid confusing multiple internal builds.
 - **Public release:** push a version tag such as `v0.1.12`, or manually run the
   workflow with `publish_release` enabled. The release receives native bundles,
   `ShardX-MCP.tar.gz`, `SHA256SUMS.txt`, and GitHub build-provenance
@@ -42,3 +46,15 @@ signature reports `Valid`.
 
 Do not create a release tag until the signing secrets are configured: the
 Windows matrix job intentionally blocks unsigned public releases.
+
+When the custom release workflow is still only on a feature branch, run it from
+that branch explicitly, for example:
+
+```powershell
+gh workflow run Release --repo anhtahaylove/ShardBrowser --ref codex/custom-integration-v0.1.12 -f tag=v0.1.12 -f publish_release=false
+```
+
+The internal workflow artifacts are enough to test signed Launcher installation.
+Settings still downloads MCP from the public fork release URL compiled into that
+Launcher version, so the end-to-end Download MCP button is only fully available
+after the matching public release asset exists.
