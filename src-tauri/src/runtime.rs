@@ -13,7 +13,9 @@ const PUB_BASE: &str = "https://pub-e57a7c60f6934eb09a6600bf2fc59cdc.r2.dev";
 /// etag, so install/status checks never poll R2/S3 per-archive.
 const MANIFEST_URL: &str =
     "https://raw.githubusercontent.com/ProxyShard/ShardBrowser/main/runtime.json";
-const LAUNCHER_RELEASE_REPO: &str = "ProxyShard/ShardBrowser";
+// Custom builds use the fork's release channel; the browser runtime still
+// follows the upstream manifest above.
+const LAUNCHER_RELEASE_REPO: &str = "anhtahaylove/ShardBrowser";
 /// Chromium version baked into the current bundle (used for Mac Framework path).
 const CHROMIUM_VERSION: &str = "149.0.7827.103";
 

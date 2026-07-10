@@ -177,12 +177,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
-          name: ShardX Launcher ${{ steps.tag.outputs.tag }}
+          name: ShardX Launcher ${{ steps.tag.outputs.tag }} custom build
           draft: false
           prerelease: false
           fail_on_unmatched_files: true
           generate_release_notes: true
           body: |
+            Custom release channel for [anhtahaylove/ShardBrowser](https://github.com/anhtahaylove/ShardBrowser).
+
             ## Install
 
             * **macOS** (Apple Silicon — M1/M2/M3/M4) — download the `.dmg` and drag *ShardX Launcher.app* to Applications.  The build isn't notarized (no Apple Developer ID), so macOS blocks it on first launch — clear the quarantine flag in Terminal, then open it normally: `xattr -dr com.apple.quarantine "/Applications/ShardX Launcher.app"`  (alternative: *System Settings → Privacy & Security → Open Anyway*).
