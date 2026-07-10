@@ -61,7 +61,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Cache Cargo registry and build target
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -202,7 +202,7 @@ jobs:
           }
 
       - name: Upload signed/internal build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: shardx-launcher-${{ matrix.label }}
           path: staging/*
@@ -242,7 +242,7 @@ jobs:
           fi
 
       - name: Download every per-platform artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -266,7 +266,7 @@ jobs:
           cat SHA256SUMS.txt
 
       - name: Attest release artifacts
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/*
 
