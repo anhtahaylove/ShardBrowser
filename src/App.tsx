@@ -308,6 +308,24 @@ type McpStatus = {
   state: "not_downloaded" | "update_available" | "dependencies_missing" | "api_unavailable" | "ready" | "missing";
   message: string;
 };
+type CodexMcpStatus = {
+  available: boolean;
+  registered: boolean;
+  enabled: boolean;
+  transport_type: string | null;
+  command: string | null;
+  index_path: string | null;
+  expected_index_path: string | null;
+  path_matches: boolean | null;
+  api: string | null;
+  expected_api: string;
+  api_matches: boolean | null;
+  token_in_config: boolean;
+  ready: boolean;
+  state: "unknown" | "codex_not_found" | "not_registered" | "registered" | "needs_repair" | "disabled" | "unsupported_transport" | "timeout" | "error";
+  message: string;
+  issues: string[];
+};
 type Section = "browsers" | "proxies" | "proxyshard" | "fingerprints" | "settings";
 
 /// Library fingerprint backing the editor GPU select; payload supplies the coherent base.
@@ -4855,6 +4873,8 @@ function SettingsView() {
   const [mcpBusy, setMcpBusy] = useState(false);
   const [mcpPath, setMcpPath] = useState("");
   const [mcpStatus, setMcpStatus] = useState<McpStatus | null>(null);
+  const [codexStatus, setCodexStatus] = useState<CodexMcpStatus | null>(null);
+  const [codexBusy, setCodexBusy] = useState(false);
   const applyMcpStatus = (status: McpStatus) => {
     setMcpStatus(status);
     setMcpPath(status.path ?? "");
@@ -4955,6 +4975,16 @@ function SettingsView() {
       toast.ok("Copied Codex repair command");
     } catch (e) { toast.err(String(e)); }
   };
+  const checkCodexMcp = async () => {
+    setCodexBusy(true);
+    try {
+      const status = await invoke<CodexMcpStatus>("codex_mcp_status");
+      setCodexStatus(status);
+      if (status.ready) toast.ok("Codex MCP registration matches");
+      else toast.err(status.message);
+    } catch (e) { toast.err(String(e)); }
+    finally { setCodexBusy(false); }
+  };
   const save = async () => {
     try { await invoke("settings_save", { value: s }); toast.ok("Settings saved"); }
     catch (e) { toast.err(String(e)); }
@@ -4965,6 +4995,8 @@ function SettingsView() {
   const mcpUpdateAvailable = mcpStatus?.state === "update_available";
   const mcpVersionLabel = mcpStatus?.version ? `v${mcpStatus.version}` : "Unknown";
   const mcpRequiredVersionLabel = mcpStatus?.required_version ? `v${mcpStatus.required_version}` : "this Launcher";
+  const codexChecked = !!codexStatus;
+  const codexNeedsRepair = codexStatus?.state === "needs_repair" || codexStatus?.state === "disabled" || codexStatus?.state === "unsupported_transport";
   const requestedApiEnabled = s.api_enabled ?? true;
   const requestedApiPort = s.api_port ?? 40325;
   const unsavedApiChanges = !!api && (requestedApiEnabled !== api.enabled || requestedApiPort !== api.port);
@@ -5147,6 +5179,9 @@ function SettingsView() {
               </button>
               <button className="btn-ghost btn-sm" onClick={copyMcpInstall}>Copy install command</button>
               <button className="btn-ghost btn-sm" onClick={copyMcpConfig}>Copy MCP config</button>
+              <button className="btn-ghost btn-sm" onClick={checkCodexMcp} disabled={codexBusy}>
+                {codexBusy ? "Checking Codex…" : "Check Codex registration"}
+              </button>
               <button className="btn-ghost btn-sm" onClick={copyCodexInspect}>Copy Codex inspect command</button>
               <button className="btn-ghost btn-sm" onClick={copyCodexRegistration}>Copy Codex add command</button>
               <button className="btn-ghost btn-sm" onClick={copyCodexRepair}>Copy Codex repair command</button>
@@ -5180,6 +5215,55 @@ function SettingsView() {
               <strong> repair</strong> after moving/updating the MCP folder. Restart Codex after
               adding or repairing so it reloads the MCP tools.
             </div>
+            <div className={`codex-client-status codex-client-status-${codexStatus?.state ?? "unknown"}`}>
+              <strong>
+                {codexStatus?.ready
+                  ? "Codex registered"
+                  : codexStatus?.state === "not_registered"
+                    ? "Codex not registered"
+                    : codexNeedsRepair
+                      ? "Codex repair recommended"
+                      : codexStatus?.state === "codex_not_found"
+                        ? "Codex CLI not found"
+                        : codexChecked
+                          ? "Codex registration not ready"
+                          : "Codex registration not checked"}
+              </strong>
+              <span>
+                {codexStatus?.message ?? "Run a one-time check to compare Codex's shardbrowser entry with this MCP folder and API URL."}
+              </span>
+            </div>
+            {codexStatus && (
+              <>
+                <div className="mcp-readiness codex-readiness" aria-label="Codex MCP client registration readiness">
+                  <div className={`mcp-readiness-item ${codexStatus.registered ? "is-ready" : "is-pending"}`}>
+                    <strong>{codexStatus.registered ? "✓" : "○"} Entry exists</strong>
+                    <span>{codexStatus.registered ? "shardbrowser found" : "Run add command"}</span>
+                  </div>
+                  <div className={`mcp-readiness-item ${codexStatus.enabled ? "is-ready" : "is-pending"}`}>
+                    <strong>{codexStatus.enabled ? "✓" : "○"} Enabled</strong>
+                    <span>{codexStatus.enabled ? "Codex can launch it" : "Disabled or missing"}</span>
+                  </div>
+                  <div className={`mcp-readiness-item ${codexStatus.path_matches ? "is-ready" : codexStatus.path_matches === false ? "is-error" : "is-pending"}`}>
+                    <strong>{codexStatus.path_matches ? "✓" : "○"} Path matches</strong>
+                    <span>{codexStatus.index_path ?? "No index.js path"}</span>
+                  </div>
+                  <div className={`mcp-readiness-item ${codexStatus.api_matches ? "is-ready" : codexStatus.api_matches === false ? "is-error" : "is-pending"}`}>
+                    <strong>{codexStatus.api_matches ? "✓" : "○"} API matches</strong>
+                    <span>{codexStatus.api ?? "No SHARDX_API"}</span>
+                  </div>
+                  <div className={`mcp-readiness-item ${!codexStatus.token_in_config ? "is-ready" : "is-error"}`}>
+                    <strong>{!codexStatus.token_in_config ? "✓" : "!"} Token outside config</strong>
+                    <span>{codexStatus.token_in_config ? "Use User env instead" : "No token stored in Codex"}</span>
+                  </div>
+                </div>
+                {codexStatus.issues.length > 0 && (
+                  <div className="settings-note settings-note-warn">
+                    {codexStatus.issues.join("; ")}. Use <strong>Copy Codex repair command</strong>, restart Codex, then run <code>health_check</code>.
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
       </div>

@@ -1,6 +1,7 @@
 // ShardX Launcher — Tauri backend.
 
 mod api;
+mod codex_mcp;
 mod cookies;
 mod fingerprints;
 mod launch;
@@ -237,6 +238,11 @@ async fn mcp_status() -> Result<Value, String> {
         missing_saved_path,
         false,
     ))
+}
+
+#[tauri::command]
+async fn codex_mcp_status() -> Result<Value, String> {
+    codex_mcp::status().await
 }
 
 // ---- Profiles ----
@@ -1403,6 +1409,7 @@ pub fn run() {
             mcp_download,
             mcp_set_path,
             mcp_status,
+            codex_mcp_status,
             runtime::runtime_status,
             runtime::runtime_install,
             runtime::launcher_update_check,

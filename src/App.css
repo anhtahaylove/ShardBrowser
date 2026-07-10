@@ -1278,6 +1278,43 @@ textarea { resize: vertical; min-height: 60px; line-height: 1.5; }
   margin-top: 10px;
   flex-wrap: wrap;
 }
+.codex-client-status {
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--bd-1);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+.codex-client-status strong { color: var(--tx-1); white-space: nowrap; }
+.codex-client-status span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--tx-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.codex-client-status-registered { border-color: #4ade8033; }
+.codex-client-status-registered strong { color: var(--ok); }
+.codex-client-status-needs_repair,
+.codex-client-status-not_registered,
+.codex-client-status-disabled,
+.codex-client-status-unsupported_transport,
+.codex-client-status-timeout { border-color: #f59e0b55; }
+.codex-client-status-needs_repair strong,
+.codex-client-status-not_registered strong,
+.codex-client-status-disabled strong,
+.codex-client-status-unsupported_transport strong,
+.codex-client-status-timeout strong { color: #fbbf24; }
+.codex-client-status-codex_not_found,
+.codex-client-status-error { border-color: #fb718555; }
+.codex-client-status-codex_not_found strong,
+.codex-client-status-error strong { color: var(--err); }
+.codex-readiness { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 
 /* Confirm modal */
 .dialog-confirm { max-width: 440px; }

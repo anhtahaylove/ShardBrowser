@@ -64,9 +64,12 @@ codex mcp get shardbrowser
 codex mcp remove shardbrowser; codex mcp add shardbrowser --env "SHARDX_API=http://127.0.0.1:40325" -- node "C:\absolute\path\to\mcp\index.js"
 ```
 
-After adding or repairing, restart Codex so it reloads the MCP tools. Call
-`health_check` first; it reports API reachability and authentication without
-printing the token.
+ShardX Settings can also run a local **Check Codex registration** inspection.
+It compares Codex's `shardbrowser` entry with the selected `index.js` path and
+`SHARDX_API`, and only reports whether `SHARDX_TOKEN` is present in config
+without printing the token value. After adding or repairing, restart Codex so it
+reloads the MCP tools. Call `health_check` first; it reports API reachability
+and authentication without printing the token.
 
 ### HTTP mode (optional, self-hosted)
 
