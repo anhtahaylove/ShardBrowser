@@ -57,10 +57,16 @@ downloaded server without putting the token in Codex config:
 codex mcp add shardbrowser --env "SHARDX_API=http://127.0.0.1:40325" -- node "C:\absolute\path\to\mcp\index.js"
 ```
 
-If that name already exists, inspect it with `codex mcp get shardbrowser` and
-remove the stale entry before registering the new path. After restarting Codex,
-call `health_check` first; it reports API reachability and authentication
-without printing the token.
+If that name already exists, inspect or repair the entry:
+
+```powershell
+codex mcp get shardbrowser
+codex mcp remove shardbrowser; codex mcp add shardbrowser --env "SHARDX_API=http://127.0.0.1:40325" -- node "C:\absolute\path\to\mcp\index.js"
+```
+
+After adding or repairing, restart Codex so it reloads the MCP tools. Call
+`health_check` first; it reports API reachability and authentication without
+printing the token.
 
 ### HTTP mode (optional, self-hosted)
 

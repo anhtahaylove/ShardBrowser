@@ -4901,6 +4901,7 @@ function SettingsView() {
     const clean = dir.replace(/[\\/]+$/, "");
     return `${clean}${clean.includes("\\") ? "\\" : "/"}index.js`;
   };
+  const shellQuote = (value: string) => `'${value.replace(/'/g, HOST_OS === "Windows" ? "''" : "'\\''")}'`;
   const copyMcpInstall = async () => {
     if (!mcpPath) return;
     const command = HOST_OS === "Windows"
@@ -4927,13 +4928,31 @@ function SettingsView() {
       toast.ok("Copied MCP config snippet");
     } catch (e) { toast.err(String(e)); }
   };
-  const copyCodexRegistration = async () => {
+  const codexAddCommand = () => {
     if (!mcpPath) return;
     const apiUrl = api?.runtime_base_url ?? api?.base_url ?? "http://127.0.0.1:40325";
-    const indexPath = mcpIndexPath(mcpPath).replace(/"/g, '`"');
+    return `codex mcp add shardbrowser --env ${shellQuote(`SHARDX_API=${apiUrl}`)} -- node ${shellQuote(mcpIndexPath(mcpPath))}`;
+  };
+  const copyCodexInspect = async () => {
     try {
-      await clip.write(`codex mcp add shardbrowser --env "SHARDX_API=${apiUrl}" -- node "${indexPath}"`);
-      toast.ok("Copied Codex MCP registration command");
+      await clip.write("codex mcp get shardbrowser");
+      toast.ok("Copied Codex inspect command");
+    } catch (e) { toast.err(String(e)); }
+  };
+  const copyCodexRegistration = async () => {
+    const command = codexAddCommand();
+    if (!command) return;
+    try {
+      await clip.write(command);
+      toast.ok("Copied Codex add command");
+    } catch (e) { toast.err(String(e)); }
+  };
+  const copyCodexRepair = async () => {
+    const command = codexAddCommand();
+    if (!command) return;
+    try {
+      await clip.write(`codex mcp remove shardbrowser; ${command}`);
+      toast.ok("Copied Codex repair command");
     } catch (e) { toast.err(String(e)); }
   };
   const save = async () => {
@@ -5128,7 +5147,9 @@ function SettingsView() {
               </button>
               <button className="btn-ghost btn-sm" onClick={copyMcpInstall}>Copy install command</button>
               <button className="btn-ghost btn-sm" onClick={copyMcpConfig}>Copy MCP config</button>
-              <button className="btn-ghost btn-sm" onClick={copyCodexRegistration}>Copy Codex register command</button>
+              <button className="btn-ghost btn-sm" onClick={copyCodexInspect}>Copy Codex inspect command</button>
+              <button className="btn-ghost btn-sm" onClick={copyCodexRegistration}>Copy Codex add command</button>
+              <button className="btn-ghost btn-sm" onClick={copyCodexRepair}>Copy Codex repair command</button>
               <button className="btn-ghost btn-sm" onClick={refreshMcp} disabled={mcpBusy}>
                 <Icon.Refresh /> Refresh status
               </button>
@@ -5152,6 +5173,12 @@ function SettingsView() {
                   </button>
                 </>
               )}
+            </div>
+            <div className="settings-note">
+              Codex registration lives outside ShardX. Use <strong>inspect</strong> to check the
+              current <code>shardbrowser</code> entry, <strong>add</strong> for first setup, or
+              <strong> repair</strong> after moving/updating the MCP folder. Restart Codex after
+              adding or repairing so it reloads the MCP tools.
             </div>
           </div>
         )}
