@@ -240,6 +240,7 @@ jobs:
             echo "Release tag $actual must match package version $expected." >&2
             exit 1
           fi
+          node -e "const fs=require('fs'); const v={root:require('./package.json').version,mcp:require('./mcp/package.json').version,tauri:require('./src-tauri/tauri.conf.json').version,cargo:fs.readFileSync('./src-tauri/Cargo.toml','utf8').match(/^version\s*=\s*\"([^\"]+)/m)?.[1]}; if(new Set(Object.values(v)).size!==1){console.error(v); process.exit(1)}"
 
       - name: Download every per-platform artifact
         uses: actions/download-artifact@v8
