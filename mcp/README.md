@@ -47,6 +47,21 @@ also checks the current user's `HKCU\Environment` values for `SHARDX_API` and
 `SHARDX_TOKEN`. This keeps Codex/Cursor-style stdio launches working without
 copying the token into client config.
 
+### Codex CLI (Windows)
+
+First use the Settings button to store `SHARDX_TOKEN` in the Windows User
+environment, then restart Codex so it inherits the value. Register the
+downloaded server without putting the token in Codex config:
+
+```powershell
+codex mcp add shardbrowser --env "SHARDX_API=http://127.0.0.1:40325" -- node "C:\absolute\path\to\mcp\index.js"
+```
+
+If that name already exists, inspect it with `codex mcp get shardbrowser` and
+remove the stale entry before registering the new path. After restarting Codex,
+call `health_check` first; it reports API reachability and authentication
+without printing the token.
+
 ### HTTP mode (optional, self-hosted)
 
 If you'd rather host it yourself and connect by URL, run it with

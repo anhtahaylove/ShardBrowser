@@ -1,4 +1,4 @@
-// Download the MCP server source from our R2 CDN into a user-chosen
+// Download the MCP server source from the matching custom fork release into a user-chosen
 // folder.  The app does NOT run or manage it — the user installs deps
 // + registers it with their MCP client themselves (see
 // rust/shardx-launcher/mcp/README.md).
@@ -10,11 +10,15 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-/// Public R2.dev URL for the MCP server bundle (matches the launcher's
-/// runtime bucket — same CDN as the browser, Widevine and fingerprint
-/// library archives).
-const MCP_ARCHIVE_URL: &str =
-    "https://pub-e57a7c60f6934eb09a6600bf2fc59cdc.r2.dev/ShardX-MCP.tar.gz";
+/// Public release asset for this exact Launcher version. The browser runtime
+/// remains on its upstream CDN; only the MCP helper bundle follows the fork.
+/// Pinning the tag prevents an older Launcher from downloading a future MCP
+/// bundle that may require a newer Automation API.
+const MCP_ARCHIVE_URL: &str = concat!(
+    "https://github.com/anhtahaylove/ShardBrowser/releases/download/v",
+    env!("CARGO_PKG_VERSION"),
+    "/ShardX-MCP.tar.gz"
+);
 
 /// Top-level directory inside the tarball that wraps the actual files.
 const MCP_TOP_DIR: &str = "ShardX-MCP";
@@ -87,6 +91,32 @@ pub fn is_mcp_dir(dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// True when every runtime dependency declared by the downloaded MCP package
+/// has a package manifest under node_modules. This intentionally checks the
+/// package's own dependency list so future archive updates do not require a
+/// matching Launcher code change.
+pub fn dependencies_installed(dir: &Path) -> bool {
+    if !is_mcp_dir(dir) {
+        return false;
+    }
+    let Ok(body) = std::fs::read_to_string(dir.join("package.json")) else {
+        return false;
+    };
+    let Ok(package) = serde_json::from_str::<serde_json::Value>(&body) else {
+        return false;
+    };
+    let Some(dependencies) = package.get("dependencies").and_then(|v| v.as_object()) else {
+        return false;
+    };
+    !dependencies.is_empty()
+        && dependencies.keys().all(|name| {
+            dir.join("node_modules")
+                .join(Path::new(name))
+                .join("package.json")
+                .is_file()
+        })
+}
+
 pub fn resolve_mcp_dir(dir: &Path) -> Option<PathBuf> {
     if is_mcp_dir(dir) {
         return Some(dir.to_path_buf());
@@ -117,7 +147,8 @@ pub fn find_existing_mcp() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{download_destination, is_mcp_dir};
+    use super::{dependencies_installed, download_destination, is_mcp_dir};
+    use std::path::Path;
 
     #[test]
     fn detects_downloaded_mcp_folder() {
@@ -154,5 +185,38 @@ mod tests {
         assert_eq!(download_destination(&existing_mcp), existing_mcp);
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn detects_installed_runtime_dependencies() {
+        let dir = std::env::temp_dir().join(format!(
+            "shardx-mcp-dependencies-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.js"), "").unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{
+                "name": "shardx-mcp",
+                "dependencies": {
+                    "@modelcontextprotocol/sdk": "^1",
+                    "patchright": "^1",
+                    "zod": "^3"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert!(!dependencies_installed(&dir));
+        for dependency in ["@modelcontextprotocol/sdk", "patchright", "zod"] {
+            let package_dir = dir.join("node_modules").join(Path::new(dependency));
+            std::fs::create_dir_all(&package_dir).unwrap();
+            std::fs::write(package_dir.join("package.json"), "{}").unwrap();
+        }
+        assert!(dependencies_installed(&dir));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

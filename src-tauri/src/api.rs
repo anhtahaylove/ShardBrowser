@@ -11,8 +11,45 @@ use axum::{
     routing::{delete, get, patch, post},
     Json, Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+
+// ---- API listener status (actual runtime state, not just saved settings) ----
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ApiRuntimeStatus {
+    /// Whether this process attempted to start the API from startup settings.
+    pub enabled: bool,
+    /// Port this process attempted to bind, when enabled.
+    pub port: Option<u16>,
+    /// True only after TcpListener::bind has succeeded and until serve exits.
+    pub running: bool,
+    /// Last bind/serve failure, safe to show in Settings.
+    pub error: Option<String>,
+}
+
+fn runtime_status_cell() -> &'static RwLock<ApiRuntimeStatus> {
+    static STATUS: OnceLock<RwLock<ApiRuntimeStatus>> = OnceLock::new();
+    STATUS.get_or_init(|| RwLock::new(ApiRuntimeStatus::default()))
+}
+
+fn publish_runtime_status(status: ApiRuntimeStatus) {
+    if let Ok(mut current) = runtime_status_cell().write() {
+        *current = status;
+    }
+    crate::notify_store_changed("settings");
+}
+
+pub fn runtime_status() -> ApiRuntimeStatus {
+    runtime_status_cell()
+        .read()
+        .map(|status| status.clone())
+        .unwrap_or_default()
+}
+
+pub fn mark_disabled() {
+    publish_runtime_status(ApiRuntimeStatus::default());
+}
 
 // ---- HS256 secret (process-global so live rotation invalidates old tokens) ----
 
@@ -598,6 +635,12 @@ fn random_fingerprint_for(platform: Option<&str>) -> Result<String, ApiError> {
 
 pub async fn serve(secret: String, port: u16) {
     set_secret(&secret);
+    publish_runtime_status(ApiRuntimeStatus {
+        enabled: true,
+        port: Some(port),
+        running: false,
+        error: None,
+    });
 
     let protected = Router::new()
         .route("/profiles", get(list_profiles).post(create_profile))
@@ -624,11 +667,33 @@ pub async fn serve(secret: String, port: u16) {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     match tokio::net::TcpListener::bind(addr).await {
         Ok(listener) => {
+            publish_runtime_status(ApiRuntimeStatus {
+                enabled: true,
+                port: Some(port),
+                running: true,
+                error: None,
+            });
             eprintln!("[launcher] automation API listening on http://{addr}");
             if let Err(e) = axum::serve(listener, app).await {
+                let message = format!("API server stopped: {e}");
+                publish_runtime_status(ApiRuntimeStatus {
+                    enabled: true,
+                    port: Some(port),
+                    running: false,
+                    error: Some(message.clone()),
+                });
                 eprintln!("[launcher] API server error: {e}");
             }
         }
-        Err(e) => eprintln!("[launcher] API bind {addr} failed: {e}"),
+        Err(e) => {
+            let message = format!("Could not bind {addr}: {e}");
+            publish_runtime_status(ApiRuntimeStatus {
+                enabled: true,
+                port: Some(port),
+                running: false,
+                error: Some(message),
+            });
+            eprintln!("[launcher] API bind {addr} failed: {e}");
+        }
     }
 }

@@ -288,11 +288,21 @@ type ApiInfo = {
   port: number;
   base_url: string;
   token: string;
+  running: boolean;
+  runtime_enabled: boolean;
+  runtime_port: number | null;
+  runtime_base_url: string | null;
+  error: string | null;
+  restart_required: boolean;
 };
 type McpStatus = {
   path: string | null;
   installed: boolean;
-  state: "not_downloaded" | "ready" | "missing";
+  files_downloaded: boolean;
+  dependencies_installed: boolean;
+  api_reachable: boolean;
+  ready: boolean;
+  state: "not_downloaded" | "dependencies_missing" | "api_unavailable" | "ready" | "missing";
   message: string;
 };
 type Section = "browsers" | "proxies" | "proxyshard" | "fingerprints" | "settings";
@@ -709,15 +719,20 @@ function Sidebar({
 
   // Automation/MCP quick widget (fills the sidebar's lower space).
   const [autoUrl, setAutoUrl] = useState("");
+  const [apiStatus, setApiStatus] = useState<ApiInfo | null>(null);
   const [mcp, setMcp] = useState<McpStatus | null>(null);
   const refreshMcp = () => invoke<McpStatus>("mcp_status").then(setMcp).catch(() => {});
-  useEffect(() => {
-    invoke<{ base_url: string; enabled: boolean }>("api_info")
-      .then((i) => setAutoUrl(i.enabled ? i.base_url : ""))
+  const refreshAutomation = () => {
+    invoke<ApiInfo>("api_info")
+      .then((i) => {
+        setApiStatus(i);
+        setAutoUrl(i.running ? (i.runtime_base_url ?? i.base_url) : "");
+      })
       .catch(() => {});
     refreshMcp();
-  }, []);
-  useStoreChanged(refreshMcp);
+  };
+  useEffect(() => { refreshAutomation(); }, []);
+  useStoreChanged(refreshAutomation);
 
   return (
     <aside className="sidebar">
@@ -756,14 +771,16 @@ function Sidebar({
               <Icon.Clone />
             </button>
           ) : (
-            <div className="side-auto-off">API off — enable in Settings</div>
+            <div className={`side-auto-off ${apiStatus?.error ? "side-auto-error" : ""}`}>
+              {apiStatus?.error ? "API bind failed — open Settings" : "API unavailable — open Settings"}
+            </div>
           )}
           <button
-            className={`side-auto-btn ${mcp?.installed ? "side-auto-btn-ok" : ""}`}
+            className={`side-auto-btn ${mcp?.ready ? "side-auto-btn-ok" : ""}`}
             onClick={() => onSelect("settings")}
             title={mcp?.message ?? "Set up MCP server in Settings"}
           >
-            {mcp?.installed ? "✓" : <Icon.Download />} {mcp?.installed ? "MCP downloaded" : "Set up MCP"}
+            {mcp?.ready ? "✓" : mcp?.files_downloaded ? <Icon.Info /> : <Icon.Download />} {mcp?.ready ? "MCP ready" : mcp?.files_downloaded ? "Finish MCP setup" : "Set up MCP"}
           </button>
           <button
             className="side-auto-btn"
@@ -1635,7 +1652,7 @@ function BrowsersView() {
               }}
             />
           </div>
-          <div>Name</div><div>Status</div><div>Proxy</div><div>Notes</div><div className="head-time">Time</div><div className="head-lastrun">Last run</div><div></div>
+          <div>Name</div><div>Status</div><div>Proxy</div><div>Notes</div><div className="head-time">Total time</div><div className="head-lastrun">Last run</div><div></div>
         </div>
         {expanded === "__new__" && draft && (
           <div className="row-wrap row-expanded row-new">
@@ -4840,7 +4857,12 @@ function SettingsView() {
     setMcpPath(status.path ?? "");
   };
   const refreshMcp = () => invoke<McpStatus>("mcp_status").then(applyMcpStatus).catch(() => {});
-  useEffect(() => { refreshMcp(); }, []);
+  useEffect(() => {
+    refreshMcp();
+    const timer = setInterval(refreshMcp, 5000);
+    return () => clearInterval(timer);
+  }, []);
+  useStoreChanged(() => { refreshApi(); refreshMcp(); });
   // Download MCP server source; user manages install + client setup.
   const downloadMcp = async () => {
     const dir = await open({
@@ -4878,9 +4900,12 @@ function SettingsView() {
   };
   const copyMcpInstall = async () => {
     if (!mcpPath) return;
+    const command = HOST_OS === "Windows"
+      ? `Set-Location -LiteralPath '${mcpPath.replace(/'/g, "''")}'; $env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD='1'; $env:PATCHRIGHT_SKIP_BROWSER_DOWNLOAD='1'; npm install`
+      : `cd '${mcpPath.replace(/'/g, "'\\''")}' && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 PATCHRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install`;
     try {
-      await clip.write(`cd '${mcpPath.replace(/'/g, "''")}'; npm install`);
-      toast.ok("Copied MCP install command");
+      await clip.write(command);
+      toast.ok("Copied dependency install command");
     } catch (e) { toast.err(String(e)); }
   };
   const copyMcpConfig = async () => {
@@ -4890,7 +4915,7 @@ function SettingsView() {
         shardx: {
           command: "node",
           args: [mcpIndexPath(mcpPath)],
-          env: { SHARDX_API: api?.base_url ?? "http://127.0.0.1:40325" },
+          env: { SHARDX_API: api?.runtime_base_url ?? api?.base_url ?? "http://127.0.0.1:40325" },
         },
       },
     };
@@ -4899,15 +4924,27 @@ function SettingsView() {
       toast.ok("Copied MCP config snippet");
     } catch (e) { toast.err(String(e)); }
   };
+  const copyCodexRegistration = async () => {
+    if (!mcpPath) return;
+    const apiUrl = api?.runtime_base_url ?? api?.base_url ?? "http://127.0.0.1:40325";
+    const indexPath = mcpIndexPath(mcpPath).replace(/"/g, '`"');
+    try {
+      await clip.write(`codex mcp add shardbrowser --env "SHARDX_API=${apiUrl}" -- node "${indexPath}"`);
+      toast.ok("Copied Codex MCP registration command");
+    } catch (e) { toast.err(String(e)); }
+  };
   const save = async () => {
     try { await invoke("settings_save", { value: s }); toast.ok("Settings saved"); }
     catch (e) { toast.err(String(e)); }
   };
-  const mcpReady = !!mcpStatus?.installed;
+  const mcpFilesDownloaded = !!mcpStatus?.files_downloaded;
+  const mcpReady = !!mcpStatus?.ready;
   const mcpMissing = mcpStatus?.state === "missing";
   const requestedApiEnabled = s.api_enabled ?? true;
   const requestedApiPort = s.api_port ?? 40325;
-  const apiRestartPending = !!api && (requestedApiEnabled !== api.enabled || requestedApiPort !== api.port);
+  const unsavedApiChanges = !!api && (requestedApiEnabled !== api.enabled || requestedApiPort !== api.port);
+  const apiRestartPending = !!api && (unsavedApiChanges || api.restart_required);
+  const runtimeApiUrl = api?.runtime_base_url ?? api?.base_url;
   return (
     <section className="page settings-page">
       <Topbar crumbs={["System", "Settings"]} search="" onSearch={() => {}} />
@@ -4979,18 +5016,23 @@ function SettingsView() {
         </label>
         {api && (
           <>
-            <div className={`api-state ${api.enabled ? "api-state-on" : "api-state-off"}`}>
-              <strong>{api.enabled ? "Server running" : "Server disabled"}</strong>
-              <span>{api.enabled ? api.base_url : "Enable it, save settings, then restart the app."}</span>
+            <div className={`api-state ${api.running ? "api-state-on" : api.error ? "api-state-error" : "api-state-off"}`}>
+              <strong>{api.running ? "Server running" : api.error ? "Server failed to start" : api.runtime_enabled ? "Server unavailable" : "Server disabled"}</strong>
+              <span>{api.running ? runtimeApiUrl : api.error ?? (api.runtime_enabled ? "The listener is not running." : "Enable it, save settings, then restart the app.")}</span>
             </div>
+            {api.error && (
+              <div className="settings-note settings-note-error">
+                Check whether another process already uses port <code>{api.runtime_port ?? api.port}</code>, or choose a free port, save, and restart ShardX Launcher.
+              </div>
+            )}
             {apiRestartPending && (
               <div className="settings-note settings-note-warn">
-                Enable/port edits apply after <strong>Save settings</strong> and app restart. The current API is still{" "}
-                {api.enabled ? <code>{api.base_url}</code> : "disabled"}.
+                {unsavedApiChanges ? <>Enable/port edits apply after <strong>Save settings</strong> and app restart.</> : <>Saved API settings require an app restart.</>}{" "}
+                The current listener is {api.running ? <code>{runtimeApiUrl}</code> : "not running"}.
               </div>
             )}
             <label>
-              <span className="lbl">Base URL</span>
+              <span className="lbl">Configured Base URL</span>
               <CopyField value={api.base_url} />
             </label>
             <label>
@@ -5026,16 +5068,31 @@ function SettingsView() {
         </p>
         <div className={`mcp-status mcp-status-${mcpStatus?.state ?? "unknown"}`}>
           <strong>
-            {mcpReady ? "MCP server downloaded" : mcpMissing ? "MCP folder missing" : "MCP server not downloaded"}
+            {mcpReady ? "MCP ready" : mcpMissing ? "MCP folder missing" : mcpFilesDownloaded ? "MCP setup incomplete" : "MCP server not downloaded"}
           </strong>
           <span>{mcpStatus?.message ?? "Checking MCP status…"}</span>
         </div>
+        <div className="mcp-readiness" aria-label="MCP setup readiness">
+          <div className={`mcp-readiness-item ${mcpStatus?.files_downloaded ? "is-ready" : "is-pending"}`}>
+            <strong>{mcpStatus?.files_downloaded ? "✓" : "○"} Files downloaded</strong>
+            <span>{mcpStatus?.files_downloaded ? "Detected" : "Not detected"}</span>
+          </div>
+          <div className={`mcp-readiness-item ${mcpStatus?.dependencies_installed ? "is-ready" : "is-pending"}`}>
+            <strong>{mcpStatus?.dependencies_installed ? "✓" : "○"} Dependencies installed</strong>
+            <span>{mcpStatus?.dependencies_installed ? "node_modules ready" : "npm install required"}</span>
+          </div>
+          <div className={`mcp-readiness-item ${mcpStatus?.api_reachable ? "is-ready" : api?.error ? "is-error" : "is-pending"}`}>
+            <strong>{mcpStatus?.api_reachable ? "✓" : "○"} API reachable</strong>
+            <span>{mcpStatus?.api_reachable ? runtimeApiUrl : api?.error ? "Bind failed" : "Unavailable"}</span>
+          </div>
+        </div>
         <ol className="settings-steps">
-          <li>{mcpReady ? "MCP files are already downloaded; use existing folder to switch without re-downloading." : "Download the server once."}</li>
-          <li>Run <code>npm install</code> inside the downloaded folder.</li>
+          <li>{mcpFilesDownloaded ? "MCP files are already downloaded; no second download is needed." : "Download the server once, or select a previous MCP folder."}</li>
+          <li>{mcpStatus?.dependencies_installed ? "Runtime dependencies are installed." : <>Run <code>npm install</code> inside the downloaded folder.</>}</li>
+          <li>{mcpStatus?.api_reachable ? "Automation API health check passed." : "Fix or enable the Automation API, then refresh status."}</li>
           <li>Set <code>SHARDX_TOKEN</code> in your user environment, restart your MCP client, then register <code>index.js</code>.</li>
         </ol>
-        {!mcpReady && (
+        {!mcpFilesDownloaded && (
           <div className="row-inline" style={{ gap: 10 }}>
             <button className="btn-ghost" onClick={downloadMcp} disabled={mcpBusy}>
               <Icon.Download /> {mcpBusy ? "Downloading…" : mcpMissing ? "Repair / choose folder…" : "Download MCP server"}
@@ -5057,7 +5114,11 @@ function SettingsView() {
               </button>
               <button className="btn-ghost btn-sm" onClick={copyMcpInstall}>Copy install command</button>
               <button className="btn-ghost btn-sm" onClick={copyMcpConfig}>Copy MCP config</button>
-              {mcpReady && (
+              <button className="btn-ghost btn-sm" onClick={copyCodexRegistration}>Copy Codex register command</button>
+              <button className="btn-ghost btn-sm" onClick={refreshMcp} disabled={mcpBusy}>
+                <Icon.Refresh /> Refresh status
+              </button>
+              {mcpFilesDownloaded && (
                 <>
                   <button
                     className="btn-ghost btn-sm"

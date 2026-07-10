@@ -167,7 +167,7 @@ function assertHttpUrl(url) {
   return parsed.href;
 }
 
-const server = new McpServer({ name: "shardx", version: "0.1.0" });
+const server = new McpServer({ name: "shardx", version: "0.1.12" });
 
 // ================= API tools =================
 
@@ -269,9 +269,12 @@ server.tool(
     headless: z.boolean().optional(),
   },
   async ({ profile_id, profile_query, exact, url, headless }) => {
+    // Reject non-http(s) input before resolving/starting a profile so an
+    // invalid navigation request has no browser-process side effect.
+    const targetUrl = assertHttpUrl(url);
     const profile = await resolveProfile({ profile_id, profile_query, exact });
     const page = await pageFor(profile.id, { headless: !!headless });
-    await page.goto(assertHttpUrl(url), { waitUntil: "domcontentloaded", timeout: 60000 });
+    await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
     return text({ profile: profileSummary(profile), url: page.url(), title: await page.title() });
   },
 );

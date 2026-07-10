@@ -60,7 +60,7 @@ async fn mcp_download(dir: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn mcp_set_path(dir: String) -> Result<Value, String> {
+async fn mcp_set_path(dir: String) -> Result<Value, String> {
     let path = mcp_setup::resolve_mcp_dir(std::path::Path::new(&dir))
         .ok_or_else(|| "Selected folder is not a ShardX MCP server folder.".to_string())?;
     let path = path.display().to_string();
@@ -68,55 +68,131 @@ fn mcp_set_path(dir: String) -> Result<Value, String> {
     s.mcp_path = Some(path.clone());
     settings::save(&s).map_err(|e| e.to_string())?;
     notify_store_changed("settings");
-    Ok(serde_json::json!({
+    mcp_status().await
+}
+
+async fn automation_api_reachable() -> bool {
+    let runtime = api::runtime_status();
+    let Some(port) = runtime.port else {
+        return false;
+    };
+    if !runtime.running {
+        return false;
+    }
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(750))
+        .build()
+    else {
+        return false;
+    };
+    match client
+        .get(format!("http://127.0.0.1:{port}/health"))
+        .send()
+        .await
+    {
+        Ok(response) => response.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+fn mcp_status_value(
+    path: Option<String>,
+    files_downloaded: bool,
+    dependencies_installed: bool,
+    api_reachable: bool,
+    missing_saved_path: bool,
+    discovered: bool,
+) -> Value {
+    let ready = files_downloaded && dependencies_installed && api_reachable;
+    let (state, message) = if ready {
+        (
+            "ready",
+            if discovered {
+                "Found an existing MCP install; files, dependencies, and Automation API are ready."
+            } else {
+                "MCP files, dependencies, and Automation API are ready."
+            },
+        )
+    } else if !files_downloaded && missing_saved_path {
+        (
+            "missing",
+            "Saved MCP folder is missing index.js or package.json.",
+        )
+    } else if !files_downloaded {
+        (
+            "not_downloaded",
+            "MCP server files have not been downloaded yet.",
+        )
+    } else if !dependencies_installed {
+        (
+            "dependencies_missing",
+            "MCP files are downloaded; run npm install in the selected folder.",
+        )
+    } else {
+        (
+            "api_unavailable",
+            "MCP files and dependencies are ready, but the Automation API is unreachable.",
+        )
+    };
+
+    serde_json::json!({
         "path": path,
-        "installed": true,
-        "state": "ready",
-        "message": "Using existing MCP server files.",
-    }))
+        // Keep `installed` for compatibility with the v0.1.11 UI/API shape.
+        "installed": files_downloaded,
+        "files_downloaded": files_downloaded,
+        "dependencies_installed": dependencies_installed,
+        "api_reachable": api_reachable,
+        "ready": ready,
+        "state": state,
+        "message": message,
+    })
 }
 
 #[tauri::command]
-fn mcp_status() -> Result<Value, String> {
+async fn mcp_status() -> Result<Value, String> {
     let mut s = settings::load().map_err(|e| e.to_string())?;
-    if let Some(path) = &s.mcp_path {
-        let installed = mcp_setup::is_mcp_dir(std::path::Path::new(path));
-        if installed {
-            return Ok(serde_json::json!({
-                "path": path,
-                "installed": true,
-                "state": "ready",
-                "message": "MCP server files are downloaded.",
-            }));
+    let saved_path = s.mcp_path.clone();
+    let mut discovered = false;
+    let resolved = saved_path
+        .as_deref()
+        .and_then(|path| mcp_setup::resolve_mcp_dir(std::path::Path::new(path)))
+        .or_else(|| {
+            let found = mcp_setup::find_existing_mcp();
+            discovered = found.is_some();
+            found
+        });
+
+    if discovered {
+        if let Some(path) = &resolved {
+            s.mcp_path = Some(path.display().to_string());
+            settings::save(&s).map_err(|e| e.to_string())?;
+            notify_store_changed("settings");
         }
     }
 
-    if let Some(path) = mcp_setup::find_existing_mcp() {
+    let api_reachable = automation_api_reachable().await;
+    if let Some(path) = resolved {
+        let dependencies_installed = mcp_setup::dependencies_installed(&path);
         let path = path.display().to_string();
-        s.mcp_path = Some(path.clone());
-        settings::save(&s).map_err(|e| e.to_string())?;
-        return Ok(serde_json::json!({
-            "path": path,
-            "installed": true,
-            "state": "ready",
-            "message": "Found existing MCP server files from a previous download.",
-        }));
+        return Ok(mcp_status_value(
+            Some(path),
+            true,
+            dependencies_installed,
+            api_reachable,
+            false,
+            discovered,
+        ));
     }
 
-    Ok(match s.mcp_path {
-        Some(path) => serde_json::json!({
-            "path": path,
-            "installed": false,
-            "state": "missing",
-            "message": "Saved MCP folder is missing index.js or package.json.",
-        }),
-        None => serde_json::json!({
-            "path": null,
-            "installed": false,
-            "state": "not_downloaded",
-            "message": "MCP server has not been downloaded yet.",
-        }),
-    })
+    let missing_saved_path = saved_path.is_some();
+    Ok(mcp_status_value(
+        saved_path,
+        false,
+        false,
+        api_reachable,
+        missing_saved_path,
+        false,
+    ))
 }
 
 // ---- Profiles ----
@@ -912,22 +988,40 @@ fn settings_get() -> Result<settings::Settings, String> {
 
 #[tauri::command]
 fn settings_save(value: settings::Settings) -> Result<(), String> {
-    settings::save(&value).map_err(|e| e.to_string())
+    settings::save(&value).map_err(|e| e.to_string())?;
+    notify_store_changed("settings");
+    Ok(())
 }
 
 // ---- Automation API ----
 
-/// API connection info: base URL + permanent Bearer JWT (no raw key exposed).
-#[tauri::command]
-fn api_info() -> Result<Value, String> {
-    let s = settings::ensure_secret().map_err(|e| e.to_string())?;
-    let token = api::long_lived_token(&s.api_secret)?;
-    Ok(serde_json::json!({
+fn api_info_value(s: &settings::Settings, token: String) -> Value {
+    let runtime = api::runtime_status();
+    let runtime_base_url = runtime
+        .port
+        .map(|port| format!("http://127.0.0.1:{port}"));
+    let restart_required = s.api_enabled != runtime.enabled
+        || (s.api_enabled && runtime.port != Some(s.api_port));
+    serde_json::json!({
         "enabled": s.api_enabled,
         "port": s.api_port,
         "base_url": format!("http://127.0.0.1:{}", s.api_port),
         "token": token,
-    }))
+        "running": runtime.running,
+        "runtime_enabled": runtime.enabled,
+        "runtime_port": runtime.port,
+        "runtime_base_url": runtime_base_url,
+        "error": runtime.error,
+        "restart_required": restart_required,
+    })
+}
+
+/// Saved API connection info plus the listener's actual runtime state.
+#[tauri::command]
+fn api_info() -> Result<Value, String> {
+    let s = settings::ensure_secret().map_err(|e| e.to_string())?;
+    let token = api::long_lived_token(&s.api_secret)?;
+    Ok(api_info_value(&s, token))
 }
 
 /// Rotate API secret; live-swap on running server invalidates prior tokens.
@@ -942,12 +1036,7 @@ fn api_regenerate_token() -> Result<Value, String> {
     settings::save(&s).map_err(|e| e.to_string())?;
     api::set_secret(&s.api_secret);
     let token = api::long_lived_token(&s.api_secret)?;
-    Ok(serde_json::json!({
-        "enabled": s.api_enabled,
-        "port": s.api_port,
-        "base_url": format!("http://127.0.0.1:{}", s.api_port),
-        "token": token,
-    }))
+    Ok(api_info_value(&s, token))
 }
 
 // ---- ProxyShard billing API ----
@@ -1338,7 +1427,10 @@ pub fn run() {
                         api::serve(secret, port).await;
                     });
                 }
-                Ok(_) => eprintln!("[launcher] automation API disabled in settings"),
+                Ok(_) => {
+                    api::mark_disabled();
+                    eprintln!("[launcher] automation API disabled in settings");
+                }
                 Err(e) => eprintln!("[launcher] API secret init failed: {e}"),
             }
             Ok(())
