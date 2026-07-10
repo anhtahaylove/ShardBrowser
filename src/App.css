@@ -1231,10 +1231,12 @@ textarea { resize: vertical; min-height: 60px; line-height: 1.5; }
 .mcp-status-ready strong { color: var(--ok); }
 .mcp-status-missing,
 .mcp-status-not_downloaded,
+.mcp-status-update_available,
 .mcp-status-dependencies_missing,
 .mcp-status-api_unavailable { border-color: #f59e0b55; }
 .mcp-status-missing strong,
 .mcp-status-not_downloaded strong,
+.mcp-status-update_available strong,
 .mcp-status-dependencies_missing strong,
 .mcp-status-api_unavailable strong { color: #fbbf24; }
 .mcp-readiness {

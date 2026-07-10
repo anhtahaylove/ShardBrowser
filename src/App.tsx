@@ -299,10 +299,13 @@ type McpStatus = {
   path: string | null;
   installed: boolean;
   files_downloaded: boolean;
+  version: string | null;
+  version_current: boolean;
+  required_version: string;
   dependencies_installed: boolean;
   api_reachable: boolean;
   ready: boolean;
-  state: "not_downloaded" | "dependencies_missing" | "api_unavailable" | "ready" | "missing";
+  state: "not_downloaded" | "update_available" | "dependencies_missing" | "api_unavailable" | "ready" | "missing";
   message: string;
 };
 type Section = "browsers" | "proxies" | "proxyshard" | "fingerprints" | "settings";
@@ -780,7 +783,7 @@ function Sidebar({
             onClick={() => onSelect("settings")}
             title={mcp?.message ?? "Set up MCP server in Settings"}
           >
-            {mcp?.ready ? "✓" : mcp?.files_downloaded ? <Icon.Info /> : <Icon.Download />} {mcp?.ready ? "MCP ready" : mcp?.files_downloaded ? "Finish MCP setup" : "Set up MCP"}
+            {mcp?.ready ? "✓" : mcp?.state === "update_available" ? <Icon.Refresh /> : mcp?.files_downloaded ? <Icon.Info /> : <Icon.Download />} {mcp?.ready ? "MCP ready" : mcp?.state === "update_available" ? "Update MCP" : mcp?.files_downloaded ? "Finish MCP setup" : "Set up MCP"}
           </button>
           <button
             className="side-auto-btn"
@@ -4940,6 +4943,9 @@ function SettingsView() {
   const mcpFilesDownloaded = !!mcpStatus?.files_downloaded;
   const mcpReady = !!mcpStatus?.ready;
   const mcpMissing = mcpStatus?.state === "missing";
+  const mcpUpdateAvailable = mcpStatus?.state === "update_available";
+  const mcpVersionLabel = mcpStatus?.version ? `v${mcpStatus.version}` : "Unknown";
+  const mcpRequiredVersionLabel = mcpStatus?.required_version ? `v${mcpStatus.required_version}` : "this Launcher";
   const requestedApiEnabled = s.api_enabled ?? true;
   const requestedApiPort = s.api_port ?? 40325;
   const unsavedApiChanges = !!api && (requestedApiEnabled !== api.enabled || requestedApiPort !== api.port);
@@ -5068,7 +5074,7 @@ function SettingsView() {
         </p>
         <div className={`mcp-status mcp-status-${mcpStatus?.state ?? "unknown"}`}>
           <strong>
-            {mcpReady ? "MCP ready" : mcpMissing ? "MCP folder missing" : mcpFilesDownloaded ? "MCP setup incomplete" : "MCP server not downloaded"}
+            {mcpReady ? "MCP ready" : mcpUpdateAvailable ? "MCP update available" : mcpMissing ? "MCP folder missing" : mcpFilesDownloaded ? "MCP setup incomplete" : "MCP server not downloaded"}
           </strong>
           <span>{mcpStatus?.message ?? "Checking MCP status…"}</span>
         </div>
@@ -5076,6 +5082,10 @@ function SettingsView() {
           <div className={`mcp-readiness-item ${mcpStatus?.files_downloaded ? "is-ready" : "is-pending"}`}>
             <strong>{mcpStatus?.files_downloaded ? "✓" : "○"} Files downloaded</strong>
             <span>{mcpStatus?.files_downloaded ? "Detected" : "Not detected"}</span>
+          </div>
+          <div className={`mcp-readiness-item ${mcpStatus?.version_current ? "is-ready" : "is-pending"}`}>
+            <strong>{mcpStatus?.version_current ? "✓" : "○"} Version current</strong>
+            <span>{mcpStatus?.version_current ? mcpVersionLabel : mcpFilesDownloaded ? `${mcpVersionLabel}; repair to ${mcpRequiredVersionLabel}` : "No files yet"}</span>
           </div>
           <div className={`mcp-readiness-item ${mcpStatus?.dependencies_installed ? "is-ready" : "is-pending"}`}>
             <strong>{mcpStatus?.dependencies_installed ? "✓" : "○"} Dependencies installed</strong>
@@ -5087,7 +5097,11 @@ function SettingsView() {
           </div>
         </div>
         <ol className="settings-steps">
-          <li>{mcpFilesDownloaded ? "MCP files are already downloaded; no second download is needed." : "Download the server once, or select a previous MCP folder."}</li>
+          <li>
+            {mcpUpdateAvailable
+              ? <>MCP files are {mcpVersionLabel}; use <strong>Download / repair</strong> to update them for this Launcher.</>
+              : mcpFilesDownloaded ? "MCP files are already downloaded; no second download is needed." : "Download the server once, or select a previous MCP folder."}
+          </li>
           <li>{mcpStatus?.dependencies_installed ? "Runtime dependencies are installed." : <>Run <code>npm install</code> inside the downloaded folder.</>}</li>
           <li>{mcpStatus?.api_reachable ? "Automation API health check passed." : "Fix or enable the Automation API, then refresh status."}</li>
           <li>Set <code>SHARDX_TOKEN</code> in your user environment, restart your MCP client, then register <code>index.js</code>.</li>

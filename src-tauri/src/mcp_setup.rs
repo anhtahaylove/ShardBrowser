@@ -91,6 +91,12 @@ pub fn is_mcp_dir(dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
+pub fn package_version(dir: &Path) -> Option<String> {
+    let body = std::fs::read_to_string(dir.join("package.json")).ok()?;
+    let package = serde_json::from_str::<serde_json::Value>(&body).ok()?;
+    package.get("version")?.as_str().map(str::to_owned)
+}
+
 /// True when every runtime dependency declared by the downloaded MCP package
 /// has a package manifest under node_modules. This intentionally checks the
 /// package's own dependency list so future archive updates do not require a
@@ -147,7 +153,7 @@ pub fn find_existing_mcp() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{dependencies_installed, download_destination, is_mcp_dir};
+    use super::{dependencies_installed, download_destination, is_mcp_dir, package_version};
     use std::path::Path;
 
     #[test]
@@ -159,6 +165,7 @@ mod tests {
         std::fs::write(dir.join("package.json"), r#"{ "name": "shardx-mcp" }"#).unwrap();
 
         assert!(is_mcp_dir(&dir));
+        assert_eq!(package_version(&dir), None);
         assert_eq!(super::resolve_mcp_dir(&dir).as_deref(), Some(dir.as_path()));
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -216,6 +223,23 @@ mod tests {
             std::fs::write(package_dir.join("package.json"), "{}").unwrap();
         }
         assert!(dependencies_installed(&dir));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reads_downloaded_mcp_version() {
+        let dir = std::env::temp_dir().join(format!("shardx-mcp-version-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.js"), "").unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{ "name": "shardx-mcp", "version": "0.1.11" }"#,
+        )
+        .unwrap();
+
+        assert_eq!(package_version(&dir).as_deref(), Some("0.1.11"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

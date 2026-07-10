@@ -98,40 +98,51 @@ async fn automation_api_reachable() -> bool {
 fn mcp_status_value(
     path: Option<String>,
     files_downloaded: bool,
+    version: Option<String>,
+    version_current: bool,
     dependencies_installed: bool,
     api_reachable: bool,
     missing_saved_path: bool,
     discovered: bool,
 ) -> Value {
-    let ready = files_downloaded && dependencies_installed && api_reachable;
+    let ready = files_downloaded && version_current && dependencies_installed && api_reachable;
     let (state, message) = if ready {
         (
             "ready",
-            if discovered {
+            (if discovered {
                 "Found an existing MCP install; files, dependencies, and Automation API are ready."
             } else {
                 "MCP files, dependencies, and Automation API are ready."
-            },
+            })
+            .to_string(),
         )
     } else if !files_downloaded && missing_saved_path {
         (
             "missing",
-            "Saved MCP folder is missing index.js or package.json.",
+            "Saved MCP folder is missing index.js or package.json.".to_string(),
         )
     } else if !files_downloaded {
         (
             "not_downloaded",
-            "MCP server files have not been downloaded yet.",
+            "MCP server files have not been downloaded yet.".to_string(),
+        )
+    } else if !version_current {
+        (
+            "update_available",
+            match version.as_deref() {
+                Some(v) => format!("MCP files are v{v}; download/repair them for Launcher v{}.", env!("CARGO_PKG_VERSION")),
+                None => format!("MCP file version is unknown; download/repair them for Launcher v{}.", env!("CARGO_PKG_VERSION")),
+            },
         )
     } else if !dependencies_installed {
         (
             "dependencies_missing",
-            "MCP files are downloaded; run npm install in the selected folder.",
+            "MCP files are downloaded; run npm install in the selected folder.".to_string(),
         )
     } else {
         (
             "api_unavailable",
-            "MCP files and dependencies are ready, but the Automation API is unreachable.",
+            "MCP files and dependencies are ready, but the Automation API is unreachable.".to_string(),
         )
     };
 
@@ -140,12 +151,39 @@ fn mcp_status_value(
         // Keep `installed` for compatibility with the v0.1.11 UI/API shape.
         "installed": files_downloaded,
         "files_downloaded": files_downloaded,
+        "version": version,
+        "version_current": version_current,
+        "required_version": env!("CARGO_PKG_VERSION"),
         "dependencies_installed": dependencies_installed,
         "api_reachable": api_reachable,
         "ready": ready,
         "state": state,
         "message": message,
     })
+}
+
+#[cfg(test)]
+mod mcp_status_tests {
+    use super::mcp_status_value;
+
+    #[test]
+    fn version_mismatch_needs_update_not_ready() {
+        let status = mcp_status_value(
+            Some("C:\\MCP\\ShardBrowser\\mcp".into()),
+            true,
+            Some("0.1.11".into()),
+            false,
+            true,
+            true,
+            false,
+            false,
+        );
+
+        assert_eq!(status["state"].as_str(), Some("update_available"));
+        assert_eq!(status["ready"].as_bool(), Some(false));
+        assert_eq!(status["version"].as_str(), Some("0.1.11"));
+        assert_eq!(status["required_version"].as_str(), Some(env!("CARGO_PKG_VERSION")));
+    }
 }
 
 #[tauri::command]
@@ -172,11 +210,15 @@ async fn mcp_status() -> Result<Value, String> {
 
     let api_reachable = automation_api_reachable().await;
     if let Some(path) = resolved {
+        let version = mcp_setup::package_version(&path);
+        let version_current = version.as_deref() == Some(env!("CARGO_PKG_VERSION"));
         let dependencies_installed = mcp_setup::dependencies_installed(&path);
         let path = path.display().to_string();
         return Ok(mcp_status_value(
             Some(path),
             true,
+            version,
+            version_current,
             dependencies_installed,
             api_reachable,
             false,
@@ -187,6 +229,8 @@ async fn mcp_status() -> Result<Value, String> {
     let missing_saved_path = saved_path.is_some();
     Ok(mcp_status_value(
         saved_path,
+        false,
+        None,
         false,
         false,
         api_reachable,
