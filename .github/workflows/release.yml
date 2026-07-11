@@ -144,6 +144,7 @@ jobs:
         env:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          ALLOW_SELF_SIGNED_INTERNAL: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release == false }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE) -or
               [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) {
@@ -175,6 +176,19 @@ jobs:
             throw "The certificate is not valid for Code Signing."
           }
 
+          $trustedRootThumbprint = ""
+          $trustedPublisherThumbprint = ""
+          $cerPath = ""
+          if ($env:ALLOW_SELF_SIGNED_INTERNAL -eq "true" -and $cert.Subject -eq $cert.Issuer) {
+            $cerPath = Join-Path $env:RUNNER_TEMP "shardx-authenticode.cer"
+            Export-Certificate -Cert $cert -FilePath $cerPath | Out-Null
+            $rootCert = Import-Certificate -FilePath $cerPath -CertStoreLocation Cert:\CurrentUser\Root
+            $publisherCert = Import-Certificate -FilePath $cerPath -CertStoreLocation Cert:\CurrentUser\TrustedPublisher
+            $trustedRootThumbprint = $rootCert.Thumbprint
+            $trustedPublisherThumbprint = $publisherCert.Thumbprint
+            Write-Host "Temporarily trusted self-signed certificate for this unpublished internal run."
+          }
+
           $configPath = Join-Path $env:RUNNER_TEMP "tauri.windows-signing.conf.json"
           @{
             bundle = @{
@@ -188,7 +202,10 @@ jobs:
 
           "config=$configPath" >> $env:GITHUB_OUTPUT
           "pfx=$pfxPath" >> $env:GITHUB_OUTPUT
+          "cer=$cerPath" >> $env:GITHUB_OUTPUT
           "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
+          "trusted_root_thumbprint=$trustedRootThumbprint" >> $env:GITHUB_OUTPUT
+          "trusted_publisher_thumbprint=$trustedPublisherThumbprint" >> $env:GITHUB_OUTPUT
 
       - name: Build signed Windows Tauri bundle
         if: runner.os == 'Windows'
@@ -245,12 +262,22 @@ jobs:
         shell: pwsh
         run: |
           $pfx = "${{ steps.windows_signing.outputs.pfx }}"
+          $cer = "${{ steps.windows_signing.outputs.cer }}"
           $config = "${{ steps.windows_signing.outputs.config }}"
           $thumbprint = "${{ steps.windows_signing.outputs.thumbprint }}"
+          $trustedRootThumbprint = "${{ steps.windows_signing.outputs.trusted_root_thumbprint }}"
+          $trustedPublisherThumbprint = "${{ steps.windows_signing.outputs.trusted_publisher_thumbprint }}"
           if ($pfx) { Remove-Item -LiteralPath $pfx -Force -ErrorAction SilentlyContinue }
+          if ($cer) { Remove-Item -LiteralPath $cer -Force -ErrorAction SilentlyContinue }
           if ($config) { Remove-Item -LiteralPath $config -Force -ErrorAction SilentlyContinue }
           if ($thumbprint) {
             Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumbprint" -Force -ErrorAction SilentlyContinue
+          }
+          if ($trustedRootThumbprint) {
+            Remove-Item -LiteralPath "Cert:\CurrentUser\Root\$trustedRootThumbprint" -Force -ErrorAction SilentlyContinue
+          }
+          if ($trustedPublisherThumbprint) {
+            Remove-Item -LiteralPath "Cert:\CurrentUser\TrustedPublisher\$trustedPublisherThumbprint" -Force -ErrorAction SilentlyContinue
           }
 
       - name: Upload signed/internal build artifacts
