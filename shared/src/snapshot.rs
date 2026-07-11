@@ -1,0 +1,1015 @@
+//! Pack/unpack a profile's `user-data-dir` to portable bytes.
+//!
+//! `pack` tars+gzips the dir, EXCLUDING cache/crashpad/lock files, the machine-
+//! bound `Local State` os_crypt key, and the encrypted `Cookies` DB; the cookies
+//! are instead read, decrypted, and embedded as plaintext (`shardx-portable.json`).
+//! `unpack` extracts everything and rebuilds the `Cookies` DB encrypted with the
+//! DESTINATION machine's key — so a snapshot restores correctly across machines,
+//! including Mac↔Windows where the on-disk key is not portable.
+
+use std::io::Read;
+use std::path::{Path, PathBuf};
+
+use anyhow::{bail, Context, Result};
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
+
+use crate::cookies;
+use crate::logins;
+use crate::oscrypt::LocalCrypt;
+use crate::portable::{PortableState, PORTABLE_FILE};
+use crate::webdata;
+
+/// Relative-path prefixes excluded from snapshots (cache, transient state, and
+/// machine-bound files we reconstruct on restore).
+const EXCLUDE_PREFIXES: &[&str] = &[
+    // Machine-bound os_crypt key — the destination mints its own. Prefix-excluded
+    // (not just the exact file) so a crafted `Local State/foo` can't create a
+    // directory at the protected path and abort the restore.
+    "Local State",
+    "Default/Cache",
+    "Default/Code Cache",
+    "Default/GPUCache",
+    "Default/DawnCache",
+    "Default/DawnGraphiteCache",
+    "Default/DawnWebGPUCache",
+    "Default/GrShaderCache",
+    "Default/ShaderCache",
+    "Default/Service Worker/CacheStorage",
+    "Default/Service Worker/ScriptCache",
+    "Default/Cookies",         // rebuilt from portable plaintext
+    "Default/Network/Cookies", // rebuilt from portable plaintext
+    // `Default/Login Data` (saved passwords) is NOT excluded: like Web Data the
+    // raw DB + its `-wal`/`-shm` travel, and unpack re-seals `password_value` in
+    // place with the destination key. But the account-bound `Login Data For
+    // Account` re-syncs from the signed-in Google account on the destination, so
+    // it's excluded — including its `-wal`/`-shm`, which the `p/`-prefix match
+    // below would not catch (they aren't a `p/` child of the base name).
+    "Default/Login Data For Account",
+    "Default/Login Data For Account-wal",
+    "Default/Login Data For Account-shm",
+    "GPUCache",
+    "ShaderCache",
+    "GrShaderCache",
+    "Crashpad",
+    "component_crx_cache",
+    "extensions_crx_cache",
+];
+
+/// Exclusion match. Comparisons are ASCII-case-insensitive: Windows and the
+/// default macOS filesystem are case-insensitive, so `local state` /
+/// `default/login data for account` would alias the excluded machine-key /
+/// account-bound files. (`Default/Login Data` itself is NOT excluded — it and
+/// its `-wal`/`-shm` travel and are rekeyed in place.) Callers pass the
+/// canonical `rel` from `normalize_rel`, so `.`/empty/leading-root variants are
+/// already collapsed before we get here.
+fn is_excluded(rel: &str) -> bool {
+    for p in EXCLUDE_PREFIXES {
+        let (rb, pb) = (rel.as_bytes(), p.as_bytes());
+        // Exact, or a `p/` prefix. The `rb[pb.len()] == b'/'` guard makes
+        // `pb.len()` a char boundary, so the slice below never splits a codepoint.
+        if rel.eq_ignore_ascii_case(p)
+            || (rb.len() > pb.len() && rb[pb.len()] == b'/' && rel[..pb.len()].eq_ignore_ascii_case(p))
+        {
+            return true;
+        }
+    }
+    let base = rel.rsplit('/').next().unwrap_or(rel).to_ascii_lowercase();
+    // Drop rollback journals (transient), but KEEP SQLite `-wal`/`-shm`: after a
+    // hard-kill checkin the main DB may not be checkpointed, so committed rows
+    // can live only in the WAL — carrying it lets the destination replay them.
+    // For `Web Data` specifically the source-key card frames it may hold are
+    // harmless: unpack re-keys those rows in place and then checkpoint-truncates
+    // the WAL, so the restored profile ends up clean and destination-keyed.
+    if base.ends_with("-journal") {
+        return true;
+    }
+    matches!(
+        base.as_str(),
+        "lock"
+            | "lockfile"
+            | "singletonlock"
+            | "singletoncookie"
+            | "singletonsocket"
+            | "devtoolsactiveport"
+            | ".ds_store"
+    )
+}
+
+/// Pack `udd` into compressed, portable snapshot bytes.
+pub fn pack(udd: &Path) -> Result<Vec<u8>> {
+    let crypt = LocalCrypt::open(udd)?;
+    // Fail the pack on a real read error rather than silently shipping empty
+    // state — an empty cookie/secret set would clobber the shared environment's
+    // login/payment data on the next pull. (A profile with no such data reads as
+    // an empty-but-Ok vec, which is fine; only genuine failures error here.)
+    let cookies = cookies::read(&cookies::cookies_db_path(udd), &crypt)
+        .context("read cookies for snapshot")?;
+    // Decrypt Web Data secrets (card numbers etc.) with THIS machine's key so
+    // they can be re-sealed on the destination; the raw DB itself still travels.
+    let web_secrets = webdata::read(&webdata::web_data_path(udd), &crypt)
+        .context("read Web Data secrets for snapshot")?;
+    // Decrypt saved passwords the same way — the raw `Login Data` DB travels and
+    // only `password_value` is rekeyed on restore, keyed by rowid.
+    let logins = logins::read(&logins::login_data_path(udd), &crypt)
+        .context("read saved logins for snapshot")?;
+    let state = PortableState { cookies, logins, web_secrets };
+    let state_json = serde_json::to_vec(&state)?;
+
+    let gz = GzEncoder::new(Vec::new(), Compression::default());
+    let mut tar = tar::Builder::new(gz);
+    tar.follow_symlinks(false);
+    // Never emit GNU-sparse entries: unpack refuses them (a raw-iteration reader
+    // can't safely expand a sparse map), so producing one would strand a file.
+    tar.sparse(false);
+
+    // Embed the portable plaintext state first.
+    let mut header = tar::Header::new_gnu();
+    header.set_size(state_json.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    tar.append_data(&mut header, PORTABLE_FILE, &state_json[..])?;
+
+    add_dir(&mut tar, udd, udd)?;
+    let gz = tar.into_inner()?;
+    Ok(gz.finish()?)
+}
+
+fn add_dir(tar: &mut tar::Builder<GzEncoder<Vec<u8>>>, root: &Path, dir: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        if is_excluded(&rel) {
+            continue;
+        }
+        let meta = std::fs::symlink_metadata(&path)?;
+        if meta.is_dir() {
+            add_dir(tar, root, &path)?;
+        } else if meta.is_file() {
+            let mut f = std::fs::File::open(&path)?;
+            tar.append_file(&rel, &mut f)
+                .with_context(|| format!("append {rel}"))?;
+        }
+        // symlinks are skipped intentionally
+    }
+    Ok(())
+}
+
+/// Extract a snapshot into `udd` and rebuild the Cookies DB with the local key.
+/// Returns the embedded portable state.
+///
+/// Atomic: the snapshot is materialized in a sibling staging dir and only
+/// swapped into place once fully built (extract + cookie rebuild). A failure
+/// mid-way leaves the existing `udd` untouched; a crash leaves only a stale
+/// staging dir that the next call cleans up. The swap also drops any local
+/// files no longer present in the snapshot (state deleted on another machine),
+/// which an in-place extract would have left behind.
+pub fn unpack(bytes: &[u8], udd: &Path) -> Result<PortableState> {
+    let staging = sibling(udd, "incoming")?;
+    let backup = sibling(udd, "backup")?;
+
+    // Crash recovery. If a prior run died between "move udd aside" and "move
+    // staging into place", `.backup` holds the ONLY copy of the original udd —
+    // restore it before touching anything. Only once udd exists is `.backup`
+    // a safe-to-drop stale leftover.
+    //
+    // (Concurrency note: two unpacks of the same udd would race on these fixed
+    // paths, but the caller serializes them — a profile is under one checkout
+    // lock and the launcher refuses a second concurrent launch.)
+    if !udd.exists() && backup.exists() {
+        std::fs::rename(&backup, udd).context("recover interrupted snapshot swap")?;
+    }
+    remove_path(&staging);
+    remove_path(&backup);
+    std::fs::create_dir_all(&staging)?;
+
+    // Build the new tree fully in staging; on any error, tear it down and
+    // leave the live udd as-is.
+    let state = match build_staging(bytes, udd, &staging) {
+        Ok(s) => s,
+        Err(e) => {
+            remove_path(&staging);
+            return Err(e);
+        }
+    };
+
+    // Swap staging → udd. Move the old dir aside first so the rename lands on
+    // a free path (rename-onto-existing fails on Windows); restore it if the
+    // second rename fails so we never end up with no udd at all.
+    let had_existing = udd.exists();
+    if had_existing {
+        std::fs::rename(udd, &backup).context("move current user-data-dir aside")?;
+    }
+    if let Err(e) = std::fs::rename(&staging, udd) {
+        if had_existing {
+            let _ = std::fs::rename(&backup, udd); // best-effort restore
+        }
+        remove_path(&staging);
+        return Err(anyhow::Error::new(e).context("swap staged snapshot into place"));
+    }
+    remove_path(&backup);
+    Ok(state)
+}
+
+/// Remove a path whether it's a dir, file, or symlink; ignore if absent.
+fn remove_path(p: &Path) {
+    match std::fs::symlink_metadata(p) {
+        Ok(m) if m.is_dir() => {
+            let _ = std::fs::remove_dir_all(p);
+        }
+        Ok(_) => {
+            let _ = std::fs::remove_file(p);
+        }
+        Err(_) => {}
+    }
+}
+
+// Decompression-bomb guards for member-uploaded snapshots: a malicious snapshot
+// must not exhaust a puller's disk/CPU. Bounds are generous vs a real profile
+// (a few MB–low GB) but tight vs a bomb (a 512 MB upload of zeros expands to
+// hundreds of GB otherwise).
+const MAX_TOTAL_EXPANDED: u64 = 4 * 1024 * 1024 * 1024; // total across all files
+const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024; // single file
+const MAX_ENTRIES: usize = 100_000;
+const MAX_PATH_DEPTH: usize = 64;
+const MAX_PATH_BYTES: usize = 4096; // single archive path length
+const MAX_PORTABLE_BYTES: u64 = 512 * 1024 * 1024; // portable-state JSON
+const MAX_EXT_BYTES: u64 = 64 * 1024; // GNU-longname / PAX extension header body
+const MAX_EXPANSION_RATIO: u64 = 100; // expanded / compressed
+const RATIO_FLOOR_BYTES: u64 = 64 * 1024 * 1024; // ratio ignored below this
+
+/// Cap on total expanded bytes for a snapshot of `compressed_len` bytes: at most
+/// `MAX_EXPANSION_RATIO`× the input, but always allowing `RATIO_FLOOR_BYTES` (so
+/// a small, legitimately-compressible profile isn't rejected) and never more
+/// than the absolute `MAX_TOTAL_EXPANDED`.
+fn expand_cap(compressed_len: usize) -> u64 {
+    (compressed_len as u64)
+        .saturating_mul(MAX_EXPANSION_RATIO)
+        .max(RATIO_FLOOR_BYTES)
+        .min(MAX_TOTAL_EXPANDED)
+}
+
+/// Reader that errors once more than `remaining` bytes have been pulled from the
+/// inner stream. Wrapping the gzip decoder with this caps the TOTAL decompressed
+/// bytes tar can ever read — file data, tar headers/padding, AND the GNU-longname
+/// / PAX extension bodies that tar-rs buffers *before* yielding a business entry.
+/// So it bounds a decompression bomb regardless of tar-format tricks (a lying or
+/// PAX-overridden per-entry size can't get past it). Fails closed (error, not
+/// silent EOF) so a truncated read never looks like a clean end-of-archive.
+struct LimitReader<R> {
+    inner: R,
+    remaining: u64,
+}
+
+impl<R: std::io::Read> std::io::Read for LimitReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.remaining == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "snapshot exceeds the decompressed size limit (possible bomb)",
+            ));
+        }
+        let cap = buf.len().min(self.remaining as usize);
+        let n = self.inner.read(&mut buf[..cap])?;
+        self.remaining -= n as u64;
+        Ok(n)
+    }
+}
+
+/// Materialize a snapshot into `staging`, preserving `udd`'s machine-bound
+/// `Local State` key so cookies re-encrypt to the same key this machine
+/// already uses (matters on Windows, where the key lives in `Local State`;
+/// on macOS/Linux the key is fixed and this is a harmless no-op).
+fn build_staging(bytes: &[u8], udd: &Path, staging: &Path) -> Result<PortableState> {
+    // Hard backstop: cap the total decompressed bytes tar may read (see
+    // LimitReader). Per-entry checks below fail earlier with clearer errors.
+    let cap = expand_cap(bytes.len());
+    let reader = LimitReader { inner: GzDecoder::new(bytes), remaining: cap };
+    let mut archive = tar::Archive::new(reader);
+    let mut state = PortableState::default();
+
+    let mut total: u64 = 0;
+    let mut count: usize = 0;
+    let mut saw_portable = false;
+    // A pending GNU-longname body names the *next* file entry (paths >100 bytes,
+    // e.g. long IndexedDB origins). We resolve it ourselves — see below.
+    let mut pending_long_name: Option<String> = None;
+
+    // Raw iteration: tar yields every physical entry WITHOUT buffering the GNU
+    // longname / PAX extension bodies (which non-raw iteration `read_all`s into a
+    // Vec before yielding a business entry — a memory bomb). We cap those bodies
+    // and resolve GNU longnames ourselves; PAX (`x`/`g`) we never emit, so cap +
+    // skip. Raw also means no PAX `size=` override (so `e.size()` is the true
+    // physical length) and GNU-sparse maps aren't expanded.
+    for entry in archive.entries()?.raw(true) {
+        let mut e = entry?;
+
+        count += 1;
+        if count > MAX_ENTRIES {
+            bail!("snapshot has too many entries (>{MAX_ENTRIES}) — refusing");
+        }
+
+        let et = e.header().entry_type();
+        // We never emit GNU-sparse (pack sets sparse(false)); a raw reader can't
+        // safely expand its map, so refuse rather than silently drop the file.
+        if et == tar::EntryType::GNUSparse {
+            bail!("snapshot contains an unsupported GNU-sparse entry — refusing");
+        }
+        // GNU longname: the real path of the following entry. Cap it, then read
+        // it here (bounded) so a long path still resolves correctly.
+        if et == tar::EntryType::GNULongName {
+            if pending_long_name.is_some() {
+                bail!("snapshot has two longname headers for one entry — refusing");
+            }
+            if e.size() > MAX_EXT_BYTES {
+                bail!("snapshot has an oversized tar longname header — refusing");
+            }
+            let mut name = String::new();
+            e.read_to_string(&mut name)?;
+            pending_long_name = Some(name.trim_end_matches('\0').replace('\\', "/"));
+            continue;
+        }
+        // Other extension headers we never emit (GNU longlink, PAX x/g): cap the
+        // body and skip without buffering or resolving.
+        if matches!(
+            et,
+            tar::EntryType::GNULongLink | tar::EntryType::XHeader | tar::EntryType::XGlobalHeader
+        ) {
+            if e.size() > MAX_EXT_BYTES {
+                bail!("snapshot has an oversized tar extension header — refusing");
+            }
+            continue;
+        }
+
+        let size = e.size();
+        if size > MAX_FILE_BYTES {
+            bail!("snapshot entry exceeds the {MAX_FILE_BYTES}-byte file limit — refusing");
+        }
+        total = total.saturating_add(size);
+        if total > cap {
+            bail!("snapshot expands beyond {cap} bytes — refusing (possible decompression bomb)");
+        }
+
+        // Prefer a pending GNU longname over the (truncated) ustar header name.
+        let raw_rel = match pending_long_name.take() {
+            Some(n) => n,
+            None => e.path()?.to_string_lossy().replace('\\', "/"),
+        };
+        if raw_rel.len() > MAX_PATH_BYTES {
+            bail!("snapshot path exceeds {MAX_PATH_BYTES} bytes — refusing");
+        }
+        // Canonicalize ONCE, then match and extract on the same string. Otherwise
+        // a crafted path can take one spelling past the exact-string checks
+        // (`PORTABLE_FILE` / `is_excluded`) and a different, normalized spelling to
+        // disk — e.g. `./Local State`, `Local State/`, `/Local State`,
+        // `Default/./Network/Cookies` all collapse here so they can't plant an
+        // excluded file or a portable-state stand-in.
+        let rel = normalize_rel(&raw_rel)?;
+        if rel == PORTABLE_FILE {
+            if size > MAX_PORTABLE_BYTES {
+                bail!("snapshot portable state exceeds {MAX_PORTABLE_BYTES} bytes — refusing");
+            }
+            let mut s = String::new();
+            e.read_to_string(&mut s)?;
+            // A corrupt portable blob must fail loudly — treating it as empty
+            // would rebuild an EMPTY cookie DB, silently wiping the login state.
+            state = serde_json::from_str(&s).context("parse portable snapshot state")?;
+            saw_portable = true;
+            continue;
+        }
+        if is_excluded(&rel) {
+            continue; // defensive; should already be absent
+        }
+        if rel.split('/').filter(|c| !c.is_empty()).count() > MAX_PATH_DEPTH {
+            bail!("snapshot path is nested deeper than {MAX_PATH_DEPTH} — refusing: {rel}");
+        }
+        // Snapshots are member-uploadable bytes: only ever materialize plain
+        // files and directories. A symlink/hardlink/device entry could plant a
+        // link that escapes the udd on a later write — reject all of them.
+        if !(et.is_file() || et.is_dir()) {
+            continue;
+        }
+        let out = safe_join(staging, &rel)?;
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        e.unpack(&out)?;
+    }
+    // A longname with no following entry means a truncated/crafted archive.
+    if pending_long_name.is_some() {
+        bail!("snapshot ends with a dangling longname header — refusing");
+    }
+    // Every snapshot pack() produces embeds the portable state first. Its absence
+    // means a truncated/corrupt archive — refuse rather than rebuild empty
+    // cookies over the local ones.
+    if !saw_portable {
+        bail!("snapshot is missing its portable state (shardx-portable.json) — refusing");
+    }
+
+    // Carry over this machine's existing os_crypt key (if any) so we don't
+    // orphan already-encrypted local data (e.g. Web Data autofill) behind a
+    // freshly-minted key. Snapshots deliberately exclude Local State.
+    let live_ls = udd.join("Local State");
+    if live_ls.exists() {
+        std::fs::copy(&live_ls, staging.join("Local State")).context("carry over Local State")?;
+    }
+
+    // Rebuild cookies encrypted with THIS machine's key.
+    let crypt = LocalCrypt::open(staging)?;
+    let db = cookies::cookies_db_path(staging);
+    cookies::write(&db, &crypt, &state.cookies)?;
+
+    // Re-seal Web Data secrets (card numbers etc.) with this machine's key. The
+    // raw DB traveled in the snapshot; only its encrypted columns are rekeyed in
+    // place, keyed by each row's guid — the rest of its tables are left intact.
+    webdata::reencrypt_in_place(&webdata::web_data_path(staging), &crypt, &state.web_secrets)
+        .context("re-encrypt Web Data secrets")?;
+
+    // Re-seal saved passwords with this machine's key. Like Web Data, the raw
+    // `Login Data` DB traveled; only `password_value` is rekeyed in place by
+    // rowid, then the WAL is checkpointed so the staged DB is self-contained.
+    logins::reencrypt_in_place(&logins::login_data_path(staging), &crypt, &state.logins)
+        .context("re-encrypt saved logins")?;
+    Ok(state)
+}
+
+/// A sibling path of `udd` with a `.<suffix>` name, for staging/backup dirs.
+fn sibling(udd: &Path, suffix: &str) -> Result<PathBuf> {
+    let name = udd
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| anyhow::anyhow!("user-data-dir has no final path component"))?;
+    Ok(udd.with_file_name(format!("{name}.{suffix}")))
+}
+
+/// Windows reserved device name (case-insensitive, ignoring any extension):
+/// `NUL`, `CON`, `COM1`, … — these don't behave as literal files on Windows.
+fn is_windows_reserved(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
+    matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL"
+            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
+            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+    )
+}
+
+/// Canonicalize an archive path to its `/`-joined normal form, rejecting anything
+/// that isn't a plain relative chain of file/dir names. `.` and empty segments
+/// (leading root, `//`, trailing `/`) are dropped so a crafted spelling can't
+/// slip a different form past the exact-string checks in `build_staging`; `..`,
+/// a colon / Windows drive-prefix, a trailing dot/space, or a reserved device
+/// name (`NUL`, `COM1`, …) are refused outright. The returned string is what
+/// both the exclusion match AND `safe_join` operate on — one path, one meaning.
+fn normalize_rel(rel: &str) -> Result<String> {
+    use std::path::Component;
+    let mut parts: Vec<&str> = Vec::new();
+    for comp in rel.split('/') {
+        if comp.is_empty() || comp == "." {
+            continue;
+        }
+        if comp == ".." {
+            bail!("unsafe path in archive: {rel}");
+        }
+        // A colon flags a Windows drive/ADS even on Unix; `components()` catches
+        // a platform-specific prefix/root; trailing dot/space and reserved device
+        // names behave non-literally on Windows. Require exactly one plain Normal
+        // segment — Chromium profile paths need nothing else.
+        let is_plain_name = !comp.contains(':')
+            && !comp.ends_with('.')
+            && !comp.ends_with(' ')
+            && !is_windows_reserved(comp)
+            && matches!(
+                Path::new(comp).components().collect::<Vec<_>>().as_slice(),
+                [Component::Normal(_)]
+            );
+        if !is_plain_name {
+            bail!("unsafe path component in archive: {rel}");
+        }
+        parts.push(comp);
+    }
+    if parts.is_empty() {
+        bail!("empty path in archive: {rel}");
+    }
+    Ok(parts.join("/"))
+}
+
+/// Join a canonical (already `normalize_rel`-validated) path under `root`. Kept
+/// as a thin final guard: re-normalizes as defense-in-depth so a future caller
+/// that forgets to normalize can't escape `root`.
+fn safe_join(root: &Path, rel: &str) -> Result<PathBuf> {
+    Ok(root.join(normalize_rel(rel)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::portable::PortableCookie;
+
+    #[test]
+    fn pack_unpack_excludes_cache_and_keeps_cookies() {
+        let base = std::env::temp_dir().join(format!("shardx-snap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let src = base.join("src");
+        let dst = base.join("dst");
+        std::fs::create_dir_all(src.join("Default/Network")).unwrap();
+        std::fs::create_dir_all(src.join("Default/Local Storage/leveldb")).unwrap();
+        std::fs::create_dir_all(src.join("Default/Cache")).unwrap();
+
+        // Keepable state + cache that must be dropped.
+        std::fs::write(src.join("Default/Local Storage/leveldb/000003.log"), b"LSDATA").unwrap();
+        std::fs::write(src.join("Default/Cache/data_0"), vec![0u8; 4096]).unwrap();
+        std::fs::write(src.join("Default/Network/Cookies-journal"), b"junk").unwrap();
+
+        // Encrypted cookies in the source DB.
+        let scrypt = LocalCrypt::open(&src).unwrap();
+        cookies::write(
+            &src.join("Default/Network/Cookies"),
+            &scrypt,
+            &[PortableCookie {
+                domain: ".example.com".into(),
+                name: "sid".into(),
+                value: "SECRET-VALUE".into(),
+                path: "/".into(),
+                expires: Some(4_102_444_800.0),
+                secure: true,
+                http_only: true,
+                same_site: Some("Lax".into()),
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+
+        let bytes = pack(&src).unwrap();
+        let state = unpack(&bytes, &dst).unwrap();
+
+        // Cache excluded, real state kept.
+        assert!(!dst.join("Default/Cache/data_0").exists(), "cache must be excluded");
+        assert!(!dst.join("Default/Network/Cookies-journal").exists(), "journal excluded");
+        assert!(dst.join("Default/Local Storage/leveldb/000003.log").exists(), "state kept");
+        // Windows must create a destination Local State to re-seal cookies with
+        // the target user's DPAPI key. The invariant is that the source key is
+        // not copied as archive content; POSIX profiles have no per-profile key.
+        #[cfg(not(target_os = "windows"))]
+        assert!(!dst.join("Local State").exists(), "machine key not carried");
+
+        // Portable state carried the cookie, and it's re-encrypted + readable in dst.
+        assert_eq!(state.cookies.len(), 1);
+        let dcrypt = LocalCrypt::open(&dst).unwrap();
+        let got = cookies::read(&cookies::cookies_db_path(&dst), &dcrypt).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].value, "SECRET-VALUE");
+    }
+
+    #[test]
+    fn rejects_path_traversal() {
+        assert!(safe_join(Path::new("/tmp/x"), "../../etc/passwd").is_err());
+        assert!(safe_join(Path::new("/tmp/x"), "Default/ok").is_ok());
+        // Windows drive / prefix / colon segments must be refused on every OS
+        // (they'd escape `root` via PathBuf::push on Windows).
+        assert!(safe_join(Path::new("/tmp/x"), "C:/evil").is_err());
+        assert!(safe_join(Path::new("/tmp/x"), "C:evil").is_err());
+        assert!(safe_join(Path::new("/tmp/x"), "Default/a:b").is_err());
+        // Windows trailing dot/space are stripped by the OS, so `Local State.`
+        // resolves to the excluded `Local State` — reject the whole shape.
+        assert!(safe_join(Path::new("/tmp/x"), "Local State.").is_err());
+        assert!(safe_join(Path::new("/tmp/x"), "Cookies ").is_err());
+        // Reserved device names don't behave as literal files on Windows.
+        assert!(safe_join(Path::new("/tmp/x"), "NUL").is_err());
+        assert!(safe_join(Path::new("/tmp/x"), "CON").is_err());
+        assert!(safe_join(Path::new("/tmp/x"), "COM1").is_err());
+        assert!(safe_join(Path::new("/tmp/x"), "Default/LPT1.txt").is_err());
+    }
+
+    #[test]
+    fn unpack_canonicalizes_paths_before_matching() {
+        // Non-literal spellings that normalize onto a protected target must be
+        // matched on their canonical form — a leading `/`, a `.` segment, a
+        // trailing `/`, or an ASCII case variant must not carry attacker bytes
+        // past the exact-string exclusion / portable-state checks and onto disk.
+        // The literal tar Builder rejects absolute names, so the vector is a GNU
+        // longname carrying the crafted path.
+        let evil_marker = b"ATTACKER-CONTROLLED";
+        let evil_names = [
+            "/Local State",                        // leading root → excluded machine key
+            "./Local State",                       // `.` segment → same
+            "Default/./Login Data For Account",    // interior `.` → excluded, account-bound
+            "local state",                         // case alias on Win/macOS
+            "Default/login data for account",      // case alias, excluded
+            "Default/Network/Cookies/",            // trailing slash
+            "Local State/foo",                     // dir at the protected file path
+        ];
+
+        let gz = GzEncoder::new(Vec::new(), Compression::default());
+        let mut tar = tar::Builder::new(gz);
+
+        // Valid portable state first, so unpack reaches its success path.
+        let state = PortableState { cookies: vec![], logins: vec![], web_secrets: vec![] };
+        let state_json = serde_json::to_vec(&state).unwrap();
+        let mut ph = tar::Header::new_gnu();
+        ph.set_size(state_json.len() as u64);
+        ph.set_mode(0o644);
+        ph.set_cksum();
+        tar.append_data(&mut ph, PORTABLE_FILE, &state_json[..]).unwrap();
+
+        for evil in evil_names {
+            // Longname header renaming the following entry to the crafted path.
+            let mut lh = tar::Header::new_gnu();
+            lh.set_entry_type(tar::EntryType::GNULongName);
+            let mut name = evil.as_bytes().to_vec();
+            name.push(0);
+            lh.set_size(name.len() as u64);
+            lh.set_mode(0o644);
+            lh.set_cksum();
+            tar.append(&lh, &name[..]).unwrap();
+
+            let mut h = tar::Header::new_gnu();
+            h.set_size(evil_marker.len() as u64);
+            h.set_mode(0o644);
+            h.set_cksum();
+            tar.append_data(&mut h, "Default/placeholder", &evil_marker[..]).unwrap();
+        }
+        let bytes = tar.into_inner().unwrap().finish().unwrap();
+
+        let base = std::env::temp_dir().join(format!("shardx-snap-canon-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dst = base.join("dst");
+        // Unpack succeeds (valid portable state); the crafted entries are matched
+        // on their canonical form and dropped as excluded — none plants its marker.
+        unpack(&bytes, &dst).unwrap();
+        for planted in ["Local State", "Default/Login Data For Account", "Default/login data for account"] {
+            let p = dst.join(planted);
+            if let Ok(got) = std::fs::read(&p) {
+                assert_ne!(got, evil_marker, "canonicalized path planted attacker bytes at {planted}");
+            }
+        }
+        // The prefix exclusion also blocks a directory at the protected path.
+        assert!(!dst.join("Local State/foo").exists(), "excluded prefix planted a child");
+    }
+
+    #[test]
+    fn limit_reader_caps_total_bytes() {
+        use std::io::Read;
+        // The backstop that bounds decompression regardless of tar-format tricks:
+        // it errors (not silently EOFs) once more than `remaining` bytes are read.
+        let data = vec![7u8; 100];
+        let mut lr = LimitReader { inner: &data[..], remaining: 50 };
+        let mut out = Vec::new();
+        assert!(lr.read_to_end(&mut out).is_err(), "reading past the cap must error");
+        assert!(out.len() <= 50, "never yields more than the cap");
+    }
+
+    #[test]
+    fn expand_cap_bounds() {
+        // Small input → floored so legit compressible profiles pass.
+        assert_eq!(expand_cap(1024), 64 * 1024 * 1024);
+        // Mid input → ratio-bounded (compressed × 100).
+        assert_eq!(expand_cap(10 * 1024 * 1024), 10 * 1024 * 1024 * 100);
+        // Large input → clamped to the absolute cap.
+        assert_eq!(expand_cap(100 * 1024 * 1024), 4 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn unpack_rejects_decompression_bomb() {
+        use std::io::Read;
+        // One 70 MiB file of zeros compresses to a few KB — well past the 64 MiB
+        // floor, so it must be refused before anything is written to disk.
+        let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut tar = tar::Builder::new(gz);
+        let n = 70 * 1024 * 1024u64;
+        let mut h = tar::Header::new_gnu();
+        h.set_size(n);
+        h.set_mode(0o644);
+        h.set_cksum();
+        tar.append_data(&mut h, "Default/big", std::io::repeat(0u8).take(n)).unwrap();
+        let bytes = tar.into_inner().unwrap().finish().unwrap();
+
+        let base = std::env::temp_dir().join(format!("shardx-snap-bomb-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dst = base.join("dst");
+        assert!(unpack(&bytes, &dst).is_err(), "decompression bomb must be rejected");
+        assert!(!dst.exists(), "nothing materialized for a rejected bomb");
+    }
+
+    #[test]
+    fn unpack_rejects_oversized_extension_header() {
+        use std::io::Read;
+        // A GNU longname header whose body is far larger than a real path — the
+        // memory-bomb shape non-raw iteration would buffer. Must be refused by
+        // its declared size, before the body is read.
+        let big = 200 * 1024u64; // > MAX_EXT_BYTES
+        let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut tar = tar::Builder::new(gz);
+        let mut h = tar::Header::new_gnu();
+        h.set_entry_type(tar::EntryType::GNULongName);
+        h.set_size(big);
+        h.set_mode(0o644);
+        h.set_cksum();
+        tar.append_data(&mut h, "././@LongLink", std::io::repeat(b'a').take(big)).unwrap();
+        let bytes = tar.into_inner().unwrap().finish().unwrap();
+
+        let base = std::env::temp_dir().join(format!("shardx-snap-ext-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dst = base.join("dst");
+        assert!(unpack(&bytes, &dst).is_err(), "oversized extension header must be rejected");
+    }
+
+    #[test]
+    fn unpack_rejects_missing_or_corrupt_portable_state() {
+        let base = std::env::temp_dir().join(format!("shardx-snap-portable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+
+        // (a) No portable state at all → refuse (don't rebuild empty cookies).
+        {
+            let gz = GzEncoder::new(Vec::new(), Compression::default());
+            let mut tar = tar::Builder::new(gz);
+            let mut h = tar::Header::new_gnu();
+            h.set_size(3);
+            h.set_mode(0o644);
+            h.set_cksum();
+            tar.append_data(&mut h, "Default/x", &b"abc"[..]).unwrap();
+            let bytes = tar.into_inner().unwrap().finish().unwrap();
+            assert!(unpack(&bytes, &base.join("a")).is_err(), "missing portable state rejected");
+        }
+
+        // (b) Present but not valid JSON → refuse (don't silently wipe cookies).
+        {
+            let gz = GzEncoder::new(Vec::new(), Compression::default());
+            let mut tar = tar::Builder::new(gz);
+            let bad = b"{ not valid json";
+            let mut h = tar::Header::new_gnu();
+            h.set_size(bad.len() as u64);
+            h.set_mode(0o644);
+            h.set_cksum();
+            tar.append_data(&mut h, PORTABLE_FILE, &bad[..]).unwrap();
+            let bytes = tar.into_inner().unwrap().finish().unwrap();
+            assert!(unpack(&bytes, &base.join("b")).is_err(), "corrupt portable state rejected");
+        }
+    }
+
+    #[test]
+    fn unpack_rejects_deeply_nested_path() {
+        let deep = vec!["a"; MAX_PATH_DEPTH + 5].join("/") + "/f";
+        let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut tar = tar::Builder::new(gz);
+        let mut h = tar::Header::new_gnu();
+        h.set_size(1);
+        h.set_mode(0o644);
+        h.set_cksum();
+        tar.append_data(&mut h, &deep, &b"x"[..]).unwrap();
+        let bytes = tar.into_inner().unwrap().finish().unwrap();
+
+        let base = std::env::temp_dir().join(format!("shardx-snap-deep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dst = base.join("dst");
+        assert!(unpack(&bytes, &dst).is_err(), "deeply nested path must be rejected");
+    }
+
+    #[test]
+    fn pack_unpack_normalizes_web_data_secrets() {
+        // End-to-end wiring: a Web Data card sealed in the source udd survives
+        // pack→unpack and is re-sealed so the destination key decrypts it. (The
+        // cross-key correctness itself is covered by webdata's own unit test;
+        // here the on-OS os_crypt key is fixed, so this proves the wiring.)
+        let base = std::env::temp_dir().join(format!("shardx-snap-wd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let src = base.join("src");
+        let dst = base.join("dst");
+        std::fs::create_dir_all(src.join("Default")).unwrap();
+
+        let scrypt = LocalCrypt::open(&src).unwrap();
+        {
+            let conn = rusqlite::Connection::open(src.join("Default/Web Data")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE credit_cards (guid TEXT PRIMARY KEY, name_on_card TEXT, \
+                 card_number_encrypted BLOB);",
+            )
+            .unwrap();
+            let enc = scrypt.encrypt_secret(b"4111111111111111");
+            conn.execute(
+                "INSERT INTO credit_cards VALUES ('g1', 'Ada', ?1)",
+                rusqlite::params![enc],
+            )
+            .unwrap();
+        }
+
+        let bytes = pack(&src).unwrap();
+        let state = unpack(&bytes, &dst).unwrap();
+        assert_eq!(state.web_secrets.len(), 1, "card carried in portable state");
+
+        // The Web Data DB traveled, and the card decrypts with dst's key.
+        let dcrypt = LocalCrypt::open(&dst).unwrap();
+        let cards = webdata::read(&webdata::web_data_path(&dst), &dcrypt).unwrap();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].value, b"4111111111111111");
+    }
+
+    #[test]
+    fn pack_unpack_normalizes_saved_passwords() {
+        // End-to-end: a saved password in the source `Login Data` survives
+        // pack→unpack, gets re-sealed with the destination key, and the
+        // account-bound `Login Data For Account` (+ its sidecars) never travel.
+        let base = std::env::temp_dir().join(format!("shardx-snap-lg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let src = base.join("src");
+        let dst = base.join("dst");
+        std::fs::create_dir_all(src.join("Default")).unwrap();
+
+        let scrypt = LocalCrypt::open(&src).unwrap();
+        {
+            let conn = rusqlite::Connection::open(src.join("Default/Login Data")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE logins (origin_url TEXT, username_value TEXT, \
+                 password_value BLOB, signon_realm TEXT);",
+            )
+            .unwrap();
+            let enc = scrypt.encrypt_secret(b"hunter2");
+            conn.execute(
+                "INSERT INTO logins VALUES ('https://site.test/', 'alice', ?1, 'https://site.test/')",
+                rusqlite::params![enc],
+            )
+            .unwrap();
+        }
+        // Account-bound files that must be excluded, incl. their sidecars.
+        std::fs::write(src.join("Default/Login Data For Account"), b"acct").unwrap();
+        std::fs::write(src.join("Default/Login Data For Account-wal"), b"acctwal").unwrap();
+        std::fs::write(src.join("Default/Login Data For Account-shm"), b"acctshm").unwrap();
+
+        let bytes = pack(&src).unwrap();
+        let state = unpack(&bytes, &dst).unwrap();
+        assert_eq!(state.logins.len(), 1, "password carried in portable state");
+
+        // The Login Data DB traveled; the password decrypts with dst's key.
+        let dcrypt = LocalCrypt::open(&dst).unwrap();
+        let got = logins::read(&logins::login_data_path(&dst), &dcrypt).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].password_value, b"hunter2");
+
+        // Account-bound files (and sidecars) were left behind.
+        assert!(!dst.join("Default/Login Data For Account").exists());
+        assert!(!dst.join("Default/Login Data For Account-wal").exists());
+        assert!(!dst.join("Default/Login Data For Account-shm").exists());
+    }
+
+    #[test]
+    fn pack_unpack_carries_password_from_wal() {
+        // A password committed only to `Login Data-wal` (hard-killed checkin, no
+        // checkpoint) must travel in the snapshot and rekey on restore — proving
+        // the `-wal` file itself is packed, not just the main DB.
+        let base = std::env::temp_dir().join(format!("shardx-snap-lgwal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let src = base.join("src");
+        let dst = base.join("dst");
+        std::fs::create_dir_all(src.join("Default")).unwrap();
+
+        let scrypt = LocalCrypt::open(&src).unwrap();
+        // Keep the writer open across pack() so the WAL is never checkpointed
+        // into the main DB before the files are read off disk.
+        let writer = rusqlite::Connection::open(src.join("Default/Login Data")).unwrap();
+        writer.pragma_update(None, "journal_mode", "WAL").unwrap();
+        writer.pragma_update(None, "wal_autocheckpoint", 0i64).unwrap();
+        writer
+            .execute_batch(
+                "CREATE TABLE logins (origin_url TEXT, username_value TEXT, \
+                 password_value BLOB, signon_realm TEXT);",
+            )
+            .unwrap();
+        let enc = scrypt.encrypt_secret(b"walsecret");
+        writer
+            .execute(
+                "INSERT INTO logins VALUES ('https://w.test/', 'u', ?1, 'https://w.test/')",
+                rusqlite::params![enc],
+            )
+            .unwrap();
+        assert!(src.join("Default/Login Data-wal").exists(), "row must be in the WAL");
+
+        let bytes = pack(&src).unwrap();
+        drop(writer);
+        let state = unpack(&bytes, &dst).unwrap();
+        assert_eq!(state.logins.len(), 1);
+
+        let dcrypt = LocalCrypt::open(&dst).unwrap();
+        let got = logins::read(&logins::login_data_path(&dst), &dcrypt).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].password_value, b"walsecret");
+    }
+
+    #[test]
+    fn unpack_swap_drops_stale_files_and_is_atomic() {
+        let base = std::env::temp_dir().join(format!("shardx-snap-swap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let src = base.join("src");
+        let dst = base.join("dst");
+        std::fs::create_dir_all(src.join("Default/Local Storage/leveldb")).unwrap();
+        std::fs::write(src.join("Default/Local Storage/leveldb/000003.log"), b"NEW").unwrap();
+        let scrypt = LocalCrypt::open(&src).unwrap();
+        cookies::write(
+            &src.join("Default/Network/Cookies"),
+            &scrypt,
+            &[PortableCookie {
+                domain: ".example.com".into(),
+                name: "sid".into(),
+                value: "SWAP-VALUE".into(),
+                path: "/".into(),
+                expires: Some(4_102_444_800.0),
+                secure: true,
+                http_only: true,
+                same_site: Some("Lax".into()),
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+        let bytes = pack(&src).unwrap();
+
+        // Pre-populate the destination with a stale file NOT in the snapshot.
+        std::fs::create_dir_all(dst.join("Default")).unwrap();
+        std::fs::write(dst.join("Default/stale.txt"), b"OLD").unwrap();
+
+        unpack(&bytes, &dst).unwrap();
+
+        // Stale file gone (full replacement), snapshot state present.
+        assert!(!dst.join("Default/stale.txt").exists(), "stale file must be dropped");
+        assert!(dst.join("Default/Local Storage/leveldb/000003.log").exists(), "new state present");
+        // No staging/backup dirs linger.
+        assert!(!base.join("dst.incoming").exists());
+        assert!(!base.join("dst.backup").exists());
+
+        let dcrypt = LocalCrypt::open(&dst).unwrap();
+        let got = cookies::read(&cookies::cookies_db_path(&dst), &dcrypt).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].value, "SWAP-VALUE");
+    }
+
+    #[test]
+    fn unpack_recovers_udd_from_interrupted_swap() {
+        // Simulate a crash between "move udd aside" and "move staging in":
+        // udd is gone, `.backup` holds the only original. Even a FAILED unpack
+        // must first restore the original from backup — never lose it.
+        let base = std::env::temp_dir().join(format!("shardx-snap-recover-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dst = base.join("dst");
+        let backup = base.join("dst.backup");
+        std::fs::create_dir_all(backup.join("Default")).unwrap();
+        std::fs::write(backup.join("Default/orig.txt"), b"ORIGINAL").unwrap();
+
+        let err = unpack(b"corrupt not gzip", &dst);
+        assert!(err.is_err(), "corrupt snapshot still errors");
+        // The original was recovered from backup, not lost.
+        assert_eq!(std::fs::read(dst.join("Default/orig.txt")).unwrap(), b"ORIGINAL");
+        assert!(!backup.exists(), "backup consumed by recovery");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unpack_rejects_symlink_entries() {
+        use std::io::Write;
+        // Hand-build a gzipped tar containing the portable file + a symlink.
+        let mut state = Vec::new();
+        write!(state, "{{\"cookies\":[],\"logins\":[]}}").unwrap();
+        let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut tar = tar::Builder::new(gz);
+        let mut h = tar::Header::new_gnu();
+        h.set_size(state.len() as u64);
+        h.set_mode(0o644);
+        h.set_cksum();
+        tar.append_data(&mut h, PORTABLE_FILE, &state[..]).unwrap();
+        // A symlink entry pointing outside the udd.
+        let mut lh = tar::Header::new_gnu();
+        lh.set_entry_type(tar::EntryType::Symlink);
+        lh.set_size(0);
+        lh.set_mode(0o777);
+        lh.set_link_name("/etc/passwd").unwrap();
+        lh.set_cksum();
+        tar.append_data(&mut lh, "Default/evil", std::io::empty()).unwrap();
+        let bytes = tar.into_inner().unwrap().finish().unwrap();
+
+        let base = std::env::temp_dir().join(format!("shardx-snap-symlink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dst = base.join("dst");
+        unpack(&bytes, &dst).unwrap();
+        // The symlink was skipped, not materialized.
+        assert!(!dst.join("Default/evil").symlink_metadata().is_ok(), "symlink must be rejected");
+    }
+
+    #[test]
+    fn unpack_failure_leaves_existing_udd_intact() {
+        let base = std::env::temp_dir().join(format!("shardx-snap-fail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dst = base.join("dst");
+        std::fs::create_dir_all(dst.join("Default")).unwrap();
+        std::fs::write(dst.join("Default/keep.txt"), b"KEEP").unwrap();
+
+        // Corrupt bytes → build_staging fails before any swap.
+        let err = unpack(b"not a gzip stream", &dst);
+        assert!(err.is_err(), "corrupt snapshot must error");
+        // Existing udd untouched, no staging/backup left behind.
+        assert_eq!(std::fs::read(dst.join("Default/keep.txt")).unwrap(), b"KEEP");
+        assert!(!base.join("dst.incoming").exists());
+        assert!(!base.join("dst.backup").exists());
+    }
+}
