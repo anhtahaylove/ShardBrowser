@@ -46,7 +46,9 @@ pub async fn gc_orphans(cfg: &Config, db: &sqlx::SqlitePool) {
             continue;
         }
         let env_id = env.file_name().to_string_lossy().into_owned();
-        let Ok(mut files) = tokio::fs::read_dir(&env_path).await else { continue };
+        let Ok(mut files) = tokio::fs::read_dir(&env_path).await else {
+            continue;
+        };
         while let Ok(Some(f)) = files.next_entry().await {
             let name = f.file_name();
             let name = name.to_string_lossy();
@@ -54,7 +56,10 @@ pub async fn gc_orphans(cfg: &Config, db: &sqlx::SqlitePool) {
                 if tokio::fs::remove_file(f.path()).await.is_ok() {
                     temps += 1;
                 }
-            } else if let Some(ver) = name.strip_suffix(".blob").and_then(|s| s.parse::<i64>().ok()) {
+            } else if let Some(ver) = name
+                .strip_suffix(".blob")
+                .and_then(|s| s.parse::<i64>().ok())
+            {
                 // Only a well-formed `<version>.blob` with no referencing row is
                 // an orphan; anything else is left untouched.
                 if !referenced.contains(&(env_id.clone(), ver))
@@ -85,7 +90,12 @@ pub async fn new_temp(cfg: &Config, env_id: &str) -> anyhow::Result<PathBuf> {
 /// Any orphan at the target (a prior checkin that failed after promote but
 /// before commit) is removed first — `rename` onto an existing file errors on
 /// Windows.
-pub async fn promote(cfg: &Config, env_id: &str, version: i64, temp_path: &str) -> anyhow::Result<String> {
+pub async fn promote(
+    cfg: &Config,
+    env_id: &str,
+    version: i64,
+    temp_path: &str,
+) -> anyhow::Result<String> {
     let path = env_dir(cfg, env_id).join(format!("{version}.blob"));
     let _ = tokio::fs::remove_file(&path).await;
     tokio::fs::rename(temp_path, &path).await?;
@@ -183,9 +193,15 @@ mod tests {
             .unwrap();
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
         // Make the referenced-set query fail.
-        sqlx::query("DROP TABLE snapshots").execute(&pool).await.unwrap();
+        sqlx::query("DROP TABLE snapshots")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         gc_orphans(&cfg(base.join("blobs").to_string_lossy().as_ref()), &pool).await;
-        assert!(blob.exists(), "GC must fail closed on DB error, not delete blobs");
+        assert!(
+            blob.exists(),
+            "GC must fail closed on DB error, not delete blobs"
+        );
     }
 }

@@ -73,7 +73,10 @@ async fn login(c: &reqwest::Client, port: u16, user: &str, pass: &str) -> Value 
 }
 
 async fn token(c: &reqwest::Client, port: u16, user: &str, pass: &str) -> String {
-    login(c, port, user, pass).await["token"].as_str().unwrap().to_string()
+    login(c, port, user, pass).await["token"]
+        .as_str()
+        .unwrap()
+        .to_string()
 }
 
 #[tokio::test]
@@ -117,8 +120,10 @@ async fn checkout_checkin_snapshot_roundtrip() {
     let lock_token = v["lock_token"].as_str().expect("lock_token").to_string();
 
     // checkin with a WRONG token is rejected (stale-session protection)
-    let bad = reqwest::multipart::Form::new()
-        .part("snapshot", reqwest::multipart::Part::bytes(snapshot.clone()).file_name("s.tgz"));
+    let bad = reqwest::multipart::Form::new().part(
+        "snapshot",
+        reqwest::multipart::Part::bytes(snapshot.clone()).file_name("s.tgz"),
+    );
     let resp = c
         .post(format!("{}/envs/{env_id}/checkin", base(port)))
         .bearer_auth(&admin)
@@ -128,11 +133,17 @@ async fn checkout_checkin_snapshot_roundtrip() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status().as_u16(), 409, "wrong lock_token must be rejected");
+    assert_eq!(
+        resp.status().as_u16(),
+        409,
+        "wrong lock_token must be rejected"
+    );
 
     // checkin with the RIGHT token, exactly as sync.rs::upload builds it
-    let form = reqwest::multipart::Form::new()
-        .part("snapshot", reqwest::multipart::Part::bytes(snapshot).file_name("snapshot.tgz"));
+    let form = reqwest::multipart::Form::new().part(
+        "snapshot",
+        reqwest::multipart::Part::bytes(snapshot).file_name("snapshot.tgz"),
+    );
     let resp = c
         .post(format!("{}/envs/{env_id}/checkin", base(port)))
         .bearer_auth(&admin)
@@ -142,7 +153,11 @@ async fn checkout_checkin_snapshot_roundtrip() {
         .send()
         .await
         .unwrap();
-    assert!(resp.status().is_success(), "checkin failed: {}", resp.status());
+    assert!(
+        resp.status().is_success(),
+        "checkin failed: {}",
+        resp.status()
+    );
     let v: Value = resp.json().await.unwrap();
     assert_eq!(v["version"].as_i64(), Some(1));
 
@@ -177,7 +192,11 @@ async fn checkout_checkin_snapshot_roundtrip() {
         .expect("sha256 header");
     let bytes = resp.bytes().await.unwrap().to_vec();
     use sha2::{Digest, Sha256};
-    assert_eq!(format!("{:x}", Sha256::digest(&bytes)), sha, "download sha256 matches");
+    assert_eq!(
+        format!("{:x}", Sha256::digest(&bytes)),
+        sha,
+        "download sha256 matches"
+    );
     assert_eq!(bytes, b"opaque-core-snapshot-v1");
 }
 
@@ -204,11 +223,15 @@ async fn acl_perm_and_folder_recursion_and_proxy_scoping() {
     };
 
     // a member
-    let m: Value = post("/users".into(), admin.clone(), json!({ "username": "mem", "password": "pw1" }))
-        .await
-        .json()
-        .await
-        .unwrap();
+    let m: Value = post(
+        "/users".into(),
+        admin.clone(),
+        json!({ "username": "mem", "password": "pw1" }),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
     let mem_id = m["id"].as_str().unwrap().to_string();
 
     // a proxy with credentials
@@ -224,13 +247,25 @@ async fn acl_perm_and_folder_recursion_and_proxy_scoping() {
     let proxy_id = px["id"].as_str().unwrap().to_string();
 
     // folder tree: parent → child; env lives in child
-    let parent: Value = post("/folders".into(), admin.clone(), json!({ "name": "parent" })).await.json().await.unwrap();
+    let parent: Value = post(
+        "/folders".into(),
+        admin.clone(),
+        json!({ "name": "parent" }),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
     let parent_id = parent["id"].as_str().unwrap().to_string();
-    let child: Value = post("/folders".into(), admin.clone(), json!({ "name": "child", "parent_id": parent_id }))
-        .await
-        .json()
-        .await
-        .unwrap();
+    let child: Value = post(
+        "/folders".into(),
+        admin.clone(),
+        json!({ "name": "child", "parent_id": parent_id }),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
     let child_id = child["id"].as_str().unwrap().to_string();
 
     let env: Value = post(
@@ -247,7 +282,15 @@ async fn acl_perm_and_folder_recursion_and_proxy_scoping() {
     let mem = token(&c, port, "mem", "pw1").await;
 
     // before any grant: member can't see the env
-    let list: Value = c.get(format!("{}/envs", base(port))).bearer_auth(&mem).send().await.unwrap().json().await.unwrap();
+    let list: Value = c
+        .get(format!("{}/envs", base(port)))
+        .bearer_auth(&mem)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(list.as_array().unwrap().len(), 0, "no access before grant");
 
     // grant 'use' on the PARENT folder → recursion reaches the child's env
@@ -257,18 +300,56 @@ async fn acl_perm_and_folder_recursion_and_proxy_scoping() {
         json!({ "user_id": mem_id, "object_id": parent_id, "object_kind": "folder", "perm": "use" }),
     )
     .await;
-    let list: Value = c.get(format!("{}/envs", base(port))).bearer_auth(&mem).send().await.unwrap().json().await.unwrap();
-    assert_eq!(list.as_array().unwrap().len(), 1, "parent-folder grant reaches child env");
+    let list: Value = c
+        .get(format!("{}/envs", base(port)))
+        .bearer_auth(&mem)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        list.as_array().unwrap().len(),
+        1,
+        "parent-folder grant reaches child env"
+    );
 
     // member GET env → proxy is inlined WITH credentials (needed to launch)
-    let got: Value = c.get(format!("{}/envs/{env_id}", base(port))).bearer_auth(&mem).send().await.unwrap().json().await.unwrap();
-    assert_eq!(got["proxy"]["password"].as_str(), Some("p"), "env proxy carries credentials");
+    let got: Value = c
+        .get(format!("{}/envs/{env_id}", base(port)))
+        .bearer_auth(&mem)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        got["proxy"]["password"].as_str(),
+        Some("p"),
+        "env proxy carries credentials"
+    );
 
     // but GET /proxies is sanitized for members (no host/credentials)
-    let plist: Value = c.get(format!("{}/proxies", base(port))).bearer_auth(&mem).send().await.unwrap().json().await.unwrap();
+    let plist: Value = c
+        .get(format!("{}/proxies", base(port)))
+        .bearer_auth(&mem)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let p0 = &plist.as_array().unwrap()[0];
-    assert!(p0.get("password").is_none(), "member proxy list must not expose password");
-    assert!(p0.get("host").is_none(), "member proxy list must not expose host");
+    assert!(
+        p0.get("password").is_none(),
+        "member proxy list must not expose password"
+    );
+    assert!(
+        p0.get("host").is_none(),
+        "member proxy list must not expose host"
+    );
 
     // 'use' perm cannot edit the env
     let resp = c
@@ -303,7 +384,11 @@ async fn acl_perm_and_folder_recursion_and_proxy_scoping() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status().as_u16(), 403, "member cannot rebind proxy even with edit");
+    assert_eq!(
+        resp.status().as_u16(),
+        403,
+        "member cannot rebind proxy even with edit"
+    );
 }
 
 #[tokio::test]
@@ -346,10 +431,20 @@ async fn stale_lock_takeover_and_password_invalidation() {
             .json()
             .await
             .unwrap();
-        let id = uid.as_array().unwrap().iter().find(|u| u["username"] == who).unwrap()["id"].as_str().unwrap().to_string();
+        let id = uid
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|u| u["username"] == who)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         c.post(format!("{}/acl", base(port)))
             .bearer_auth(&admin)
-            .json(&json!({ "user_id": id, "object_id": env_id, "object_kind": "env", "perm": "use" }))
+            .json(
+                &json!({ "user_id": id, "object_id": env_id, "object_kind": "env", "perm": "use" }),
+            )
             .send()
             .await
             .unwrap();
@@ -386,9 +481,10 @@ async fn stale_lock_takeover_and_password_invalidation() {
     {
         use std::str::FromStr;
         let db = data.join("shardx.db");
-        let opts = sqlx::sqlite::SqliteConnectOptions::from_str(&format!("sqlite://{}", db.display()))
-            .unwrap()
-            .busy_timeout(Duration::from_secs(5));
+        let opts =
+            sqlx::sqlite::SqliteConnectOptions::from_str(&format!("sqlite://{}", db.display()))
+                .unwrap()
+                .busy_timeout(Duration::from_secs(5));
         let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
         let n = sqlx::query("UPDATE locks SET lease_expires_at = '2000-01-01T00:00:00+00:00'")
             .execute(&pool)
@@ -408,11 +504,17 @@ async fn stale_lock_takeover_and_password_invalidation() {
         .json()
         .await
         .unwrap();
-    assert_eq!(b["stale_takeover"].as_bool(), Some(true), "expired lease → takeover flagged");
+    assert_eq!(
+        b["stale_takeover"].as_bool(),
+        Some(true),
+        "expired lease → takeover flagged"
+    );
 
     // alice's late checkin with her old token must NOT clobber bob's lock
-    let form = reqwest::multipart::Form::new()
-        .part("snapshot", reqwest::multipart::Part::bytes(vec![1u8, 2, 3]).file_name("s.tgz"));
+    let form = reqwest::multipart::Form::new().part(
+        "snapshot",
+        reqwest::multipart::Part::bytes(vec![1u8, 2, 3]).file_name("s.tgz"),
+    );
     let resp = c
         .post(format!("{}/envs/{env_id}/checkin", base(port)))
         .bearer_auth(&alice)
@@ -422,7 +524,11 @@ async fn stale_lock_takeover_and_password_invalidation() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status().as_u16(), 409, "stale owner cannot check in over a new lock");
+    assert_eq!(
+        resp.status().as_u16(),
+        409,
+        "stale owner cannot check in over a new lock"
+    );
 
     // password change invalidates alice's existing token
     let resp = c
@@ -433,8 +539,17 @@ async fn stale_lock_takeover_and_password_invalidation() {
         .await
         .unwrap();
     assert!(resp.status().is_success(), "password change ok");
-    let resp = c.get(format!("{}/me", base(port))).bearer_auth(&alice).send().await.unwrap();
-    assert_eq!(resp.status().as_u16(), 401, "old token rejected after password change");
+    let resp = c
+        .get(format!("{}/me", base(port)))
+        .bearer_auth(&alice)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        401,
+        "old token rejected after password change"
+    );
     // new password works
     let _ = token(&c, port, "alice", "pw2").await;
 }
@@ -508,8 +623,10 @@ async fn snapshot_download_requires_lock_token() {
         .await
         .unwrap();
     let tok0 = v0["lock_token"].as_str().unwrap().to_string();
-    let form = reqwest::multipart::Form::new()
-        .part("snapshot", reqwest::multipart::Part::bytes(snap).file_name("s.tgz"));
+    let form = reqwest::multipart::Form::new().part(
+        "snapshot",
+        reqwest::multipart::Part::bytes(snap).file_name("s.tgz"),
+    );
     let r = c
         .post(format!("{}/envs/{env_id}/checkin", base(port)))
         .bearer_auth(&alice)
@@ -532,7 +649,10 @@ async fn snapshot_download_requires_lock_token() {
         .json()
         .await
         .unwrap();
-    let url = v1["snapshot_url"].as_str().expect("v1 snapshot").to_string();
+    let url = v1["snapshot_url"]
+        .as_str()
+        .expect("v1 snapshot")
+        .to_string();
     let tok1 = v1["lock_token"].as_str().unwrap().to_string();
 
     let get = |client_id: &str, lock_token: &str| {
@@ -543,12 +663,33 @@ async fn snapshot_download_requires_lock_token() {
             .send()
     };
     // Correct session → 200.
-    assert_eq!(get("a", &tok1).await.unwrap().status().as_u16(), 200, "lock holder downloads");
+    assert_eq!(
+        get("a", &tok1).await.unwrap().status().as_u16(),
+        200,
+        "lock holder downloads"
+    );
     // Same user, wrong client / wrong token / no headers → refused.
-    assert_eq!(get("b", &tok1).await.unwrap().status().as_u16(), 409, "other client refused");
-    assert_eq!(get("a", "wrong").await.unwrap().status().as_u16(), 409, "wrong token refused");
-    let none = c.get(format!("{}{}", base(port), url)).bearer_auth(&alice).send().await.unwrap();
-    assert_eq!(none.status().as_u16(), 409, "missing session headers refused");
+    assert_eq!(
+        get("b", &tok1).await.unwrap().status().as_u16(),
+        409,
+        "other client refused"
+    );
+    assert_eq!(
+        get("a", "wrong").await.unwrap().status().as_u16(),
+        409,
+        "wrong token refused"
+    );
+    let none = c
+        .get(format!("{}{}", base(port), url))
+        .bearer_auth(&alice)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        none.status().as_u16(),
+        409,
+        "missing session headers refused"
+    );
 }
 
 /// A LIVE lock can only be re-acquired by presenting its current lock_token, so
@@ -591,14 +732,26 @@ async fn reacquiring_live_lock_requires_token() {
     let tok = v0["lock_token"].as_str().unwrap().to_string();
 
     // Re-acquiring the now-LIVE lock without / with a wrong token is refused.
-    assert_eq!(checkout(None).await.unwrap().status().as_u16(), 409, "no token can't reclaim live lock");
-    assert_eq!(checkout(Some("wrong")).await.unwrap().status().as_u16(), 409, "wrong token refused");
+    assert_eq!(
+        checkout(None).await.unwrap().status().as_u16(),
+        409,
+        "no token can't reclaim live lock"
+    );
+    assert_eq!(
+        checkout(Some("wrong")).await.unwrap().status().as_u16(),
+        409,
+        "wrong token refused"
+    );
     // With the real token it succeeds and rotates the token.
     let v1: Value = checkout(Some(&tok)).await.unwrap().json().await.unwrap();
     let tok2 = v1["lock_token"].as_str().unwrap().to_string();
     assert_ne!(tok, tok2, "token rotates on re-acquire");
     // The old token no longer works.
-    assert_eq!(checkout(Some(&tok)).await.unwrap().status().as_u16(), 409, "old token invalid after rotate");
+    assert_eq!(
+        checkout(Some(&tok)).await.unwrap().status().as_u16(),
+        409,
+        "old token invalid after rotate"
+    );
 }
 
 /// Repeated failed logins from one source get throttled (429 with Retry-After)
@@ -623,8 +776,15 @@ async fn login_throttles_after_repeated_failures() {
     }
     // Now the source is locked: even the CORRECT password is refused with 429.
     let r = attempt("secret").await.unwrap();
-    assert_eq!(r.status().as_u16(), 429, "locked out after repeated failures");
-    assert!(r.headers().get("retry-after").is_some(), "429 carries Retry-After");
+    assert_eq!(
+        r.status().as_u16(),
+        429,
+        "locked out after repeated failures"
+    );
+    assert!(
+        r.headers().get("retry-after").is_some(),
+        "429 carries Retry-After"
+    );
 }
 
 /// A predictable client error (a foreign-key violation from a bogus folder_id)
@@ -696,7 +856,14 @@ async fn acl_grant_rejects_ghost_target_or_user() {
             .send()
     };
     // Nonexistent env → 404.
-    assert_eq!(grant(&alice_id, "ghost-env").await.unwrap().status().as_u16(), 404);
+    assert_eq!(
+        grant(&alice_id, "ghost-env")
+            .await
+            .unwrap()
+            .status()
+            .as_u16(),
+        404
+    );
 
     let env: Value = c
         .post(format!("{}/envs", base(port)))
@@ -710,8 +877,19 @@ async fn acl_grant_rejects_ghost_target_or_user() {
         .unwrap();
     let env_id = env["id"].as_str().unwrap().to_string();
     // Nonexistent user → 404; a valid grant → success.
-    assert_eq!(grant("ghost-user", &env_id).await.unwrap().status().as_u16(), 404);
-    assert!(grant(&alice_id, &env_id).await.unwrap().status().is_success());
+    assert_eq!(
+        grant("ghost-user", &env_id)
+            .await
+            .unwrap()
+            .status()
+            .as_u16(),
+        404
+    );
+    assert!(grant(&alice_id, &env_id)
+        .await
+        .unwrap()
+        .status()
+        .is_success());
 }
 
 /// env update can clear folder_id to null, and rejects a nonexistent folder
@@ -750,10 +928,20 @@ async fn env_update_clears_folder_and_rejects_bad_folder() {
     assert_eq!(env["folder_id"].as_str(), Some(folder_id.as_str()));
 
     let patch = |body: Value| {
-        c.patch(format!("{}/envs/{env_id}", base(port))).bearer_auth(&admin).json(&body).send()
+        c.patch(format!("{}/envs/{env_id}", base(port)))
+            .bearer_auth(&admin)
+            .json(&body)
+            .send()
     };
     // A nonexistent folder → 404.
-    assert_eq!(patch(json!({ "folder_id": "no-such" })).await.unwrap().status().as_u16(), 404);
+    assert_eq!(
+        patch(json!({ "folder_id": "no-such" }))
+            .await
+            .unwrap()
+            .status()
+            .as_u16(),
+        404
+    );
     // Clearing to null succeeds and the env is unfoldered.
     let r = patch(json!({ "folder_id": Value::Null })).await.unwrap();
     assert!(r.status().is_success(), "clear folder: {}", r.status());
@@ -782,5 +970,8 @@ async fn malformed_json_body_returns_json_error() {
         .unwrap();
     assert_eq!(r.status().as_u16(), 400, "malformed body → 400");
     let body: Value = r.json().await.expect("response is JSON");
-    assert!(body.get("error").and_then(|e| e.as_str()).is_some(), "has an error field: {body}");
+    assert!(
+        body.get("error").and_then(|e| e.as_str()).is_some(),
+        "has an error field: {body}"
+    );
 }

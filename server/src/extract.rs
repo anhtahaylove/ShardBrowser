@@ -51,8 +51,16 @@ where
             .headers()
             .get(axum::http::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
-            .map(|v| v.split(';').next().unwrap_or("").trim().to_ascii_lowercase())
-            .is_some_and(|m| m == "application/json" || (m.starts_with("application/") && m.ends_with("+json")));
+            .map(|v| {
+                v.split(';')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_ascii_lowercase()
+            })
+            .is_some_and(|m| {
+                m == "application/json" || (m.starts_with("application/") && m.ends_with("+json"))
+            });
         if !is_json {
             return Ok(AppJsonOpt(None)); // treat "no JSON body" as absent
         }

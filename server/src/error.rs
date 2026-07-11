@@ -25,9 +25,10 @@ impl AppError {
             AppError::Conflict(m) => (StatusCode::CONFLICT, m.clone()),
             AppError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
             AppError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m.clone()),
-            AppError::TooManyRequests(_) => {
-                (StatusCode::TOO_MANY_REQUESTS, "too many attempts; try again later".into())
-            }
+            AppError::TooManyRequests(_) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many attempts; try again later".into(),
+            ),
         }
     }
 }
@@ -47,7 +48,8 @@ impl IntoResponse for AppError {
         let mut resp = (code, Json(json!({ "error": client_msg }))).into_response();
         if let AppError::TooManyRequests(secs) = self {
             if let Ok(v) = axum::http::HeaderValue::from_str(&secs.to_string()) {
-                resp.headers_mut().insert(axum::http::header::RETRY_AFTER, v);
+                resp.headers_mut()
+                    .insert(axum::http::header::RETRY_AFTER, v);
             }
         }
         resp

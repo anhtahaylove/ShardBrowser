@@ -28,7 +28,10 @@ pub fn router(state: AppState) -> Router {
         .route("/audit", get(crate::audit::list))
         // folders
         .route("/folders", get(folders::list).post(folders::create))
-        .route("/folders/:id", patch(folders::update).delete(folders::delete))
+        .route(
+            "/folders/:id",
+            patch(folders::update).delete(folders::delete),
+        )
         // environments
         .route("/envs", get(envs::list).post(envs::create))
         .route(

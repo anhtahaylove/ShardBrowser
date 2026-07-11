@@ -35,7 +35,13 @@ const PRUNE_THRESHOLD: usize = 4096;
 
 impl LoginLimiter {
     fn new(max_failures: u32, window: Duration, base_lock: Duration, max_lock: Duration) -> Self {
-        Self { inner: Mutex::new(HashMap::new()), max_failures, window, base_lock, max_lock }
+        Self {
+            inner: Mutex::new(HashMap::new()),
+            max_failures,
+            window,
+            base_lock,
+            max_lock,
+        }
     }
 
     /// Remaining lockout seconds for `key`, or `None` if it may attempt now.
@@ -57,9 +63,11 @@ impl LoginLimiter {
             // (even past-lock) so backoff keeps escalating across expiries.
             map.retain(|_, a| now.duration_since(a.last) < self.window);
         }
-        let a = map
-            .entry(key.to_string())
-            .or_insert(Attempt { failures: 0, last: now, locked_until: None });
+        let a = map.entry(key.to_string()).or_insert(Attempt {
+            failures: 0,
+            last: now,
+            locked_until: None,
+        });
         // Reset only if the previous failure is outside the window — an expired
         // *lock* within the window still escalates (30s → 60s → 120s → …).
         if now.duration_since(a.last) > self.window {
@@ -98,20 +106,30 @@ impl Default for LoginThrottle {
 impl LoginThrottle {
     pub fn new() -> Self {
         let window = Duration::from_secs(900);
-        let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
         Self {
             // Per-IP is the tight bound (single-source brute force / CPU).
             ip: LoginLimiter::new(5, window, Duration::from_secs(30), Duration::from_secs(900)),
             // Per-username is looser so an attacker can't easily lock a real user
             // out, while still slowing distributed guessing of one account.
-            user: LoginLimiter::new(15, window, Duration::from_secs(30), Duration::from_secs(900)),
+            user: LoginLimiter::new(
+                15,
+                window,
+                Duration::from_secs(30),
+                Duration::from_secs(900),
+            ),
             verify_slots: Arc::new(Semaphore::new(cores.max(2))),
         }
     }
 
     /// Longest remaining lockout across the IP and username keys, or `None`.
     pub fn locked_for(&self, ip: &str, user: &str) -> Option<u64> {
-        [self.ip.locked_for(ip), self.user.locked_for(user)].into_iter().flatten().max()
+        [self.ip.locked_for(ip), self.user.locked_for(user)]
+            .into_iter()
+            .flatten()
+            .max()
     }
 
     pub fn record_failure(&self, ip: &str, user: &str) {
@@ -137,7 +155,12 @@ mod tests {
     use super::*;
 
     fn lim(max: u32) -> LoginLimiter {
-        LoginLimiter::new(max, Duration::from_secs(900), Duration::from_secs(30), Duration::from_secs(900))
+        LoginLimiter::new(
+            max,
+            Duration::from_secs(900),
+            Duration::from_secs(30),
+            Duration::from_secs(900),
+        )
     }
 
     #[test]
@@ -152,20 +175,31 @@ mod tests {
         assert!(first > 0 && first <= 30);
         l.record_failure("a"); // 4th → 60s (backoff)
         assert!(l.locked_for("a").unwrap() > 30, "backoff extends the lock");
-        assert!(l.locked_for("b").is_none(), "a different key is independent");
+        assert!(
+            l.locked_for("b").is_none(),
+            "a different key is independent"
+        );
     }
 
     #[test]
     fn lock_escalates_across_expiry() {
         // After a lock EXPIRES (but within the failure window), the next failure
         // must escalate from the retained count, not reset to the base lock.
-        let l = LoginLimiter::new(1, Duration::from_secs(100), Duration::from_secs(1), Duration::from_secs(100));
+        let l = LoginLimiter::new(
+            1,
+            Duration::from_secs(100),
+            Duration::from_secs(1),
+            Duration::from_secs(100),
+        );
         l.record_failure("a"); // 1st → 1s lock
         assert_eq!(l.locked_for("a"), Some(1));
         std::thread::sleep(Duration::from_millis(1200)); // let the lock expire
         assert!(l.locked_for("a").is_none(), "lock expired");
         l.record_failure("a"); // 2nd within window → 2s lock (escalated, not reset)
-        assert!(l.locked_for("a").unwrap() >= 2, "escalates after expiry instead of resetting");
+        assert!(
+            l.locked_for("a").unwrap() >= 2,
+            "escalates after expiry instead of resetting"
+        );
     }
 
     #[test]

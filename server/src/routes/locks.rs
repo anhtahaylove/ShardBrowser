@@ -198,7 +198,10 @@ pub async fn checkout(
                 .unwrap_or_else(|| "another user".into()),
             None => "another user".into(),
         };
-        let until = prev.as_ref().map(|l| l.lease_expires_at.clone()).unwrap_or_default();
+        let until = prev
+            .as_ref()
+            .map(|l| l.lease_expires_at.clone())
+            .unwrap_or_default();
         return Err(AppError::Conflict(format!(
             "environment is in use by {owner} (lease until {until})"
         )));
@@ -222,7 +225,10 @@ pub async fn checkout(
         .map(|l| l.owner_user_id != user.id || l.owner_client_id != client)
         .unwrap_or(false);
     if stale_takeover {
-        let prev_owner = prev.as_ref().map(|l| l.owner_user_id.clone()).unwrap_or_default();
+        let prev_owner = prev
+            .as_ref()
+            .map(|l| l.owner_user_id.clone())
+            .unwrap_or_default();
         audit::log(
             &app.db,
             Some(&user.id),
@@ -310,7 +316,11 @@ pub async fn checkin(
     // non-holder must never make us buffer or stream a large snapshot.
     let client = {
         let c = header_str(&headers, "x-client-id");
-        if c.trim().is_empty() { "default".to_string() } else { c }
+        if c.trim().is_empty() {
+            "default".to_string()
+        } else {
+            c
+        }
     };
     let token = header_str(&headers, "x-lock-token");
 
@@ -420,7 +430,14 @@ pub async fn checkin(
     };
 
     gc_snapshots(&app, &id, version).await;
-    audit::log(&app.db, Some(&user.id), "checkin", Some(&id), &format!("v{version}")).await;
+    audit::log(
+        &app.db,
+        Some(&user.id),
+        "checkin",
+        Some(&id),
+        &format!("v{version}"),
+    )
+    .await;
     Ok(Json(json!({
         "env_id": id,
         "version": version,
@@ -527,14 +544,13 @@ pub async fn download(
             ));
         }
     }
-    let snap = sqlx::query_as::<_, Snapshot>(
-        "SELECT * FROM snapshots WHERE env_id = ? AND version = ?",
-    )
-    .bind(&id)
-    .bind(version)
-    .fetch_optional(&app.db)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let snap =
+        sqlx::query_as::<_, Snapshot>("SELECT * FROM snapshots WHERE env_id = ? AND version = ?")
+            .bind(&id)
+            .bind(version)
+            .fetch_optional(&app.db)
+            .await?
+            .ok_or(AppError::NotFound)?;
     // Bound concurrent downloads (each streams a full snapshot: disk reads +
     // bandwidth) the same way checkin bounds uploads. The permit is moved into
     // the response body below, so it's held for the whole transfer and released
@@ -578,7 +594,14 @@ pub async fn download(
     } else {
         format!("v{version}")
     };
-    audit::log(&app.db, Some(&user.id), "snapshot_download", Some(&id), &detail).await;
+    audit::log(
+        &app.db,
+        Some(&user.id),
+        "snapshot_download",
+        Some(&id),
+        &detail,
+    )
+    .await;
     Ok((
         [
             (header::CONTENT_TYPE, "application/octet-stream".to_string()),
@@ -618,14 +641,13 @@ async fn gc_snapshots(app: &AppState, env_id: &str, current: i64) {
     if cutoff < 1 {
         return;
     }
-    let stale = sqlx::query_as::<_, Snapshot>(
-        "SELECT * FROM snapshots WHERE env_id = ? AND version <= ?",
-    )
-    .bind(env_id)
-    .bind(cutoff)
-    .fetch_all(&app.db)
-    .await
-    .unwrap_or_default();
+    let stale =
+        sqlx::query_as::<_, Snapshot>("SELECT * FROM snapshots WHERE env_id = ? AND version <= ?")
+            .bind(env_id)
+            .bind(cutoff)
+            .fetch_all(&app.db)
+            .await
+            .unwrap_or_default();
     // Delete the ROWS first, then the blob files. A crash between the two leaves
     // orphan blobs (no row), which the orphan GC reclaims — recoverable. The
     // reverse order would leave rows pointing at missing blobs, which download

@@ -12,9 +12,9 @@ use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation}
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::extract::AppJson;
 use crate::db;
 use crate::error::AppError;
+use crate::extract::AppJson;
 use crate::models::LoginReq;
 use crate::state::AppState;
 
@@ -40,14 +40,20 @@ pub fn verify_password(password: &str, hash: &str) -> Result<(), AppError> {
 /// (so it never ties up an async worker). Every password-touching route MUST go
 /// through these, not the sync `hash_password`/`verify_password` directly.
 pub async fn verify_slot(app: &AppState, password: String, hash: String) -> Result<bool, AppError> {
-    let _slot = app.login_throttle.try_verify_slot().ok_or(AppError::TooManyRequests(1))?;
+    let _slot = app
+        .login_throttle
+        .try_verify_slot()
+        .ok_or(AppError::TooManyRequests(1))?;
     tokio::task::spawn_blocking(move || verify_password(&password, &hash).is_ok())
         .await
         .map_err(|e| AppError::Internal(format!("verify task: {e}")))
 }
 
 pub async fn hash_slot(app: &AppState, password: String) -> Result<String, AppError> {
-    let _slot = app.login_throttle.try_verify_slot().ok_or(AppError::TooManyRequests(1))?;
+    let _slot = app
+        .login_throttle
+        .try_verify_slot()
+        .ok_or(AppError::TooManyRequests(1))?;
     tokio::task::spawn_blocking(move || hash_password(&password))
         .await
         .map_err(|e| AppError::Internal(format!("hash task: {e}")))?
@@ -74,7 +80,12 @@ pub fn issue(
     ttl_secs: i64,
 ) -> Result<String, AppError> {
     let exp = chrono::Utc::now().timestamp() + ttl_secs;
-    let claims = Claims { sub: user_id.into(), role: role.into(), exp, ver: token_version };
+    let claims = Claims {
+        sub: user_id.into(),
+        role: role.into(),
+        exp,
+        ver: token_version,
+    };
     encode(
         &Header::default(),
         &claims,
@@ -132,7 +143,9 @@ where
             .get(axum::http::header::AUTHORIZATION)
             .and_then(|h| h.to_str().ok())
             .ok_or(AppError::Unauthorized)?;
-        let token = header.strip_prefix("Bearer ").ok_or(AppError::Unauthorized)?;
+        let token = header
+            .strip_prefix("Bearer ")
+            .ok_or(AppError::Unauthorized)?;
         let claims = verify(&app.cfg.token_secret, token)?;
         let user = db::find_user(&app.db, &claims.sub)
             .await?
@@ -247,7 +260,14 @@ pub async fn change_password(
         .bind(&user.id)
         .execute(&app.db)
         .await?;
-    crate::audit::log(&app.db, Some(&user.id), "password_change", None, &user.username).await;
+    crate::audit::log(
+        &app.db,
+        Some(&user.id),
+        "password_change",
+        None,
+        &user.username,
+    )
+    .await;
     let token = issue(
         &app.cfg.token_secret,
         &user.id,

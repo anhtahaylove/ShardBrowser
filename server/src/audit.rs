@@ -12,7 +12,13 @@ use crate::models::{AuditEntry, AuditQuery};
 use crate::state::AppState;
 use crate::util;
 
-pub async fn log(db: &SqlitePool, actor: Option<&str>, action: &str, env_id: Option<&str>, detail: &str) {
+pub async fn log(
+    db: &SqlitePool,
+    actor: Option<&str>,
+    action: &str,
+    env_id: Option<&str>,
+    detail: &str,
+) {
     let _ = sqlx::query(
         "INSERT INTO audit_log (actor, action, env_id, detail, at) VALUES (?, ?, ?, ?, ?)",
     )

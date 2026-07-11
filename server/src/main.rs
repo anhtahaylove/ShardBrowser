@@ -56,9 +56,12 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("ShardX Team Server listening on http://{addr}");
     // `into_make_service_with_connect_info` so handlers can read the peer IP
     // (the login throttle keys on it).
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 

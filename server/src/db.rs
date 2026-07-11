@@ -79,9 +79,11 @@ pub async fn bootstrap_admin(pool: &SqlitePool, cfg: &Config) -> anyhow::Result<
             sqlx::query_scalar("SELECT pw_hash FROM users WHERE role = 'admin'")
                 .fetch_all(pool)
                 .await?;
-        let weak = hashes
-            .iter()
-            .any(|h| WEAK_PASSWORDS.iter().any(|w| auth::verify_password(w, h).is_ok()));
+        let weak = hashes.iter().any(|h| {
+            WEAK_PASSWORDS
+                .iter()
+                .any(|w| auth::verify_password(w, h).is_ok())
+        });
         if weak {
             anyhow::bail!(
                 "an admin account still uses a weak/default password while binding a \
@@ -140,11 +142,24 @@ mod tests {
     #[test]
     fn weak_password_detection() {
         // Placeholders (case-insensitive) and too-short/empty are weak.
-        for w in ["admin", "ADMIN", "secret", "change-me", "changethis", "123456", "", "short7"] {
+        for w in [
+            "admin",
+            "ADMIN",
+            "secret",
+            "change-me",
+            "changethis",
+            "123456",
+            "",
+            "short7",
+        ] {
             assert!(is_weak_password(w), "{w:?} should be weak");
         }
         // A long, non-placeholder secret is fine.
-        for ok in ["a-strong-unique-pass", "Xk9$2mQ!vz7Lp", "correct horse battery staple"] {
+        for ok in [
+            "a-strong-unique-pass",
+            "Xk9$2mQ!vz7Lp",
+            "correct horse battery staple",
+        ] {
             assert!(!is_weak_password(ok), "{ok:?} should be accepted");
         }
     }
@@ -190,7 +205,7 @@ mod tests {
     async fn exposed_bind_rejects_existing_weak_admin() {
         let pool = mem_pool().await;
         seed_admin(&pool, "admin").await; // the classic default
-        // Network-facing bind + an admin still on a default password → refuse.
+                                          // Network-facing bind + an admin still on a default password → refuse.
         assert!(bootstrap_admin(&pool, &cfg("0.0.0.0:8080")).await.is_err());
         // Same DB on a loopback bind is tolerated (local-only exposure).
         assert!(bootstrap_admin(&pool, &cfg("127.0.0.1:8080")).await.is_ok());

@@ -2,9 +2,9 @@ use axum::extract::State;
 use axum::Json;
 use serde_json::{json, Value};
 
-use crate::extract::AppJson;
 use crate::auth::AuthUser;
 use crate::error::AppError;
+use crate::extract::AppJson;
 use crate::models::{GrantReq, RevokeReq};
 use crate::state::AppState;
 
@@ -19,7 +19,9 @@ pub async fn grant(
 ) -> Result<Json<Value>, AppError> {
     user.require_admin()?;
     if !valid_kind(&req.object_kind) {
-        return Err(AppError::BadRequest("object_kind must be env|folder".into()));
+        return Err(AppError::BadRequest(
+            "object_kind must be env|folder".into(),
+        ));
     }
     let perm = match req.perm.as_deref() {
         None | Some("use") => "use",
@@ -32,7 +34,11 @@ pub async fn grant(
     // concurrent target delete can't slip a ghost row in between a check and the
     // write. `object_kind` is validated above, so the table name is a fixed
     // choice, not user input; ids/perm are bound.
-    let table = if req.object_kind == "env" { "environments" } else { "folders" };
+    let table = if req.object_kind == "env" {
+        "environments"
+    } else {
+        "folders"
+    };
     let res = sqlx::query(&format!(
         "INSERT INTO acl (user_id, object_id, object_kind, perm) \
          SELECT ?1, ?2, ?3, ?4 \
@@ -54,7 +60,10 @@ pub async fn grant(
         Some(&user.id),
         "acl_grant",
         (req.object_kind == "env").then_some(req.object_id.as_str()),
-        &format!("{} {}:{} perm={}", req.user_id, req.object_kind, req.object_id, perm),
+        &format!(
+            "{} {}:{} perm={}",
+            req.user_id, req.object_kind, req.object_id, perm
+        ),
     )
     .await;
     Ok(Json(json!({
@@ -72,12 +81,13 @@ pub async fn revoke(
     AppJson(req): AppJson<RevokeReq>,
 ) -> Result<Json<Value>, AppError> {
     user.require_admin()?;
-    let res = sqlx::query("DELETE FROM acl WHERE user_id = ? AND object_id = ? AND object_kind = ?")
-        .bind(&req.user_id)
-        .bind(&req.object_id)
-        .bind(&req.object_kind)
-        .execute(&app.db)
-        .await?;
+    let res =
+        sqlx::query("DELETE FROM acl WHERE user_id = ? AND object_id = ? AND object_kind = ?")
+            .bind(&req.user_id)
+            .bind(&req.object_id)
+            .bind(&req.object_kind)
+            .execute(&app.db)
+            .await?;
     if res.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }

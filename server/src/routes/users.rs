@@ -2,10 +2,10 @@ use axum::extract::{Path, State};
 use axum::Json;
 use serde_json::{json, Value};
 
-use crate::extract::AppJson;
-use crate::auth::{self, AuthUser};
 use crate::audit;
+use crate::auth::{self, AuthUser};
 use crate::error::AppError;
+use crate::extract::AppJson;
 use crate::models::{CreateUserReq, ResetPasswordReq, SetRoleReq, User};
 use crate::state::AppState;
 use crate::util;
@@ -33,7 +33,9 @@ pub async fn create(
         Some(other) => return Err(AppError::BadRequest(format!("invalid role: {other}"))),
     };
     if req.username.trim().is_empty() || req.password.is_empty() {
-        return Err(AppError::BadRequest("username and password required".into()));
+        return Err(AppError::BadRequest(
+            "username and password required".into(),
+        ));
     }
     let hash = auth::hash_slot(&app, req.password).await?;
     let id = util::new_id();
@@ -49,8 +51,17 @@ pub async fn create(
     .await;
     match res {
         Ok(_) => {
-            audit::log(&app.db, Some(&user.id), "user_create", None, &format!("{} ({role})", req.username)).await;
-            Ok(Json(json!({ "id": id, "username": req.username, "role": role })))
+            audit::log(
+                &app.db,
+                Some(&user.id),
+                "user_create",
+                None,
+                &format!("{} ({role})", req.username),
+            )
+            .await;
+            Ok(Json(
+                json!({ "id": id, "username": req.username, "role": role }),
+            ))
         }
         Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
             Err(AppError::Conflict("username already exists".into()))
@@ -92,13 +103,12 @@ pub async fn reset_password(
         return Err(AppError::BadRequest("password required".into()));
     }
     let hash = auth::hash_slot(&app, req.password).await?;
-    let res = sqlx::query(
-        "UPDATE users SET pw_hash = ?, token_version = token_version + 1 WHERE id = ?",
-    )
-    .bind(&hash)
-    .bind(&id)
-    .execute(&app.db)
-    .await?;
+    let res =
+        sqlx::query("UPDATE users SET pw_hash = ?, token_version = token_version + 1 WHERE id = ?")
+            .bind(&hash)
+            .bind(&id)
+            .execute(&app.db)
+            .await?;
     if res.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
@@ -127,6 +137,13 @@ pub async fn set_role(
     if res.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
-    audit::log(&app.db, Some(&user.id), "user_set_role", None, &format!("{id} -> {}", req.role)).await;
+    audit::log(
+        &app.db,
+        Some(&user.id),
+        "user_set_role",
+        None,
+        &format!("{id} -> {}", req.role),
+    )
+    .await;
     Ok(Json(json!({ "id": id, "role": req.role })))
 }
