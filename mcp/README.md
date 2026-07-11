@@ -65,6 +65,9 @@ MCP_HTTP_PORT=40326 SHARDX_API=http://127.0.0.1:40325 SHARDX_TOKEN=… node inde
 
 - `list_profiles`, `get_profile`, `create_profile`, `create_temporary_profile`,
   `edit_profile`, `delete_profile`
+- `devtools_context(profile_id? | profile_query?, exact?, headless?)`
+  → returns the profile CDP endpoint, `/json/list` page targets, and current
+  title/url for DevTools handoff
 - `new_fingerprint(platform?)`
 - `start_profile(id, headless?)` → returns the CDP endpoint,
   `stop_profile(id)`, `list_running`
@@ -120,5 +123,26 @@ headless) if it isn't running; actions target the profile's *active* tab:
 1. `create_profile` (or `create_temporary_profile`) — optionally with a `proxy`.
 2. `browser_navigate(profile_id, "https://…")` — starts the browser with
    CDP and opens the page.
-3. `browser_evaluate` / `browser_screenshot` / `browser_click` / `browser_fill`.
-4. `stop_profile` when done (temporary profiles self-delete on close).
+3. `devtools_context(profile_id)` when handing the live ShardX page to a
+   DevTools client.
+4. `browser_evaluate` / `browser_screenshot` / `browser_click` / `browser_fill`.
+5. `stop_profile` when done (temporary profiles self-delete on close).
+
+## Chrome DevTools MCP handoff
+
+`devtools_context` exposes the browser's `cdp.http_url` and
+`web_socket_debugger_url` without returning tokens, cookies, fingerprints, or
+proxy credentials. Use that URL to configure a DevTools MCP server that supports
+connecting to an existing browser, for example:
+
+```powershell
+codex mcp add shardbrowser-devtools -- cmd /c npx -y chrome-devtools-mcp@1.5.0 --browserUrl http://127.0.0.1:<cdp-port> --no-usage-statistics --no-performance-crux --redactNetworkHeaders
+```
+
+Codex's built-in `chrome_devtools` tools do not expose a runtime attach/connect
+call; the DevTools MCP server chooses the browser at MCP startup. If the CDP
+port changes, update the MCP client entry and restart the MCP client.
+
+If a profile is already running without CDP, `devtools_context` cannot retrofit
+the debugging port into that process. Stop and restart the profile through MCP
+or the Automation API, then call `devtools_context` again.

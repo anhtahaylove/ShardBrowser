@@ -261,6 +261,32 @@ type ProfileMeta = {
   /// (Date.now() - sessionStartTs) on top.
   total_runtime_ms: number;
 };
+type CdpInfo = {
+  port: number;
+  http_url: string;
+  web_socket_debugger_url: string;
+};
+type RunningProcess = {
+  profile_id: string;
+  pid: number;
+  cdp?: CdpInfo;
+  uptime_ms: number;
+};
+type DevtoolsTarget = {
+  id: string;
+  type: string;
+  title: string;
+  url: string;
+  attached: boolean;
+  web_socket_debugger_url: string | null;
+  devtools_frontend_url: string | null;
+};
+type DevtoolsContext = {
+  profile_id: string;
+  cdp: CdpInfo;
+  targets: DevtoolsTarget[];
+  current: DevtoolsTarget | null;
+};
 type ProxyEntry = {
   id: string;
   name: string;
@@ -1017,6 +1043,7 @@ function BrowsersView() {
   // both as a truthy flag (any number = running) and as the anchor for the
   // ticking uptime display in the Status column.
   const [running, setRunning] = useState<Record<string, number>>({});
+  const [runningCdp, setRunningCdp] = useState<Record<string, CdpInfo>>({});
   // Re-render trigger so the uptime label ticks every second without
   // re-fetching the process list (which polls every 2s).
   const [, setUptimeTick] = useState(0);
@@ -1088,9 +1115,10 @@ function BrowsersView() {
     let cancelled = false;
     const tick = async () => {
       try {
-        const list = await invoke<{ profile_id: string; pid: number; uptime_ms: number }[]>("process_list");
+        const list = await invoke<RunningProcess[]>("process_list");
         if (cancelled) return;
         const now = Date.now();
+        setRunningCdp(Object.fromEntries(list.filter((r) => r.cdp).map((r) => [r.profile_id, r.cdp!])));
         setRunning((prev) => {
           const next: Record<string, number> = {};
           for (const r of list) {
@@ -1242,12 +1270,37 @@ function BrowsersView() {
     } catch (e) { toast.err(String(e)); }
   };
 
+  const copyCdpHttp = async (p: ProfileMeta) => {
+    const cdp = runningCdp[p.id];
+    if (!cdp) { toast.err("CDP is not enabled for this running profile"); return; }
+    try {
+      await clip.write(cdp.http_url);
+      toast.ok("Copied CDP HTTP URL");
+    } catch (e) { toast.err(String(e)); }
+  };
+
+  const copyDevToolsInspect = async (p: ProfileMeta) => {
+    try {
+      const ctx = await invoke<DevtoolsContext>("devtools_context", { profileId: p.id });
+      const url = ctx.current?.devtools_frontend_url ?? ctx.targets[0]?.devtools_frontend_url ?? `${ctx.cdp.http_url}/json/list`;
+      await clip.write(url);
+      toast.ok("Copied DevTools inspect URL");
+    } catch (e) { toast.err(String(e)); }
+  };
+
   // Per-profile action menu shared by right-click and ⋮ button.
   const profileMenu = (p: ProfileMeta) => [
     { label: running[p.id] ? "Stop" : "Launch", onClick: () => startStop(p) },
     { label: "Edit", onClick: () => expand(p.id) },
     { label: "Clone", onClick: () => cloneProfile(p.id) },
     { label: p.pinned ? "Unpin" : "Pin to top", onClick: () => togglePin(p) },
+    ...(runningCdp[p.id]
+      ? [
+          { sep: true, label: "", onClick: () => {} },
+          { label: "Copy CDP HTTP URL", onClick: () => copyCdpHttp(p) },
+          { label: "Copy DevTools inspect URL", onClick: () => copyDevToolsInspect(p) },
+        ]
+      : []),
     { sep: true, label: "", onClick: () => {} },
     { label: "Move to folder…", onClick: () => setFolderModal({ profileId: p.id }) },
     ...(p.folder
@@ -1610,6 +1663,7 @@ function BrowsersView() {
           const isRunning = !!running[p.id];
           const isExpanded = expanded === p.id;
           const isSel = selected.has(p.id);
+          const cdpInfo = runningCdp[p.id];
           return (
             <div
               key={p.id}
@@ -1657,6 +1711,12 @@ function BrowsersView() {
                     <i className="dot" />
                     {isRunning ? "Running" : "Idle"}
                   </span>
+                  {cdpInfo && (
+                    <span className="pill-status ps-cdp" title={cdpInfo.http_url}>
+                      <i className="dot" />
+                      DevTools/CDP ready
+                    </span>
+                  )}
                 </div>
                 <div className="cell-click" onClick={() => setQuickEdit({ kind: "proxy", profile: p })} title="Change proxy">
                   {px ? (
@@ -1715,6 +1775,12 @@ function BrowsersView() {
                   </button>
                   <button className="icon-btn" onClick={() => expand(p.id)} title="Edit"><Icon.Edit /></button>
                   <button className="icon-btn" onClick={() => cloneProfile(p.id)} title="Clone"><Icon.Clone /></button>
+                  {cdpInfo && (
+                    <>
+                      <button className="icon-btn devtools-btn" onClick={() => copyCdpHttp(p)} title="Copy CDP HTTP URL">CDP</button>
+                      <button className="icon-btn devtools-btn" onClick={() => copyDevToolsInspect(p)} title="Copy DevTools inspect URL">DT</button>
+                    </>
+                  )}
                   <button className="icon-btn danger" onClick={() => remove(p.id)} title="Delete"><Icon.Trash /></button>
                   <button
                     className="icon-btn"
