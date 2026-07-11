@@ -371,6 +371,7 @@ type FingerprintEntry = {
 type NoiseMode = "real" | "auto";
 type WebRtcMode = "auto" | "tcp_only" | "block";
 type GeoMode = "auto" | "manual";
+type CustomFontMode = "off" | "append" | "replace";
 
 type ProfileForm = {
   id: string;
@@ -409,6 +410,13 @@ type ProfileForm = {
   media_audio_in: number;
   media_audio_out: number;
   media_video_in: number;
+
+  launch_args: string[];
+  extension_dirs: string[];
+  custom_font_dirs: string[];
+  custom_font_mode: CustomFontMode;
+  custom_font_names: string[];
+  custom_font_random_count: number;
 };
 
 // Constrained options: stay within values Chrome actually reports.
@@ -503,6 +511,16 @@ function deriveLanguagesArray(loc: string): string[] {
   return [loc, base, "en-US", "en"];
 }
 
+function cleanStringList(v: unknown): string[] {
+  return Array.isArray(v)
+    ? v.map((x) => (typeof x === "string" ? x.trim() : "")).filter(Boolean)
+    : [];
+}
+
+function linesToList(text: string): string[] {
+  return text.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+}
+
 const defaultForm = (): ProfileForm => ({
   id: "",
   name: "",
@@ -540,6 +558,13 @@ const defaultForm = (): ProfileForm => ({
   media_audio_in: 1,
   media_audio_out: 1,
   media_video_in: 1,
+
+  launch_args: [],
+  extension_dirs: [],
+  custom_font_dirs: [],
+  custom_font_mode: "off",
+  custom_font_names: [],
+  custom_font_random_count: 0,
 });
 
 function fromStored(stored: any): ProfileForm {
@@ -582,6 +607,18 @@ function fromStored(stored: any): ProfileForm {
   f.media_audio_in = md.audio_input_count ?? 1;
   f.media_audio_out = md.audio_output_count ?? 1;
   f.media_video_in = md.video_input_count ?? 1;
+
+  f.launch_args = cleanStringList(stored?.launch?.args);
+  f.extension_dirs = cleanStringList(stored?.launch?.extension_dirs);
+  f.custom_font_dirs = cleanStringList(stored?.custom_fonts?.dirs);
+  f.custom_font_names = cleanStringList(stored?.custom_fonts?.names);
+  f.custom_font_mode = ["append", "replace"].includes(stored?.custom_fonts?.mode)
+    ? stored.custom_fonts.mode
+    : "off";
+  f.custom_font_random_count =
+    typeof stored?.custom_fonts?.random_count === "number"
+      ? Math.max(0, Math.min(100, Math.round(stored.custom_fonts.random_count)))
+      : 0;
 
   return f;
 }
@@ -654,6 +691,30 @@ function toStored(f: ProfileForm, lib: FingerprintEntry | null): any {
     fonts:        { enabled: f.noise_fonts === "auto",        seed: 0 },
   };
   base.blocked_ports = [...f.blocked_ports].sort((a, b) => a - b);
+
+  const launchArgs = cleanStringList(f.launch_args);
+  const extensionDirs = cleanStringList(f.extension_dirs);
+  if (launchArgs.length || extensionDirs.length) {
+    base.launch = {
+      ...(launchArgs.length ? { args: launchArgs } : {}),
+      ...(extensionDirs.length ? { extension_dirs: extensionDirs } : {}),
+    };
+  } else {
+    delete base.launch;
+  }
+
+  const customFontDirs = cleanStringList(f.custom_font_dirs);
+  const customFontNames = cleanStringList(f.custom_font_names);
+  if (f.custom_font_mode !== "off" || customFontDirs.length || customFontNames.length || f.custom_font_random_count > 0) {
+    base.custom_fonts = {
+      mode: f.custom_font_mode,
+      dirs: customFontDirs,
+      names: customFontNames,
+      random_count: Math.max(0, Math.min(100, Math.round(f.custom_font_random_count || 0))),
+    };
+  } else {
+    delete base.custom_fonts;
+  }
 
   return base;
 }
@@ -2252,6 +2313,76 @@ function InlineEditor({
           <label>
             <span className="lbl">Notes</span>
             <textarea rows={2} value={f.notes} onChange={(e) => u("notes", e.target.value)} placeholder="Free-form notes…" />
+          </label>
+        </div>
+      </div>
+      <div className="ie-advanced">
+        <div className="ie-section">
+          <div className="ie-section-title">Launch</div>
+          <label>
+            <span className="lbl">Safe command-line args</span>
+            <textarea
+              rows={3}
+              className="mono"
+              value={f.launch_args.join("\n")}
+              onChange={(e) => u("launch_args", linesToList(e.target.value))}
+              placeholder={"--mute-audio\n--window-size=1200,900"}
+            />
+            <span className="muted small">One Chromium switch per line. Isolation/proxy/CDP switches are blocked at launch.</span>
+          </label>
+          <label>
+            <span className="lbl">Extension folders</span>
+            <textarea
+              rows={3}
+              className="mono"
+              value={f.extension_dirs.join("\n")}
+              onChange={(e) => u("extension_dirs", linesToList(e.target.value))}
+              placeholder={"C:\\path\\to\\unpacked-extension"}
+            />
+            <span className="muted small">Absolute unpacked extension directories; Launcher passes them through load-extension safely.</span>
+          </label>
+        </div>
+        <div className="ie-section">
+          <div className="ie-section-title">Custom fonts</div>
+          <div className="form-row">
+            <label>
+              <span className="lbl">Mode</span>
+              <CSSelect
+                value={f.custom_font_mode}
+                onChange={(v) => u("custom_font_mode", v as CustomFontMode)}
+                options={[
+                  { value: "off", label: "Off" },
+                  { value: "append", label: "Append to profile fonts" },
+                  { value: "replace", label: "Replace profile fonts" },
+                ]}
+              />
+            </label>
+            <NumField
+              label="Random fonts"
+              value={f.custom_font_random_count}
+              onChange={(v) => u("custom_font_random_count", Math.max(0, Math.min(100, Math.round(v))))}
+            />
+          </div>
+          <label>
+            <span className="lbl">Font folders</span>
+            <textarea
+              rows={3}
+              className="mono"
+              value={f.custom_font_dirs.join("\n")}
+              onChange={(e) => u("custom_font_dirs", linesToList(e.target.value))}
+              placeholder={"C:\\path\\to\\fonts"}
+            />
+          </label>
+          <label>
+            <span className="lbl">Font names / ids</span>
+            <textarea
+              rows={3}
+              className="mono"
+              value={f.custom_font_names.join("\n")}
+              onChange={(e) => u("custom_font_names", linesToList(e.target.value))}
+              placeholder={"Inter\nRoboto"}
+            />
+            <span className="muted small">Saved per profile and emitted as a ShardX custom-font manifest at launch.</span>
           </label>
         </div>
       </div>

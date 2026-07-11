@@ -234,6 +234,8 @@ struct CreateReq {
     proxy: Option<String>,
     folder: Option<String>,
     fingerprint: Value,
+    launch: Option<Value>,
+    custom_fonts: Option<Value>,
 }
 
 /// Persist verbatim (enrich=false); proxy_id binds, proxy string upserts+tests.
@@ -250,6 +252,10 @@ async fn persist_created(folder_override: Option<String>, body: CreateReq) -> Ap
     if let Some(n) = body.notes.as_ref() {
         cfg.insert("notes".into(), json!(n));
     }
+    apply_temp_object_override(&mut cfg, "launch", body.launch)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    apply_temp_object_override(&mut cfg, "custom_fonts", body.custom_fonts)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
 
     let folder = folder_override.or(body.folder).unwrap_or_default();
     let mut meta = json!({ "id": "", "folder": folder });
@@ -293,27 +299,40 @@ struct TempReq {
     /// Optional per-vector noise override, e.g.
     /// `{ "canvas": { "enabled": true, "seed": 0 } }`.
     noise: Option<Value>,
+    /// Optional safe launch customizations, e.g.
+    /// `{ "args": ["--mute-audio"], "extension_dirs": ["C:\\ext"] }`.
+    launch: Option<Value>,
+    /// Optional custom-font manifest options.
+    custom_fonts: Option<Value>,
     name: Option<String>,
     folder: Option<String>,
+}
+
+fn apply_temp_object_override(
+    cfg: &mut Map<String, Value>,
+    key: &str,
+    value: Option<Value>,
+) -> Result<(), String> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    if !value.is_object() {
+        return Err(format!("`{key}` must be an object"));
+    }
+    cfg.insert(key.into(), value);
+    Ok(())
 }
 
 fn apply_temp_noise_override(
     cfg: &mut Map<String, Value>,
     noise: Option<Value>,
 ) -> Result<(), String> {
-    let Some(noise) = noise else {
-        return Ok(());
-    };
-    if !noise.is_object() {
-        return Err("`noise` must be an object".into());
-    }
-    cfg.insert("noise".into(), noise);
-    Ok(())
+    apply_temp_object_override(cfg, "noise", noise)
 }
 
 #[cfg(test)]
 mod temp_profile_tests {
-    use super::apply_temp_noise_override;
+    use super::{apply_temp_noise_override, apply_temp_object_override};
     use serde_json::{json, Map, Value};
 
     #[test]
@@ -335,6 +354,23 @@ mod temp_profile_tests {
 
         assert!(apply_temp_noise_override(&mut cfg, Some(json!(true))).is_err());
     }
+
+    #[test]
+    fn temporary_profile_accepts_launch_and_custom_fonts_objects() {
+        let mut cfg = Map::<String, Value>::new();
+
+        apply_temp_object_override(&mut cfg, "launch", Some(json!({ "args": ["--mute-audio"] })))
+            .unwrap();
+        apply_temp_object_override(
+            &mut cfg,
+            "custom_fonts",
+            Some(json!({ "mode": "append", "names": ["Inter"] })),
+        )
+        .unwrap();
+
+        assert_eq!(cfg["launch"]["args"][0].as_str(), Some("--mute-audio"));
+        assert_eq!(cfg["custom_fonts"]["mode"].as_str(), Some("append"));
+    }
 }
 
 /// Temporary profile (hidden, auto-deleted on close); pair with /start.
@@ -350,6 +386,10 @@ async fn create_temporary(Json(body): Json<TempReq>) -> ApiResult {
         cfg.insert("name".into(), json!(n));
     }
     apply_temp_noise_override(&mut cfg, body.noise)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    apply_temp_object_override(&mut cfg, "launch", body.launch)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    apply_temp_object_override(&mut cfg, "custom_fonts", body.custom_fonts)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     let mut meta = json!({ "id": "", "folder": body.folder.unwrap_or_default(), "temporary": true });
     if let Some(pstr) = body.proxy.as_ref() {

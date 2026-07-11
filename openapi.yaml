@@ -762,6 +762,10 @@ components:
           enum: [auto, tcp_only, block]
         noise:
           $ref: "#/components/schemas/NoisePrefs"
+        launch:
+          $ref: "#/components/schemas/LaunchOptions"
+        custom_fonts:
+          $ref: "#/components/schemas/CustomFonts"
         network:
           type: object
           properties:
@@ -807,6 +811,47 @@ components:
           type: integer
           description: Per-profile entropy; 0 = derive automatically.
 
+    LaunchOptions:
+      type: object
+      description: |
+        Per-profile launch customizations. The Launcher validates these at
+        launch time with a conservative switch allowlist and refuses isolation,
+        proxy, fingerprint-profile, CDP, and extension-loader override switches.
+      properties:
+        args:
+          type: array
+          items: { type: string }
+          description: Safe Chromium switches, one full `--switch[=value]` per entry.
+          example: ["--mute-audio", "--window-size=1200,900"]
+        extension_dirs:
+          type: array
+          items: { type: string }
+          description: Absolute unpacked extension directories.
+
+    CustomFonts:
+      type: object
+      description: |
+        Per-profile custom-font manifest options. The Launcher validates
+        directories and writes a `custom-fonts.json` manifest before launch.
+      properties:
+        mode:
+          type: string
+          enum: [off, append, replace]
+          description: Whether custom fonts are disabled, appended, or replace the profile font set.
+        dirs:
+          type: array
+          items: { type: string }
+          description: Absolute directories containing font files.
+        names:
+          type: array
+          items: { type: string }
+          description: Font family names or ids to select from the folders.
+        random_count:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Number of additional random fonts to select.
+
     CreateProfileRequest:
       type: object
       required: [fingerprint]
@@ -833,6 +878,10 @@ components:
         fingerprint:
           allOf: [{ $ref: "#/components/schemas/Fingerprint" }]
           description: Stored verbatim. Get one from /fingerprint/new and edit as needed.
+        launch:
+          $ref: "#/components/schemas/LaunchOptions"
+        custom_fonts:
+          $ref: "#/components/schemas/CustomFonts"
 
     EditProfileRequest:
       type: object
@@ -867,6 +916,10 @@ components:
           description: |
             Per-vector noise override for the temporary profile; seed 0 is
             derived from the temporary profile id.
+        launch:
+          $ref: "#/components/schemas/LaunchOptions"
+        custom_fonts:
+          $ref: "#/components/schemas/CustomFonts"
         name: { type: string }
         folder: { type: string }
 

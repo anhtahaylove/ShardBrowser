@@ -3,6 +3,8 @@ use crate::{
     profile, proxy, settings, store,
 };
 use anyhow::{Context, Result};
+use serde_json::Value;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -10,6 +12,20 @@ use std::process::Stdio;
 pub struct LaunchOutcome {
     pub pid: u32,
     pub cdp: Option<process::CdpInfo>,
+}
+
+#[derive(Default)]
+struct LaunchOptions {
+    args: Vec<String>,
+    extension_dirs: Vec<PathBuf>,
+}
+
+#[derive(Default)]
+struct CustomFonts {
+    mode: String,
+    dirs: Vec<PathBuf>,
+    names: Vec<String>,
+    random_count: u32,
 }
 
 /// Resolve the ShardX executable from settings, runtime cache, or dev guess.
@@ -82,6 +98,10 @@ pub async fn launch_profile(
     // Strip `_meta` wrapper and resolve "auto" sentinels before serialising.
     let mut raw = stored.config.clone();
     raw.remove("_meta");
+    let launch_options = parse_launch_options(raw.remove("launch"))
+        .context("invalid launch options")?;
+    let custom_fonts = parse_custom_fonts(raw.remove("custom_fonts"))
+        .context("invalid custom font options")?;
     resolve_auto_fields(&mut raw, bound_proxy.as_ref()).await;
     let json = serde_json::to_string(&raw).context("serialize profile")?;
 
@@ -98,6 +118,15 @@ pub async fn launch_profile(
     cmd.arg(format!("--fingerprint-profile={}", fp_file.display()));
     cmd.arg(format!("--user-data-dir={}", udd.display()));
     cmd.arg("--no-first-run");
+
+    for arg in &launch_options.args {
+        cmd.arg(arg);
+    }
+    if !launch_options.extension_dirs.is_empty() {
+        let joined = join_comma_paths(&launch_options.extension_dirs);
+        cmd.arg(format!("--disable-extensions-except={joined}"));
+        cmd.arg(format!("--load-extension={joined}"));
+    }
 
     // Disable WebGPU when profile omits `webgpu` (matches real Linux Chrome).
     let webgpu_present = raw
@@ -197,6 +226,12 @@ pub async fn launch_profile(
         cmd.arg("--headless=new");
     }
 
+    if custom_fonts.is_enabled() {
+        let manifest = write_custom_fonts_manifest(&udd, &custom_fonts)
+            .context("write custom fonts manifest")?;
+        cmd.arg(format!("--shardx-custom-fonts-manifest={}", manifest.display()));
+    }
+
     cmd.stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(target_os = "windows")]
     {
@@ -226,6 +261,237 @@ pub async fn launch_profile(
     };
 
     Ok(LaunchOutcome { pid, cdp })
+}
+
+impl CustomFonts {
+    fn is_enabled(&self) -> bool {
+        self.mode != "off" && (!self.dirs.is_empty() || !self.names.is_empty())
+    }
+}
+
+fn parse_launch_options(value: Option<Value>) -> Result<LaunchOptions> {
+    let Some(value) = value else {
+        return Ok(LaunchOptions::default());
+    };
+    let obj = value
+        .as_object()
+        .context("`launch` must be an object")?;
+    Ok(LaunchOptions {
+        args: parse_launch_args(obj.get("args"))?,
+        extension_dirs: parse_dirs(obj.get("extension_dirs"), "launch.extension_dirs")?,
+    })
+}
+
+fn parse_custom_fonts(value: Option<Value>) -> Result<CustomFonts> {
+    let Some(value) = value else {
+        return Ok(CustomFonts {
+            mode: "off".into(),
+            ..CustomFonts::default()
+        });
+    };
+    let obj = value
+        .as_object()
+        .context("`custom_fonts` must be an object")?;
+    let mode_value = obj.get("mode").and_then(|v| v.as_str()).unwrap_or("off");
+    let mode = match mode_value {
+        "off" | "append" | "replace" => mode_value.to_string(),
+        other => anyhow::bail!("custom_fonts.mode `{other}` is not allowed"),
+    };
+    let random_count = obj
+        .get("random_count")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0)
+        .min(100) as u32;
+    Ok(CustomFonts {
+        mode,
+        dirs: parse_dirs(obj.get("dirs"), "custom_fonts.dirs")?,
+        names: parse_string_list(obj.get("names"), "custom_fonts.names", 128)?,
+        random_count,
+    })
+}
+
+fn parse_launch_args(value: Option<&Value>) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
+    for arg in parse_string_list(value, "launch.args", 256)? {
+        let arg = sanitize_launch_arg(&arg)?;
+        if seen.insert(arg.clone()) {
+            out.push(arg);
+        }
+    }
+    Ok(out)
+}
+
+fn parse_string_list(value: Option<&Value>, label: &str, max_len: usize) -> Result<Vec<String>> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let arr = value.as_array().with_context(|| format!("`{label}` must be an array"))?;
+    let mut out = Vec::new();
+    for item in arr {
+        let s = item
+            .as_str()
+            .with_context(|| format!("`{label}` entries must be strings"))?
+            .trim();
+        if s.is_empty() {
+            continue;
+        }
+        if s.len() > max_len || s.chars().any(|c| c.is_control()) {
+            anyhow::bail!("`{label}` contains an invalid string");
+        }
+        out.push(s.to_string());
+    }
+    Ok(out)
+}
+
+fn parse_dirs(value: Option<&Value>, label: &str) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
+    for s in parse_string_list(value, label, 1024)? {
+        if s.contains(',') {
+            anyhow::bail!("`{label}` entries cannot contain commas");
+        }
+        let path = PathBuf::from(&s);
+        if !path.is_absolute() {
+            anyhow::bail!("`{label}` entries must be absolute paths");
+        }
+        if !path.is_dir() {
+            anyhow::bail!("`{label}` entry is not a directory: {s}");
+        }
+        let canonical = path.canonicalize().with_context(|| format!("canonicalize {s}"))?;
+        let key = canonical.to_string_lossy().to_string();
+        if seen.insert(key) {
+            out.push(canonical);
+        }
+    }
+    Ok(out)
+}
+
+fn sanitize_launch_arg(arg: &str) -> Result<String> {
+    if !arg.starts_with("--") || arg == "--" {
+        anyhow::bail!("launch arg `{arg}` must start with `--`");
+    }
+    if arg.len() > 512 || arg.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        anyhow::bail!("launch arg contains invalid characters");
+    }
+    let name = arg[2..]
+        .split(['=', ' '])
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if !SAFE_LAUNCH_SWITCHES.contains(&name.as_str()) {
+        anyhow::bail!("launch switch `--{name}` is not in the safe allowlist");
+    }
+    Ok(arg.trim().to_string())
+}
+
+const SAFE_LAUNCH_SWITCHES: &[&str] = &[
+    "allow-file-access-from-files",
+    "autoplay-policy",
+    "disable-background-networking",
+    "disable-background-timer-throttling",
+    "disable-backgrounding-occluded-windows",
+    "disable-breakpad",
+    "disable-component-update",
+    "disable-dev-shm-usage",
+    "disable-gpu-watchdog",
+    "disable-notifications",
+    "disable-popup-blocking",
+    "disable-renderer-backgrounding",
+    "force-color-profile",
+    "ignore-certificate-errors",
+    "mute-audio",
+    "start-maximized",
+    "use-fake-device-for-media-stream",
+    "use-fake-ui-for-media-stream",
+    "window-position",
+    "window-size",
+];
+
+fn join_comma_paths(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn write_custom_fonts_manifest(udd: &Path, custom_fonts: &CustomFonts) -> Result<PathBuf> {
+    let path = udd.join("custom-fonts.json");
+    let dirs: Vec<String> = custom_fonts
+        .dirs
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect();
+    let manifest = serde_json::json!({
+        "mode": custom_fonts.mode.as_str(),
+        "dirs": dirs,
+        "names": &custom_fonts.names,
+        "random_count": custom_fonts.random_count,
+    });
+    std::fs::write(&path, serde_json::to_vec_pretty(&manifest)?)
+        .with_context(|| format!("write {}", path.display()))?;
+    Ok(path)
+}
+
+#[cfg(test)]
+mod launch_option_tests {
+    use super::{parse_custom_fonts, parse_launch_options};
+    use serde_json::json;
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("shardx-launch-test-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn launch_options_allow_safe_args_and_extension_dirs() {
+        let ext = temp_dir("extension");
+        let value = json!({
+            "args": ["--mute-audio", "--window-size=1200,900", "--mute-audio"],
+            "extension_dirs": [ext.to_string_lossy()]
+        });
+
+        let opts = parse_launch_options(Some(value)).unwrap();
+
+        assert_eq!(opts.args, vec!["--mute-audio", "--window-size=1200,900"]);
+        assert_eq!(opts.extension_dirs.len(), 1);
+    }
+
+    #[test]
+    fn launch_options_reject_profile_isolation_switches() {
+        let value = json!({ "args": ["--user-data-dir=C:\\tmp\\other"] });
+
+        assert!(parse_launch_options(Some(value)).is_err());
+    }
+
+    #[test]
+    fn launch_options_reject_embedded_whitespace() {
+        let value = json!({ "args": ["--mute-audio --user-data-dir=C:\\tmp\\other"] });
+
+        assert!(parse_launch_options(Some(value)).is_err());
+    }
+
+    #[test]
+    fn custom_fonts_accepts_manifest_options() {
+        let fonts = temp_dir("fonts");
+        let value = json!({
+            "mode": "append",
+            "dirs": [fonts.to_string_lossy()],
+            "names": ["Inter", "Roboto"],
+            "random_count": 3
+        });
+
+        let opts = parse_custom_fonts(Some(value)).unwrap();
+
+        assert!(opts.is_enabled());
+        assert_eq!(opts.mode, "append");
+        assert_eq!(opts.names.len(), 2);
+        assert_eq!(opts.random_count, 3);
+    }
 }
 
 /// Poll `<udd>/DevToolsActivePort` for ~6s; line 1 = port, line 2 = ws path.
