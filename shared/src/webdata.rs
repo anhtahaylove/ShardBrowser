@@ -87,7 +87,11 @@ pub fn read(db_path: &Path, crypt: &LocalCrypt) -> Result<Vec<PortableSecret>> {
                 continue; // no stored secret for this row
             };
             if let Some(value) = crypt.decrypt_secret(&enc) {
-                out.push(PortableSecret { table: (*table).to_string(), key, value });
+                out.push(PortableSecret {
+                    table: (*table).to_string(),
+                    key,
+                    value,
+                });
             }
         }
     }
@@ -113,15 +117,19 @@ pub fn reencrypt_in_place(
     for s in secrets {
         // Resolve the columns from the hardcoded map by table name — never from
         // the (untrusted) snapshot blob.
-        let Some(&(_, key_col, enc_col)) =
-            ENCRYPTED_FIELDS.iter().find(|(t, _, _)| *t == s.table.as_str())
+        let Some(&(_, key_col, enc_col)) = ENCRYPTED_FIELDS
+            .iter()
+            .find(|(t, _, _)| *t == s.table.as_str())
         else {
             continue;
         };
         if !column_exists(&tx, &s.table, key_col) || !column_exists(&tx, &s.table, enc_col) {
             continue;
         }
-        let sql = format!("UPDATE \"{}\" SET \"{enc_col}\" = ?1 WHERE \"{key_col}\" = ?2", s.table);
+        let sql = format!(
+            "UPDATE \"{}\" SET \"{enc_col}\" = ?1 WHERE \"{key_col}\" = ?2",
+            s.table
+        );
         let enc = crypt.encrypt_secret(&s.value);
         updated += tx.execute(&sql, rusqlite::params![enc, s.key])?;
     }
@@ -186,7 +194,10 @@ mod tests {
             .unwrap();
         assert_eq!(name, "Ada Lovelace");
         assert_eq!(dst.decrypt_secret(&blob).unwrap(), b"4111111111111111");
-        assert!(src.decrypt_secret(&blob).is_none() || src.decrypt_secret(&blob).unwrap() != b"4111111111111111");
+        assert!(
+            src.decrypt_secret(&blob).is_none()
+                || src.decrypt_secret(&blob).unwrap() != b"4111111111111111"
+        );
     }
 
     #[test]
@@ -203,7 +214,8 @@ mod tests {
 
         // DB present but without any of the encrypted tables.
         let conn = Connection::open(&missing).unwrap();
-        conn.execute_batch("CREATE TABLE autofill (name TEXT, value TEXT);").unwrap();
+        conn.execute_batch("CREATE TABLE autofill (name TEXT, value TEXT);")
+            .unwrap();
         drop(conn);
         assert!(read(&missing, &crypt).unwrap().is_empty());
     }

@@ -70,7 +70,9 @@ fn is_excluded(rel: &str) -> bool {
         // Exact, or a `p/` prefix. The `rb[pb.len()] == b'/'` guard makes
         // `pb.len()` a char boundary, so the slice below never splits a codepoint.
         if rel.eq_ignore_ascii_case(p)
-            || (rb.len() > pb.len() && rb[pb.len()] == b'/' && rel[..pb.len()].eq_ignore_ascii_case(p))
+            || (rb.len() > pb.len()
+                && rb[pb.len()] == b'/'
+                && rel[..pb.len()].eq_ignore_ascii_case(p))
         {
             return true;
         }
@@ -114,7 +116,11 @@ pub fn pack(udd: &Path) -> Result<Vec<u8>> {
     // only `password_value` is rekeyed on restore, keyed by rowid.
     let logins = logins::read(&logins::login_data_path(udd), &crypt)
         .context("read saved logins for snapshot")?;
-    let state = PortableState { cookies, logins, web_secrets };
+    let state = PortableState {
+        cookies,
+        logins,
+        web_secrets,
+    };
     let state_json = serde_json::to_vec(&state)?;
 
     let gz = GzEncoder::new(Vec::new(), Compression::default());
@@ -289,7 +295,10 @@ fn build_staging(bytes: &[u8], udd: &Path, staging: &Path) -> Result<PortableSta
     // Hard backstop: cap the total decompressed bytes tar may read (see
     // LimitReader). Per-entry checks below fail earlier with clearer errors.
     let cap = expand_cap(bytes.len());
-    let reader = LimitReader { inner: GzDecoder::new(bytes), remaining: cap };
+    let reader = LimitReader {
+        inner: GzDecoder::new(bytes),
+        remaining: cap,
+    };
     let mut archive = tar::Archive::new(reader);
     let mut state = PortableState::default();
 
@@ -453,9 +462,28 @@ fn is_windows_reserved(name: &str) -> bool {
     let stem = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
     matches!(
         stem.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL"
-            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
-            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
     )
 }
 
@@ -522,7 +550,11 @@ mod tests {
         std::fs::create_dir_all(src.join("Default/Cache")).unwrap();
 
         // Keepable state + cache that must be dropped.
-        std::fs::write(src.join("Default/Local Storage/leveldb/000003.log"), b"LSDATA").unwrap();
+        std::fs::write(
+            src.join("Default/Local Storage/leveldb/000003.log"),
+            b"LSDATA",
+        )
+        .unwrap();
         std::fs::write(src.join("Default/Cache/data_0"), vec![0u8; 4096]).unwrap();
         std::fs::write(src.join("Default/Network/Cookies-journal"), b"junk").unwrap();
 
@@ -549,9 +581,19 @@ mod tests {
         let state = unpack(&bytes, &dst).unwrap();
 
         // Cache excluded, real state kept.
-        assert!(!dst.join("Default/Cache/data_0").exists(), "cache must be excluded");
-        assert!(!dst.join("Default/Network/Cookies-journal").exists(), "journal excluded");
-        assert!(dst.join("Default/Local Storage/leveldb/000003.log").exists(), "state kept");
+        assert!(
+            !dst.join("Default/Cache/data_0").exists(),
+            "cache must be excluded"
+        );
+        assert!(
+            !dst.join("Default/Network/Cookies-journal").exists(),
+            "journal excluded"
+        );
+        assert!(
+            dst.join("Default/Local Storage/leveldb/000003.log")
+                .exists(),
+            "state kept"
+        );
         // Windows must create a destination Local State to re-seal cookies with
         // the target user's DPAPI key. The invariant is that the source key is
         // not copied as archive content; POSIX profiles have no per-profile key.
@@ -596,26 +638,31 @@ mod tests {
         // longname carrying the crafted path.
         let evil_marker = b"ATTACKER-CONTROLLED";
         let evil_names = [
-            "/Local State",                        // leading root → excluded machine key
-            "./Local State",                       // `.` segment → same
-            "Default/./Login Data For Account",    // interior `.` → excluded, account-bound
-            "local state",                         // case alias on Win/macOS
-            "Default/login data for account",      // case alias, excluded
-            "Default/Network/Cookies/",            // trailing slash
-            "Local State/foo",                     // dir at the protected file path
+            "/Local State",                     // leading root → excluded machine key
+            "./Local State",                    // `.` segment → same
+            "Default/./Login Data For Account", // interior `.` → excluded, account-bound
+            "local state",                      // case alias on Win/macOS
+            "Default/login data for account",   // case alias, excluded
+            "Default/Network/Cookies/",         // trailing slash
+            "Local State/foo",                  // dir at the protected file path
         ];
 
         let gz = GzEncoder::new(Vec::new(), Compression::default());
         let mut tar = tar::Builder::new(gz);
 
         // Valid portable state first, so unpack reaches its success path.
-        let state = PortableState { cookies: vec![], logins: vec![], web_secrets: vec![] };
+        let state = PortableState {
+            cookies: vec![],
+            logins: vec![],
+            web_secrets: vec![],
+        };
         let state_json = serde_json::to_vec(&state).unwrap();
         let mut ph = tar::Header::new_gnu();
         ph.set_size(state_json.len() as u64);
         ph.set_mode(0o644);
         ph.set_cksum();
-        tar.append_data(&mut ph, PORTABLE_FILE, &state_json[..]).unwrap();
+        tar.append_data(&mut ph, PORTABLE_FILE, &state_json[..])
+            .unwrap();
 
         for evil in evil_names {
             // Longname header renaming the following entry to the crafted path.
@@ -632,7 +679,8 @@ mod tests {
             h.set_size(evil_marker.len() as u64);
             h.set_mode(0o644);
             h.set_cksum();
-            tar.append_data(&mut h, "Default/placeholder", &evil_marker[..]).unwrap();
+            tar.append_data(&mut h, "Default/placeholder", &evil_marker[..])
+                .unwrap();
         }
         let bytes = tar.into_inner().unwrap().finish().unwrap();
 
@@ -642,14 +690,24 @@ mod tests {
         // Unpack succeeds (valid portable state); the crafted entries are matched
         // on their canonical form and dropped as excluded — none plants its marker.
         unpack(&bytes, &dst).unwrap();
-        for planted in ["Local State", "Default/Login Data For Account", "Default/login data for account"] {
+        for planted in [
+            "Local State",
+            "Default/Login Data For Account",
+            "Default/login data for account",
+        ] {
             let p = dst.join(planted);
             if let Ok(got) = std::fs::read(&p) {
-                assert_ne!(got, evil_marker, "canonicalized path planted attacker bytes at {planted}");
+                assert_ne!(
+                    got, evil_marker,
+                    "canonicalized path planted attacker bytes at {planted}"
+                );
             }
         }
         // The prefix exclusion also blocks a directory at the protected path.
-        assert!(!dst.join("Local State/foo").exists(), "excluded prefix planted a child");
+        assert!(
+            !dst.join("Local State/foo").exists(),
+            "excluded prefix planted a child"
+        );
     }
 
     #[test]
@@ -658,9 +716,15 @@ mod tests {
         // The backstop that bounds decompression regardless of tar-format tricks:
         // it errors (not silently EOFs) once more than `remaining` bytes are read.
         let data = vec![7u8; 100];
-        let mut lr = LimitReader { inner: &data[..], remaining: 50 };
+        let mut lr = LimitReader {
+            inner: &data[..],
+            remaining: 50,
+        };
         let mut out = Vec::new();
-        assert!(lr.read_to_end(&mut out).is_err(), "reading past the cap must error");
+        assert!(
+            lr.read_to_end(&mut out).is_err(),
+            "reading past the cap must error"
+        );
         assert!(out.len() <= 50, "never yields more than the cap");
     }
 
@@ -686,13 +750,17 @@ mod tests {
         h.set_size(n);
         h.set_mode(0o644);
         h.set_cksum();
-        tar.append_data(&mut h, "Default/big", std::io::repeat(0u8).take(n)).unwrap();
+        tar.append_data(&mut h, "Default/big", std::io::repeat(0u8).take(n))
+            .unwrap();
         let bytes = tar.into_inner().unwrap().finish().unwrap();
 
         let base = std::env::temp_dir().join(format!("shardx-snap-bomb-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let dst = base.join("dst");
-        assert!(unpack(&bytes, &dst).is_err(), "decompression bomb must be rejected");
+        assert!(
+            unpack(&bytes, &dst).is_err(),
+            "decompression bomb must be rejected"
+        );
         assert!(!dst.exists(), "nothing materialized for a rejected bomb");
     }
 
@@ -710,18 +778,23 @@ mod tests {
         h.set_size(big);
         h.set_mode(0o644);
         h.set_cksum();
-        tar.append_data(&mut h, "././@LongLink", std::io::repeat(b'a').take(big)).unwrap();
+        tar.append_data(&mut h, "././@LongLink", std::io::repeat(b'a').take(big))
+            .unwrap();
         let bytes = tar.into_inner().unwrap().finish().unwrap();
 
         let base = std::env::temp_dir().join(format!("shardx-snap-ext-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let dst = base.join("dst");
-        assert!(unpack(&bytes, &dst).is_err(), "oversized extension header must be rejected");
+        assert!(
+            unpack(&bytes, &dst).is_err(),
+            "oversized extension header must be rejected"
+        );
     }
 
     #[test]
     fn unpack_rejects_missing_or_corrupt_portable_state() {
-        let base = std::env::temp_dir().join(format!("shardx-snap-portable-{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("shardx-snap-portable-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
 
         // (a) No portable state at all → refuse (don't rebuild empty cookies).
@@ -734,7 +807,10 @@ mod tests {
             h.set_cksum();
             tar.append_data(&mut h, "Default/x", &b"abc"[..]).unwrap();
             let bytes = tar.into_inner().unwrap().finish().unwrap();
-            assert!(unpack(&bytes, &base.join("a")).is_err(), "missing portable state rejected");
+            assert!(
+                unpack(&bytes, &base.join("a")).is_err(),
+                "missing portable state rejected"
+            );
         }
 
         // (b) Present but not valid JSON → refuse (don't silently wipe cookies).
@@ -748,7 +824,10 @@ mod tests {
             h.set_cksum();
             tar.append_data(&mut h, PORTABLE_FILE, &bad[..]).unwrap();
             let bytes = tar.into_inner().unwrap().finish().unwrap();
-            assert!(unpack(&bytes, &base.join("b")).is_err(), "corrupt portable state rejected");
+            assert!(
+                unpack(&bytes, &base.join("b")).is_err(),
+                "corrupt portable state rejected"
+            );
         }
     }
 
@@ -767,7 +846,10 @@ mod tests {
         let base = std::env::temp_dir().join(format!("shardx-snap-deep-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let dst = base.join("dst");
-        assert!(unpack(&bytes, &dst).is_err(), "deeply nested path must be rejected");
+        assert!(
+            unpack(&bytes, &dst).is_err(),
+            "deeply nested path must be rejected"
+        );
     }
 
     #[test]
@@ -872,7 +954,9 @@ mod tests {
         // into the main DB before the files are read off disk.
         let writer = rusqlite::Connection::open(src.join("Default/Login Data")).unwrap();
         writer.pragma_update(None, "journal_mode", "WAL").unwrap();
-        writer.pragma_update(None, "wal_autocheckpoint", 0i64).unwrap();
+        writer
+            .pragma_update(None, "wal_autocheckpoint", 0i64)
+            .unwrap();
         writer
             .execute_batch(
                 "CREATE TABLE logins (origin_url TEXT, username_value TEXT, \
@@ -886,7 +970,10 @@ mod tests {
                 rusqlite::params![enc],
             )
             .unwrap();
-        assert!(src.join("Default/Login Data-wal").exists(), "row must be in the WAL");
+        assert!(
+            src.join("Default/Login Data-wal").exists(),
+            "row must be in the WAL"
+        );
 
         let bytes = pack(&src).unwrap();
         drop(writer);
@@ -933,8 +1020,15 @@ mod tests {
         unpack(&bytes, &dst).unwrap();
 
         // Stale file gone (full replacement), snapshot state present.
-        assert!(!dst.join("Default/stale.txt").exists(), "stale file must be dropped");
-        assert!(dst.join("Default/Local Storage/leveldb/000003.log").exists(), "new state present");
+        assert!(
+            !dst.join("Default/stale.txt").exists(),
+            "stale file must be dropped"
+        );
+        assert!(
+            dst.join("Default/Local Storage/leveldb/000003.log")
+                .exists(),
+            "new state present"
+        );
         // No staging/backup dirs linger.
         assert!(!base.join("dst.incoming").exists());
         assert!(!base.join("dst.backup").exists());
@@ -960,7 +1054,10 @@ mod tests {
         let err = unpack(b"corrupt not gzip", &dst);
         assert!(err.is_err(), "corrupt snapshot still errors");
         // The original was recovered from backup, not lost.
-        assert_eq!(std::fs::read(dst.join("Default/orig.txt")).unwrap(), b"ORIGINAL");
+        assert_eq!(
+            std::fs::read(dst.join("Default/orig.txt")).unwrap(),
+            b"ORIGINAL"
+        );
         assert!(!backup.exists(), "backup consumed by recovery");
     }
 
@@ -985,7 +1082,8 @@ mod tests {
         lh.set_mode(0o777);
         lh.set_link_name("/etc/passwd").unwrap();
         lh.set_cksum();
-        tar.append_data(&mut lh, "Default/evil", std::io::empty()).unwrap();
+        tar.append_data(&mut lh, "Default/evil", std::io::empty())
+            .unwrap();
         let bytes = tar.into_inner().unwrap().finish().unwrap();
 
         let base = std::env::temp_dir().join(format!("shardx-snap-symlink-{}", std::process::id()));
@@ -993,7 +1091,10 @@ mod tests {
         let dst = base.join("dst");
         unpack(&bytes, &dst).unwrap();
         // The symlink was skipped, not materialized.
-        assert!(!dst.join("Default/evil").symlink_metadata().is_ok(), "symlink must be rejected");
+        assert!(
+            !dst.join("Default/evil").symlink_metadata().is_ok(),
+            "symlink must be rejected"
+        );
     }
 
     #[test]
@@ -1008,7 +1109,10 @@ mod tests {
         let err = unpack(b"not a gzip stream", &dst);
         assert!(err.is_err(), "corrupt snapshot must error");
         // Existing udd untouched, no staging/backup left behind.
-        assert_eq!(std::fs::read(dst.join("Default/keep.txt")).unwrap(), b"KEEP");
+        assert_eq!(
+            std::fs::read(dst.join("Default/keep.txt")).unwrap(),
+            b"KEEP"
+        );
         assert!(!base.join("dst.incoming").exists());
         assert!(!base.join("dst.backup").exists());
     }

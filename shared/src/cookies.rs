@@ -103,13 +103,15 @@ pub fn read(db_path: &Path, crypt: &LocalCrypt) -> Result<Vec<PortableCookie>> {
     let mut out = Vec::new();
     for row in rows {
         let (enc, plain, mut cookie) = row?;
-        cookie.value = crypt.try_decrypt_cookie(&enc, &plain, &cookie.domain).ok_or_else(|| {
-            anyhow!(
-                "cookie {}={} failed v10 decryption — refusing to pack an empty value",
-                cookie.domain,
-                cookie.name
-            )
-        })?;
+        cookie.value = crypt
+            .try_decrypt_cookie(&enc, &plain, &cookie.domain)
+            .ok_or_else(|| {
+                anyhow!(
+                    "cookie {}={} failed v10 decryption — refusing to pack an empty value",
+                    cookie.domain,
+                    cookie.name
+                )
+            })?;
         out.push(cookie);
     }
     Ok(out)
@@ -215,7 +217,15 @@ mod tests {
         let db = dir.join("Cookies");
         let crypt = LocalCrypt::open(&dir).unwrap();
 
-        let n = write(&db, &crypt, &[sample(".example.com", "sid", "abc"), sample(".x.io", "t", "9")]).unwrap();
+        let n = write(
+            &db,
+            &crypt,
+            &[
+                sample(".example.com", "sid", "abc"),
+                sample(".x.io", "t", "9"),
+            ],
+        )
+        .unwrap();
         assert_eq!(n, 2);
 
         let got = read(&db, &crypt).unwrap();
@@ -245,8 +255,14 @@ mod tests {
         // Before the fix these collapsed to one row (top_frame_site_key forced to
         // '') — now both survive with their partition preserved.
         assert_eq!(got.len(), 2, "distinct partitions must not collide");
-        let u = got.iter().find(|c| c.top_frame_site_key.is_empty()).unwrap();
-        let p = got.iter().find(|c| !c.top_frame_site_key.is_empty()).unwrap();
+        let u = got
+            .iter()
+            .find(|c| c.top_frame_site_key.is_empty())
+            .unwrap();
+        let p = got
+            .iter()
+            .find(|c| !c.top_frame_site_key.is_empty())
+            .unwrap();
         assert_eq!(u.value, "unpartitioned");
         assert_eq!(p.value, "partitioned-to-shop");
         assert_eq!(p.top_frame_site_key, "https://shop.example");
@@ -264,7 +280,10 @@ mod tests {
         let key_a = LocalCrypt::with_key(vec![0xAA; 16]);
         let key_b = LocalCrypt::with_key(vec![0xBB; 16]);
         write(&db, &key_a, &[sample(".acme.test", "auth", "TOKEN")]).unwrap();
-        assert!(read(&db, &key_b).is_err(), "undecryptable v10 cookie must error");
+        assert!(
+            read(&db, &key_b).is_err(),
+            "undecryptable v10 cookie must error"
+        );
     }
 
     // Prove the snapshot re-key path at the DB level: write under key A, read

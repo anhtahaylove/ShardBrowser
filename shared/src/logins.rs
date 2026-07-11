@@ -55,7 +55,10 @@ pub fn read(db_path: &Path, crypt: &LocalCrypt) -> Result<Vec<PortableLogin>> {
         let password_value = crypt.decrypt_secret(&enc).ok_or_else(|| {
             anyhow!("login row {rowid} failed v10 decryption — refusing to pack an empty password")
         })?;
-        out.push(PortableLogin { rowid, password_value });
+        out.push(PortableLogin {
+            rowid,
+            password_value,
+        });
     }
     Ok(out)
 }
@@ -103,7 +106,10 @@ pub fn reencrypt_in_place(
     let mut carried = BTreeSet::new();
     for l in logins {
         if !carried.insert(l.rowid) {
-            bail!("snapshot repeats login rowid {} — refusing ambiguous re-encrypt", l.rowid);
+            bail!(
+                "snapshot repeats login rowid {} — refusing ambiguous re-encrypt",
+                l.rowid
+            );
         }
     }
     if carried != db_rowids {
@@ -124,7 +130,11 @@ pub fn reencrypt_in_place(
             // Unreachable given the set-equality check above, but keep the guard:
             // a rowid in `db_rowids` addresses exactly one row.
             if n != 1 {
-                bail!("login rowid {} matched {} rows on re-encrypt (expected exactly 1)", l.rowid, n);
+                bail!(
+                    "login rowid {} matched {} rows on re-encrypt (expected exactly 1)",
+                    l.rowid,
+                    n
+                );
             }
             updated += 1;
         }
@@ -181,7 +191,13 @@ mod tests {
             create_logins(&conn);
             insert(&conn, &src, "https://site.test/", "alice", b"pw-one");
             insert(&conn, &src, "https://site.test/", "alice", b"pw-two"); // same realm+user
-            insert(&conn, &src, "https://other.test/", "bob", b"\x00\xff binary");
+            insert(
+                &conn,
+                &src,
+                "https://other.test/",
+                "bob",
+                b"\x00\xff binary",
+            );
         }
 
         let logins = read(&db, &src).unwrap();
@@ -192,8 +208,14 @@ mod tests {
 
         // Every row now decrypts under the destination key, source key fails.
         let conn = Connection::open(&db).unwrap();
-        let mut stmt = conn.prepare("SELECT password_value FROM logins ORDER BY rowid").unwrap();
-        let blobs: Vec<Vec<u8>> = stmt.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
+        let mut stmt = conn
+            .prepare("SELECT password_value FROM logins ORDER BY rowid")
+            .unwrap();
+        let blobs: Vec<Vec<u8>> = stmt
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
         assert_eq!(dst.decrypt_secret(&blobs[0]).unwrap(), b"pw-one");
         assert_eq!(dst.decrypt_secret(&blobs[1]).unwrap(), b"pw-two");
         assert_eq!(dst.decrypt_secret(&blobs[2]).unwrap(), b"\x00\xff binary");
@@ -234,7 +256,10 @@ mod tests {
         create_logins(&conn);
         insert(&conn, &key_a, "https://acme.test/", "auth", b"TOKEN");
         drop(conn);
-        assert!(read(&db, &key_b).is_err(), "undecryptable password must error");
+        assert!(
+            read(&db, &key_b).is_err(),
+            "undecryptable password must error"
+        );
     }
 
     // The carried set must be a perfect bijection with the DB's non-empty
@@ -253,14 +278,23 @@ mod tests {
         let dst = LocalCrypt::with_key(vec![0x45; 16]);
 
         // (a) a rowid the DB doesn't have.
-        let phantom = PortableLogin { rowid: 999, password_value: b"x".to_vec() };
+        let phantom = PortableLogin {
+            rowid: 999,
+            password_value: b"x".to_vec(),
+        };
         assert!(reencrypt_in_place(&db, &dst, &[phantom]).is_err());
         // (b) empty carry while the DB still has an encrypted row.
         assert!(reencrypt_in_place(&db, &dst, &[]).is_err());
         // (c) a duplicate rowid.
         let dup = vec![
-            PortableLogin { rowid: real_rowid, password_value: b"a".to_vec() },
-            PortableLogin { rowid: real_rowid, password_value: b"b".to_vec() },
+            PortableLogin {
+                rowid: real_rowid,
+                password_value: b"a".to_vec(),
+            },
+            PortableLogin {
+                rowid: real_rowid,
+                password_value: b"b".to_vec(),
+            },
         ];
         assert!(reencrypt_in_place(&db, &dst, &dup).is_err());
 
@@ -281,10 +315,15 @@ mod tests {
         // is NOT checkpointed into the main DB before we read.
         let writer = Connection::open(&db).unwrap();
         writer.pragma_update(None, "journal_mode", "WAL").unwrap();
-        writer.pragma_update(None, "wal_autocheckpoint", 0i64).unwrap();
+        writer
+            .pragma_update(None, "wal_autocheckpoint", 0i64)
+            .unwrap();
         create_logins(&writer);
         insert(&writer, &src, "https://w.test/", "u", b"walpass");
-        assert!(dir.join("Login Data-wal").exists(), "row should live in the WAL");
+        assert!(
+            dir.join("Login Data-wal").exists(),
+            "row should live in the WAL"
+        );
 
         // Pack-side read (READ_ONLY) sees the committed WAL frame.
         let carried = read(&db, &src).unwrap();
@@ -306,7 +345,10 @@ mod tests {
         assert!(read(&missing, &crypt).unwrap().is_empty());
         assert_eq!(reencrypt_in_place(&missing, &crypt, &[]).unwrap(), 0);
         // But a missing DB with passwords to write is an error, not a silent drop.
-        let orphan = PortableLogin { rowid: 1, password_value: b"x".to_vec() };
+        let orphan = PortableLogin {
+            rowid: 1,
+            password_value: b"x".to_vec(),
+        };
         assert!(reencrypt_in_place(&missing, &crypt, &[orphan]).is_err());
     }
 }

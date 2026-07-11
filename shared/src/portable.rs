@@ -81,7 +81,10 @@ impl std::fmt::Debug for PortableLogin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PortableLogin")
             .field("rowid", &self.rowid)
-            .field("password_value", &format_args!("<{} bytes redacted>", self.password_value.len()))
+            .field(
+                "password_value",
+                &format_args!("<{} bytes redacted>", self.password_value.len()),
+            )
             .finish()
     }
 }
@@ -103,7 +106,10 @@ impl std::fmt::Debug for PortableSecret {
         f.debug_struct("PortableSecret")
             .field("table", &self.table)
             .field("key", &self.key)
-            .field("value", &format_args!("<{} bytes redacted>", self.value.len()))
+            .field(
+                "value",
+                &format_args!("<{} bytes redacted>", self.value.len()),
+            )
             .finish()
     }
 }

@@ -47,7 +47,8 @@ impl LocalCrypt {
     /// for best-effort callers). Snapshot packing uses [`Self::try_decrypt_cookie`]
     /// so it can refuse instead.
     pub fn decrypt_cookie(&self, encrypted: &[u8], plain: &str, host: &str) -> String {
-        self.try_decrypt_cookie(encrypted, plain, host).unwrap_or_default()
+        self.try_decrypt_cookie(encrypted, plain, host)
+            .unwrap_or_default()
     }
 
     /// Like [`Self::decrypt_cookie`], but a v10 blob that fails to decrypt (or
@@ -310,9 +311,15 @@ mod tests {
         // Re-key: encrypt the recovered plaintext under a different key.
         let blob_b = key_b.encrypt_cookie("example.com", &plain);
         assert_ne!(blob_a, blob_b, "different keys → different ciphertext");
-        assert_eq!(key_b.decrypt_cookie(&blob_b, "", "example.com"), "session=abc123");
+        assert_eq!(
+            key_b.decrypt_cookie(&blob_b, "", "example.com"),
+            "session=abc123"
+        );
         // The wrong key must not recover it.
-        assert_ne!(key_a.decrypt_cookie(&blob_b, "", "example.com"), "session=abc123");
+        assert_ne!(
+            key_a.decrypt_cookie(&blob_b, "", "example.com"),
+            "session=abc123"
+        );
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -349,6 +356,9 @@ mod tests {
     #[test]
     fn legacy_plain_fallback() {
         let c = LocalCrypt::with_key(vec![3u8; 16]);
-        assert_eq!(c.decrypt_cookie(b"not-v10-bytes", "legacy", "example.com"), "legacy");
+        assert_eq!(
+            c.decrypt_cookie(b"not-v10-bytes", "legacy", "example.com"),
+            "legacy"
+        );
     }
 }

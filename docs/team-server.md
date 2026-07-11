@@ -1,19 +1,21 @@
-# Snapshot safety port
+# ShardX Team Server core port
 
-This branch ports only the `shared/` snapshot safety crate from `chovizzz/ShardBrowser#2`.
+This branch ports only the self-hosted team-server core from
+`chovizzz/ShardBrowser#2`:
 
-Included:
+- user login with Argon2 password hashes and bearer tokens
+- admin/member roles
+- folder/env/proxy CRUD with ACL filtering
+- exclusive checkout locks with `lock_token` + lease renewal
+- opaque snapshot upload/download with retention GC and SHA-256 metadata
+- login throttling, token invalidation on password change, audit logging
 
-- portable profile snapshot pack/unpack helpers
-- cache/temp exclusion rules
-- path traversal, Windows-reserved-name, symlink, depth, entry-count, and decompression-bomb guards
-- atomic unpack staging/backup behavior
-- os_crypt helpers and portable Cookies/Web Data/Login Data re-sealing tests
+Out of scope for this branch:
 
-Out of scope:
+- Launcher Team UI / remote workspace commands
+- portable cookie/Login Data/Web Data pack/unpack
+- browser engine, fingerprint, profile isolation, proxy launch behavior
 
-- Team Server auth/lock API
-- Launcher Team UI / remote commands
-- browser engine, fingerprint, profile isolation, launch behavior
-
-This keeps snapshot validation reviewable before wiring it into team-server checkin/checkout flows.
+Snapshot bytes are intentionally opaque here. The portable snapshot safety layer
+is ported separately so it can be reviewed without mixing it into server auth
+and lock behavior.
