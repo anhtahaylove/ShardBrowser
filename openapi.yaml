@@ -862,6 +862,11 @@ components:
         proxy:
           type: string
           description: Inline proxy string (not saved to the store).
+        noise:
+          allOf: [{ $ref: "#/components/schemas/NoisePrefs" }]
+          description: |
+            Per-vector noise override for the temporary profile; seed 0 is
+            derived from the temporary profile id.
         name: { type: string }
         folder: { type: string }
 

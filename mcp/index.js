@@ -385,6 +385,7 @@ server.tool(
     fingerprint_id: z.string().optional(),
     platform: z.enum(["Windows", "macOS", "Linux"]).optional(),
     proxy: z.string().optional(),
+    noise: z.record(z.any()).optional(),
     name: z.string().optional(),
     folder: z.string().optional(),
   },

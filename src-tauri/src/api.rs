@@ -12,7 +12,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 // ---- API listener status (actual runtime state, not just saved settings) ----
 
@@ -290,8 +290,51 @@ struct TempReq {
     platform: Option<String>,
     /// Inline proxy (not stored).
     proxy: Option<String>,
+    /// Optional per-vector noise override, e.g.
+    /// `{ "canvas": { "enabled": true, "seed": 0 } }`.
+    noise: Option<Value>,
     name: Option<String>,
     folder: Option<String>,
+}
+
+fn apply_temp_noise_override(
+    cfg: &mut Map<String, Value>,
+    noise: Option<Value>,
+) -> Result<(), String> {
+    let Some(noise) = noise else {
+        return Ok(());
+    };
+    if !noise.is_object() {
+        return Err("`noise` must be an object".into());
+    }
+    cfg.insert("noise".into(), noise);
+    Ok(())
+}
+
+#[cfg(test)]
+mod temp_profile_tests {
+    use super::apply_temp_noise_override;
+    use serde_json::{json, Map, Value};
+
+    #[test]
+    fn temporary_profile_accepts_noise_override() {
+        let mut cfg = Map::<String, Value>::new();
+
+        apply_temp_noise_override(
+            &mut cfg,
+            Some(json!({ "canvas": { "enabled": true, "seed": 0 } })),
+        )
+        .unwrap();
+
+        assert_eq!(cfg["noise"]["canvas"]["enabled"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn temporary_profile_rejects_non_object_noise() {
+        let mut cfg = Map::<String, Value>::new();
+
+        assert!(apply_temp_noise_override(&mut cfg, Some(json!(true))).is_err());
+    }
 }
 
 /// Temporary profile (hidden, auto-deleted on close); pair with /start.
@@ -306,6 +349,8 @@ async fn create_temporary(Json(body): Json<TempReq>) -> ApiResult {
     if let Some(n) = body.name.as_ref() {
         cfg.insert("name".into(), json!(n));
     }
+    apply_temp_noise_override(&mut cfg, body.noise)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     let mut meta = json!({ "id": "", "folder": body.folder.unwrap_or_default(), "temporary": true });
     if let Some(pstr) = body.proxy.as_ref() {
         let entry = crate::proxy::parse_single(pstr)
