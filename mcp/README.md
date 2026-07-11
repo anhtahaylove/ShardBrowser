@@ -98,6 +98,9 @@ MCP_HTTP_PORT=40326 SHARDX_API=http://127.0.0.1:40325 SHARDX_TOKEN=… node inde
   → idempotently starts one resolved profile and returns its CDP endpoint
 - `safe_open_url(profile_id? | profile_query?, exact?, url, headless?)`
   → starts one resolved profile, opens an `http(s)` URL, returns title/url
+- `devtools_context(profile_id? | profile_query?, exact?, headless?)`
+  → starts/resolves one profile and returns its CDP endpoint, `/json/list`
+  page targets, and the current title/url for DevTools handoff
 - `list_profiles`, `get_profile`, `create_profile`, `create_temporary_profile`,
   `edit_profile`, `delete_profile`
 - `new_fingerprint(platform?)`
@@ -157,5 +160,25 @@ headless) if it isn't running; actions target the profile's *active* tab:
 3. `safe_open_url` for a one-shot smoke check, or
    `browser_navigate(profile_id, "https://…")` — starts the browser with
    CDP and opens the page.
-4. `browser_evaluate` / `browser_screenshot` / `browser_click` / `browser_fill`.
-5. `stop_profile` when done (temporary profiles self-delete on close).
+4. `devtools_context` when handing the live ShardX page to a DevTools client.
+5. `browser_evaluate` / `browser_screenshot` / `browser_click` / `browser_fill`.
+6. `stop_profile` when done (temporary profiles self-delete on close).
+
+## Chrome DevTools MCP handoff
+
+`devtools_context` exposes the browser's `cdp.http_url` and
+`web_socket_debugger_url` without returning tokens, cookies, fingerprints, or
+proxy credentials. Use that URL to configure a DevTools MCP server that supports
+connecting to an existing browser, for example:
+
+```powershell
+codex mcp add shardbrowser-devtools -- cmd /c npx -y chrome-devtools-mcp@1.5.0 --browserUrl http://127.0.0.1:<cdp-port> --no-usage-statistics --no-performance-crux --redactNetworkHeaders
+```
+
+Codex's built-in `chrome_devtools` tools do not expose a runtime attach/connect
+call; the DevTools MCP server chooses the browser at MCP startup. If the CDP
+port changes, update the MCP client entry and restart the MCP client.
+
+If a profile is already running without CDP, `devtools_context` cannot retrofit
+the debugging port into that process. Stop and restart the profile through MCP
+or the Automation API, then call `devtools_context` again.

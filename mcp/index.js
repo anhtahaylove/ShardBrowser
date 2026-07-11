@@ -74,7 +74,7 @@ async function cdpEndpoint(profileId, { autostart = true, headless = false } = {
   }
   const cdp = entry?.cdp;
   if (!cdp?.http_url) {
-    throw new Error(`profile ${profileId} is not running with CDP (start it first)`);
+    throw new Error(`profile ${profileId} is not running with CDP (stop/restart it through MCP or the Automation API to enable DevTools)`);
   }
   return cdp;
 }
@@ -165,6 +165,30 @@ function assertHttpUrl(url) {
     throw new Error("safe_open_url only supports http(s) URLs");
   }
   return parsed.href;
+}
+
+async function cdpJson(cdp, path) {
+  const res = await fetch(new URL(path, cdp.http_url).href);
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(`CDP ${path} → HTTP ${res.status}`);
+  }
+  return data;
+}
+
+function targetSummary(cdp, target) {
+  const frontend = target.devtoolsFrontendUrl
+    ? new URL(target.devtoolsFrontendUrl, cdp.http_url).href
+    : null;
+  return {
+    id: target.id,
+    type: target.type,
+    title: target.title || "",
+    url: target.url || "",
+    attached: !!target.attached,
+    web_socket_debugger_url: target.webSocketDebuggerUrl || null,
+    devtools_frontend_url: frontend,
+  };
 }
 
 const server = new McpServer({ name: "shardx", version: "0.1.12" });
@@ -276,6 +300,42 @@ server.tool(
     const page = await pageFor(profile.id, { headless: !!headless });
     await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
     return text({ profile: profileSummary(profile), url: page.url(), title: await page.title() });
+  },
+);
+
+server.tool(
+  "devtools_context",
+  "Resolve/start a profile and return its CDP endpoint plus /json/list page targets for Chrome DevTools handoff.",
+  {
+    profile_id: z.string().optional(),
+    profile_query: z.string().optional(),
+    exact: z.boolean().optional(),
+    headless: z.boolean().optional(),
+  },
+  async ({ profile_id, profile_query, exact, headless }) => {
+    const profile = await resolveProfile({ profile_id, profile_query, exact });
+    const cdp = await cdpEndpoint(profile.id, { autostart: true, headless: !!headless });
+    const rawTargets = await cdpJson(cdp, "/json/list");
+    const targets = (Array.isArray(rawTargets) ? rawTargets : [])
+      .filter((t) => t.type === "page")
+      .map((t) => targetSummary(cdp, t));
+    const currentPage = activePage.get(profile.id);
+    let current = targets.find((t) => t.url && !t.url.startsWith("devtools://")) || null;
+    if (currentPage && !currentPage.isClosed()) {
+      const url = currentPage.url();
+      const target = targets.find((t) => t.url === url);
+      current = {
+        ...(target || {}),
+        url,
+        title: await currentPage.title().catch(() => target?.title || ""),
+      };
+    }
+    return text({
+      profile: { id: profile.id, name: profile.name, running: true },
+      cdp,
+      targets,
+      current,
+    });
   },
 );
 
