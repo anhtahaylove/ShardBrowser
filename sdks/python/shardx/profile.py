@@ -26,7 +26,7 @@ class Profile:
     @classmethod
     def from_file(cls, path: str | Path) -> "Profile":
         p = Path(path)
-        cfg = json.loads(p.read_text())
+        cfg = json.loads(p.read_text(encoding="utf-8"))
         return cls(cfg, id=p.stem)
 
     def with_override(self, **overrides) -> "Profile":
