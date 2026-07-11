@@ -3191,6 +3191,7 @@ function ProxyBulkImporter({ onClose }: { onClose: () => void }) {
                   placeholder={`socks5://user:pass@host:1080
 user:pass@host:1080
 host:1080:user:pass     # country=PL
+host:1080:user:pass     # name=proxy-PL-1 country=PL
 host:8080               # no auth
 # lines starting with # are ignored`}
                 />
