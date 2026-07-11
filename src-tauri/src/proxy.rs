@@ -209,7 +209,7 @@ pub async fn probe(entry: &ProxyEntry) -> Result<u128> {
 // ---- Bulk import ----
 //
 // Accepted: socks5://user:pass@host:port, user:pass@host:port, host:port:user:pass,
-//           host:port@user:pass, host:port. `#` lines and trailing `# country=X note=Y`
+//           host:port@user:pass, host:port. `#` lines and trailing `# country=X name=Y note=Z`
 //           supported. SOCKS5 default kind when scheme missing.
 
 /// Parse a single proxy line for inline (unsaved) use by the API.
@@ -232,7 +232,7 @@ pub fn parse_bulk(text: &str, default_kind: ProxyKind) -> Vec<ProxyEntry> {
 }
 
 fn parse_one(line: &str, default_kind: &ProxyKind) -> Option<ProxyEntry> {
-    // Optional trailing `# country=US note=foo`.
+    // Optional trailing `# country=US name=foo note=bar`.
     let (main, comment) = match line.find('#') {
         Some(i) => (line[..i].trim(), Some(line[i + 1..].trim())),
         None => (line, None),
@@ -267,11 +267,14 @@ fn parse_one(line: &str, default_kind: &ProxyKind) -> Option<ProxyEntry> {
     let (host, port_s) = host_part.rsplit_once(':')?;
     let port: u16 = port_s.parse().ok()?;
     let mut country = String::new();
+    let mut name = String::new();
     let mut notes = String::new();
     if let Some(c) = comment {
         for kv in c.split_whitespace() {
             if let Some(v) = kv.strip_prefix("country=") {
                 country = v.to_string();
+            } else if let Some(v) = kv.strip_prefix("name=") {
+                name = v.to_string();
             } else if let Some(v) = kv.strip_prefix("note=") {
                 notes = v.to_string();
             }
@@ -280,7 +283,7 @@ fn parse_one(line: &str, default_kind: &ProxyKind) -> Option<ProxyEntry> {
     Some(ProxyEntry {
         // ID assigned now so pre-save test snapshots key under the kept uuid.
         id: uuid::Uuid::new_v4().to_string(),
-        name: format!("{host}:{port}"),
+        name: if name.is_empty() { format!("{host}:{port}") } else { name },
         kind,
         host: host.to_string(),
         port,
@@ -828,5 +831,23 @@ pub fn country_to_timezone(cc: &str) -> &'static str {
         "SA" => "Asia/Riyadh",
         "AE" => "Asia/Dubai",
         _ => "UTC",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_bulk, ProxyKind};
+
+    #[test]
+    fn bulk_import_accepts_name_tag() {
+        let parsed = parse_bulk(
+            "host.example:1080:user:pass # name=proxy-PL-1 country=PL note=keep",
+            ProxyKind::Socks5,
+        );
+
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].name, "proxy-PL-1");
+        assert_eq!(parsed[0].country, "PL");
+        assert_eq!(parsed[0].notes, "keep");
     }
 }
