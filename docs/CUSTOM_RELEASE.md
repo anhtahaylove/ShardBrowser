@@ -21,20 +21,21 @@ Configure these GitHub Actions repository secrets before creating a public tag:
   certificate with the Code Signing EKU.
 - `WINDOWS_CERTIFICATE_PASSWORD`: password for that PFX.
 
-The certificate must chain to a public trust root for public downloads. A
-self-signed certificate can be useful for a controlled internal trust store,
-but it does not make a generally trusted public installer.
+Prefer a certificate that chains to a public trust root for public downloads. A
+self-signed certificate can sign custom builds, but Windows may show an
+unknown-publisher prompt until the certificate is trusted locally.
 
-Manual internal runs (`publish_release=false`) may use a self-signed PFX to test
-the signing flow. The workflow verifies the signer thumbprint without adding the
-certificate to the runner trust stores. Tag pushes and published releases still
-need a publicly trusted certificate.
+Self-signed PFX builds verify by signer thumbprint without adding the certificate
+to the runner trust stores. Publicly trusted certificates still verify with the
+normal Windows `Valid` Authenticode status.
 
 The workflow imports the PFX only into the ephemeral Windows runner, passes its
 thumbprint to the Tauri bundler, timestamps signatures, verifies every collected
 `.exe` and `.msi` with `Get-AuthenticodeSignature`, then removes the imported
 certificate and temporary files. Publication fails unless each Windows
-signature reports `Valid`.
+artifact is signed by the configured certificate. Publicly trusted certificates
+must report `Valid`; self-signed certificates must match the configured signer
+thumbprint.
 
 ## Internal and public runs
 
