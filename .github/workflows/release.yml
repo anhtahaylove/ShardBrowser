@@ -185,10 +185,12 @@ jobs:
           if ($env:ALLOW_SELF_SIGNED_INTERNAL -eq "true" -and $cert.Subject -eq $cert.Issuer) {
             $cerPath = Join-Path $env:RUNNER_TEMP "shardx-authenticode.cer"
             Export-Certificate -Cert $cert -FilePath $cerPath | Out-Null
-            $rootCert = Import-Certificate -FilePath $cerPath -CertStoreLocation Cert:\CurrentUser\Root
-            $publisherCert = Import-Certificate -FilePath $cerPath -CertStoreLocation Cert:\CurrentUser\TrustedPublisher
-            $trustedRootThumbprint = $rootCert.Thumbprint
-            $trustedPublisherThumbprint = $publisherCert.Thumbprint
+            & certutil -user -addstore -f Root $cerPath | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Failed to trust self-signed certificate in CurrentUser Root." }
+            & certutil -user -addstore -f TrustedPublisher $cerPath | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Failed to trust self-signed certificate in CurrentUser TrustedPublisher." }
+            $trustedRootThumbprint = $cert.Thumbprint
+            $trustedPublisherThumbprint = $cert.Thumbprint
             Write-Host "Temporarily trusted self-signed certificate for this unpublished internal run."
           }
 
