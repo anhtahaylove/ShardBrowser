@@ -239,6 +239,21 @@ jobs:
           fi
           cp -v "$src" "staging/ShardX-Launcher-portable-${{ matrix.label }}.exe"
 
+      - name: Sign Windows portable binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $cert = Get-ChildItem "Cert:\CurrentUser\My\${{ steps.windows_signing.outputs.thumbprint }}"
+          $files = Get-ChildItem staging -File -Filter "ShardX-Launcher-portable-*.exe"
+          foreach ($file in $files) {
+            Set-AuthenticodeSignature `
+              -FilePath $file.FullName `
+              -Certificate $cert `
+              -HashAlgorithm SHA256 `
+              -TimestampServer "http://timestamp.digicert.com" | Out-Null
+            Write-Host "Signed portable binary: $($file.Name)"
+          }
+
       - name: Verify Windows Authenticode signatures
         if: runner.os == 'Windows'
         shell: pwsh
