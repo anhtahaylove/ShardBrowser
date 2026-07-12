@@ -179,19 +179,12 @@ jobs:
             throw "The certificate is not valid for Code Signing."
           }
 
+          $internalSelfSigned = $env:ALLOW_SELF_SIGNED_INTERNAL -eq "true" -and $cert.Subject -eq $cert.Issuer
+          $cerPath = ""
           $trustedRootThumbprint = ""
           $trustedPublisherThumbprint = ""
-          $cerPath = ""
-          if ($env:ALLOW_SELF_SIGNED_INTERNAL -eq "true" -and $cert.Subject -eq $cert.Issuer) {
-            $cerPath = Join-Path $env:RUNNER_TEMP "shardx-authenticode.cer"
-            Export-Certificate -Cert $cert -FilePath $cerPath | Out-Null
-            & certutil -user -addstore -f Root $cerPath | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw "Failed to trust self-signed certificate in CurrentUser Root." }
-            & certutil -user -addstore -f TrustedPublisher $cerPath | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw "Failed to trust self-signed certificate in CurrentUser TrustedPublisher." }
-            $trustedRootThumbprint = $cert.Thumbprint
-            $trustedPublisherThumbprint = $cert.Thumbprint
-            Write-Host "Temporarily trusted self-signed certificate for this unpublished internal run."
+          if ($internalSelfSigned) {
+            Write-Host "Using self-signed certificate for this unpublished internal signing test."
           }
 
           $configPath = Join-Path $env:RUNNER_TEMP "tauri.windows-signing.conf.json"
@@ -209,6 +202,7 @@ jobs:
           "pfx=$pfxPath" >> $env:GITHUB_OUTPUT
           "cer=$cerPath" >> $env:GITHUB_OUTPUT
           "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
+          "internal_self_signed=$($internalSelfSigned.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           "trusted_root_thumbprint=$trustedRootThumbprint" >> $env:GITHUB_OUTPUT
           "trusted_publisher_thumbprint=$trustedPublisherThumbprint" >> $env:GITHUB_OUTPUT
 
@@ -248,6 +242,9 @@ jobs:
       - name: Verify Windows Authenticode signatures
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          INTERNAL_SELF_SIGNED: ${{ steps.windows_signing.outputs.internal_self_signed }}
+          SIGNING_CERT_THUMBPRINT: ${{ steps.windows_signing.outputs.thumbprint }}
         run: |
           $files = Get-ChildItem staging -File |
             Where-Object { $_.Extension -in @(".exe", ".msi") }
@@ -256,6 +253,19 @@ jobs:
           }
           foreach ($file in $files) {
             $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            if (-not $signature.SignerCertificate) {
+              throw "No Authenticode signer found on $($file.Name)."
+            }
+            if ($env:INTERNAL_SELF_SIGNED -eq "true") {
+              if ($signature.SignerCertificate.Thumbprint -ne $env:SIGNING_CERT_THUMBPRINT) {
+                throw "Unexpected Authenticode signer on $($file.Name)."
+              }
+              if ($signature.Status -in @("HashMismatch", "NotSigned")) {
+                throw "Invalid internal Authenticode signature on $($file.Name): $($signature.Status)"
+              }
+              Write-Host "Internal self-signed Authenticode signature: $($file.Name) ($($signature.Status))"
+              continue
+            }
             if ($signature.Status -ne "Valid") {
               throw "Invalid Authenticode signature on $($file.Name): $($signature.Status)"
             }

@@ -26,9 +26,9 @@ self-signed certificate can be useful for a controlled internal trust store,
 but it does not make a generally trusted public installer.
 
 Manual internal runs (`publish_release=false`) may use a self-signed PFX to test
-the signing flow. The workflow temporarily trusts that certificate only inside
-the ephemeral Windows runner and removes it before the job exits. Tag pushes and
-published releases still need a publicly trusted certificate.
+the signing flow. The workflow verifies the signer thumbprint without adding the
+certificate to the runner trust stores. Tag pushes and published releases still
+need a publicly trusted certificate.
 
 The workflow imports the PFX only into the ephemeral Windows runner, passes its
 thumbprint to the Tauri bundler, timestamps signatures, verifies every collected
