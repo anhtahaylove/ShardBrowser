@@ -342,7 +342,7 @@ jobs:
       - name: Validate and package ShardX MCP
         run: |
           node --check mcp/index.js
-          for helper in health_check find_profile_by_name ensure_profile_started safe_open_url devtools_context; do
+          for helper in health_check find_profile_by_name ensure_profile_started safe_open_url devtools_context cleanup_stale_profile_processes; do
             grep -q "\"$helper\"" mcp/index.js
           done
           package_root="$RUNNER_TEMP/ShardX-MCP"

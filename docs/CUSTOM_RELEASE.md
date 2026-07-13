@@ -5,7 +5,7 @@ matching `mcp/` source as `ShardX-MCP.tar.gz`. Launcher Settings downloads that
 asset from:
 
 ```text
-https://github.com/anhtahaylove/ShardBrowser/releases/download/v0.1.14/ShardX-MCP.tar.gz
+https://github.com/anhtahaylove/ShardBrowser/releases/download/v0.1.15/ShardX-MCP.tar.gz
 ```
 
 The URL is compiled from `CARGO_PKG_VERSION`, so an older Launcher keeps using
@@ -41,11 +41,11 @@ thumbprint.
 
 - **Internal signed build:** run the Release workflow manually and leave
   `publish_release` disabled. Select the branch or ref that contains this
-  custom workflow, pass the matching tag such as `v0.1.14`, and download the
+  custom workflow, pass the matching tag such as `v0.1.15`, and download the
   per-platform workflow artifacts. The workflow rejects manual runs when the
   requested tag does not match the package versions, and artifact names include
   the tag to avoid confusing multiple internal builds.
-- **Public release:** push a version tag such as `v0.1.14`, or manually run the
+- **Public release:** push a version tag such as `v0.1.15`, or manually run the
   workflow with `publish_release` enabled. The release receives native bundles,
   `ShardX-MCP.tar.gz`, `SHA256SUMS.txt`, and GitHub build-provenance
   attestations.
@@ -57,7 +57,7 @@ When the custom release workflow is still only on a feature branch, run it from
 that branch explicitly, for example:
 
 ```powershell
-gh workflow run Release --repo anhtahaylove/ShardBrowser --ref codex/custom-integration-v0.1.12 -f tag=v0.1.14 -f publish_release=false
+gh workflow run Release --repo anhtahaylove/ShardBrowser --ref codex/custom-integration-v0.1.12 -f tag=v0.1.15 -f publish_release=false
 ```
 
 The internal workflow artifacts are enough to test signed Launcher installation.

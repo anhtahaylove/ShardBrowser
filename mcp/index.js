@@ -283,7 +283,20 @@ async function cleanupStaleProfileProcesses(profileId) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const server = new McpServer({ name: "shardx", version: "0.1.14" });
+async function stopStartedProfile(profileId) {
+  const browser = browsers.get(profileId);
+  if (browser?.isConnected()) await browser.close().catch(() => {});
+  browsers.delete(profileId);
+  activePage.delete(profileId);
+  await api(`/profiles/${profileId}/stop`, { method: "POST" }).catch(() => {});
+  for (let i = 0; i < 20; i++) {
+    const running = await api("/running").catch(() => []);
+    if (!running.some((r) => r.profile_id === profileId)) return;
+    await sleep(250);
+  }
+}
+
+const server = new McpServer({ name: "shardx", version: "0.1.15" });
 
 // ================= API tools =================
 
@@ -389,6 +402,7 @@ server.tool(
     // invalid navigation request has no browser-process side effect.
     const targetUrl = assertHttpUrl(url);
     const profile = await resolveProfile({ profile_id, profile_query, exact });
+    const wasRunning = (await api("/running")).some((r) => r.profile_id === profile.id);
     let self_healed = null;
     const open = async () => {
       const page = await pageFor(profile.id, { headless: !!headless });
@@ -396,21 +410,28 @@ server.tool(
       return page;
     };
     let page;
+    let result;
     try {
       page = await open();
+      result = { url: page.url(), title: await page.title() };
     } catch (error) {
       const cleanup = await cleanupStaleProfileProcesses(profile.id);
       if (!cleanup.killed_pids.length) throw error;
       try { await api(`/profiles/${profile.id}/stop`, { method: "POST" }); } catch {}
       await sleep(500);
       page = await open();
+      result = { url: page.url(), title: await page.title() };
       self_healed = {
         stale_count: cleanup.stale.length,
         killed_count: cleanup.killed_pids.length,
         errors_count: cleanup.errors.length,
       };
+    } finally {
+      if (!wasRunning) {
+        await stopStartedProfile(profile.id);
+      }
     }
-    return text({ profile: profileSummary(profile), url: page.url(), title: await page.title(), self_healed });
+    return text({ profile: profileSummary(profile), url: result.url, title: result.title, self_healed });
   },
 );
 
