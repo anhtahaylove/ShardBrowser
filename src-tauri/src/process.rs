@@ -6,6 +6,24 @@ use std::sync::Mutex;
 use std::time::Instant;
 use tokio::process::Child;
 
+#[cfg(windows)]
+fn taskkill_profile_process(pid: u32, force_tree: bool) {
+    use std::os::windows::process::CommandExt;
+
+    let pid_arg = pid.to_string();
+    let mut args = vec!["/PID", pid_arg.as_str()];
+    if force_tree {
+        args.extend(["/T", "/F"]);
+    }
+    // 0x08000000 = CREATE_NO_WINDOW — suppress the console flash.
+    let _ = std::process::Command::new("taskkill")
+        .args(args)
+        .creation_flags(0x08000000)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
 pub struct Tracker {
     inner: Mutex<HashMap<String, ChildEntry>>,
 }
@@ -64,16 +82,9 @@ impl Tracker {
                     }
                     #[cfg(windows)]
                     {
-                        use std::os::windows::process::CommandExt;
                         if let Some(p) = child.id() {
                             // taskkill /PID without /F posts WM_CLOSE for clean shutdown.
-                            // 0x08000000 = CREATE_NO_WINDOW — suppress the console flash.
-                            let _ = std::process::Command::new("taskkill")
-                                .args(["/PID", &p.to_string()])
-                                .creation_flags(0x08000000)
-                                .stdout(std::process::Stdio::null())
-                                .stderr(std::process::Stdio::null())
-                                .status();
+                            taskkill_profile_process(p, false);
                         }
                     }
                     let graceful = tokio::time::timeout(
@@ -81,6 +92,12 @@ impl Tracker {
                         child.wait(),
                     ).await;
                     if graceful.is_err() {
+                        #[cfg(windows)]
+                        {
+                            if let Some(p) = child.id() {
+                                taskkill_profile_process(p, true);
+                            }
+                        }
                         let _ = child.kill().await;
                         let _ = child.wait().await;
                     }
@@ -136,12 +153,27 @@ impl Tracker {
     }
 
     pub async fn kill(&self, profile_id: &str) -> Result<bool> {
-        let killer = {
+        let target = {
             let g = self.inner.lock().unwrap();
-            g.get(profile_id).map(|e| e.killer.clone())
+            g.get(profile_id).map(|e| (e.killer.clone(), e.pid))
         };
-        if let Some(k) = killer {
+        if let Some((k, pid)) = target {
             let _ = k.send(()).await;
+            #[cfg(windows)]
+            {
+                let profile_id = profile_id.to_string();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+                    let still_tracked = Self::shared()
+                        .inner
+                        .lock()
+                        .map(|g| g.get(&profile_id).map(|e| e.pid == pid).unwrap_or(false))
+                        .unwrap_or(false);
+                    if still_tracked {
+                        taskkill_profile_process(pid, true);
+                    }
+                });
+            }
             Ok(true)
         } else {
             Ok(false)

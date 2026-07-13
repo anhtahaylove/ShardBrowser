@@ -244,6 +244,28 @@ function listProcesses() {
     .map((m) => ({ pid: Number(m[1]), parent_pid: Number(m[2]), exe: "", command: m[3] }));
 }
 
+function descendantPids(processes, rootPids) {
+  const byParent = new Map();
+  for (const proc of processes) {
+    if (!Number.isFinite(proc.pid) || !Number.isFinite(proc.parent_pid)) continue;
+    const siblings = byParent.get(proc.parent_pid) || [];
+    siblings.push(proc.pid);
+    byParent.set(proc.parent_pid, siblings);
+  }
+
+  const descendants = new Set();
+  const stack = [...rootPids];
+  while (stack.length) {
+    const parentPid = stack.pop();
+    for (const childPid of byParent.get(parentPid) || []) {
+      if (descendants.has(childPid)) continue;
+      descendants.add(childPid);
+      stack.push(childPid);
+    }
+  }
+  return descendants;
+}
+
 async function staleProfileProcesses(profileId) {
   const running = await api("/running");
   const tracked = new Set(
@@ -253,9 +275,12 @@ async function staleProfileProcesses(profileId) {
       .filter((pid) => Number.isFinite(pid)),
   );
   const userDataDir = normalizeProcessText(profileUserDataDir(profileId));
-  const stale = listProcesses()
+  const processes = listProcesses();
+  const trackedDescendants = descendantPids(processes, tracked);
+  const stale = processes
     .filter((p) => Number.isFinite(p.pid))
     .filter((p) => !tracked.has(p.pid))
+    .filter((p) => !trackedDescendants.has(p.pid))
     .filter((p) => {
       const cmd = normalizeProcessText(p.command);
       return cmd.includes("--user-data-dir") && cmd.includes(userDataDir);
@@ -289,7 +314,7 @@ async function stopStartedProfile(profileId) {
   browsers.delete(profileId);
   activePage.delete(profileId);
   await api(`/profiles/${profileId}/stop`, { method: "POST" }).catch(() => {});
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 60; i++) {
     const running = await api("/running").catch(() => []);
     if (!running.some((r) => r.profile_id === profileId)) return;
     await sleep(250);
