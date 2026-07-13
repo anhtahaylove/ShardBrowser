@@ -14,6 +14,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { execFileSync } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
 import { z } from "zod";
 import { chromium } from "patchright";
 
@@ -191,6 +193,96 @@ function targetSummary(cdp, target) {
   };
 }
 
+function launcherDataDir() {
+  if (process.platform === "win32") {
+    return process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
+  }
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support");
+  }
+  return process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share");
+}
+
+function profileUserDataDir(profileId) {
+  return path.join(launcherDataDir(), "shardx-launcher", "user-data", profileId);
+}
+
+function normalizeProcessText(value) {
+  return String(value || "").toLowerCase().replace(/\\/g, "/");
+}
+
+function parseProcessJson(out) {
+  const trimmed = out.trim();
+  if (!trimmed) return [];
+  const parsed = JSON.parse(trimmed);
+  return Array.isArray(parsed) ? parsed : [parsed];
+}
+
+function listProcesses() {
+  if (process.platform === "win32") {
+    const out = execFileSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress",
+      ],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true },
+    );
+    return parseProcessJson(out).map((p) => ({
+      pid: Number(p.ProcessId),
+      parent_pid: Number(p.ParentProcessId),
+      exe: p.ExecutablePath || "",
+      command: p.CommandLine || "",
+    }));
+  }
+  const out = execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" });
+  return out
+    .split(/\r?\n/)
+    .map((line) => line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/))
+    .filter(Boolean)
+    .map((m) => ({ pid: Number(m[1]), parent_pid: Number(m[2]), exe: "", command: m[3] }));
+}
+
+async function staleProfileProcesses(profileId) {
+  const running = await api("/running");
+  const tracked = new Set(
+    running
+      .filter((r) => r.profile_id === profileId)
+      .map((r) => Number(r.pid))
+      .filter((pid) => Number.isFinite(pid)),
+  );
+  const userDataDir = normalizeProcessText(profileUserDataDir(profileId));
+  const stale = listProcesses()
+    .filter((p) => Number.isFinite(p.pid))
+    .filter((p) => !tracked.has(p.pid))
+    .filter((p) => {
+      const cmd = normalizeProcessText(p.command);
+      return cmd.includes("--user-data-dir") && cmd.includes(userDataDir);
+    })
+    .map((p) => ({ pid: p.pid, parent_pid: p.parent_pid }));
+  return { running, tracked_pids: [...tracked], stale };
+}
+
+async function cleanupStaleProfileProcesses(profileId) {
+  const { running, tracked_pids, stale } = await staleProfileProcesses(profileId);
+  const killed_pids = [];
+  const errors = [];
+  browsers.delete(profileId);
+  activePage.delete(profileId);
+  for (const proc of stale) {
+    try {
+      globalThis.process.kill(proc.pid, "SIGKILL");
+      killed_pids.push(proc.pid);
+    } catch (error) {
+      errors.push({ pid: proc.pid, error: error.message });
+    }
+  }
+  return { running, tracked_pids, stale, killed_pids, errors };
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const server = new McpServer({ name: "shardx", version: "0.1.13" });
 
 // ================= API tools =================
@@ -297,9 +389,28 @@ server.tool(
     // invalid navigation request has no browser-process side effect.
     const targetUrl = assertHttpUrl(url);
     const profile = await resolveProfile({ profile_id, profile_query, exact });
-    const page = await pageFor(profile.id, { headless: !!headless });
-    await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-    return text({ profile: profileSummary(profile), url: page.url(), title: await page.title() });
+    let self_healed = null;
+    const open = async () => {
+      const page = await pageFor(profile.id, { headless: !!headless });
+      await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+      return page;
+    };
+    let page;
+    try {
+      page = await open();
+    } catch (error) {
+      const cleanup = await cleanupStaleProfileProcesses(profile.id);
+      if (!cleanup.killed_pids.length) throw error;
+      try { await api(`/profiles/${profile.id}/stop`, { method: "POST" }); } catch {}
+      await sleep(500);
+      page = await open();
+      self_healed = {
+        stale_count: cleanup.stale.length,
+        killed_count: cleanup.killed_pids.length,
+        errors_count: cleanup.errors.length,
+      };
+    }
+    return text({ profile: profileSummary(profile), url: page.url(), title: await page.title(), self_healed });
   },
 );
 
@@ -444,6 +555,33 @@ server.tool(
   "List running profiles with pid and CDP endpoint.",
   {},
   async () => text(await api("/running")),
+);
+
+server.tool(
+  "cleanup_stale_profile_processes",
+  "Find and terminate stale ShardX browser processes for one profile when they still hold its user-data-dir but Launcher /running no longer tracks them.",
+  {
+    profile_id: z.string().optional(),
+    profile_query: z.string().optional(),
+    exact: z.boolean().optional(),
+    dry_run: z.boolean().optional(),
+  },
+  async ({ profile_id, profile_query, exact, dry_run }) => {
+    const profile = await resolveProfile({ profile_id, profile_query, exact });
+    const cleanup = dry_run
+      ? { ...(await staleProfileProcesses(profile.id)), killed_pids: [], errors: [] }
+      : await cleanupStaleProfileProcesses(profile.id);
+    return text({
+      profile: { id: profile.id, name: profile.name },
+      running_tracked: cleanup.running.some((r) => r.profile_id === profile.id),
+      tracked_pids: cleanup.tracked_pids,
+      dry_run: !!dry_run,
+      stale_count: cleanup.stale.length,
+      stale_pids: cleanup.stale.map((p) => p.pid),
+      killed_pids: cleanup.killed_pids,
+      errors: cleanup.errors,
+    });
+  },
 );
 
 server.tool("list_fingerprints", "List the fingerprint library entries.", {}, async () =>

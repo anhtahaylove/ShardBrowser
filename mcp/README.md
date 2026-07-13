@@ -97,10 +97,14 @@ MCP_HTTP_PORT=40326 SHARDX_API=http://127.0.0.1:40325 SHARDX_TOKEN=… node inde
 - `ensure_profile_started(profile_id? | profile_query?, exact?, headless?)`
   → idempotently starts one resolved profile and returns its CDP endpoint
 - `safe_open_url(profile_id? | profile_query?, exact?, url, headless?)`
-  → starts one resolved profile, opens an `http(s)` URL, returns title/url
+  → starts one resolved profile, opens an `http(s)` URL, returns title/url;
+  retries once after cleaning stale untracked profile processes
 - `devtools_context(profile_id? | profile_query?, exact?, headless?)`
   → starts/resolves one profile and returns its CDP endpoint, `/json/list`
   page targets, and the current title/url for DevTools handoff
+- `cleanup_stale_profile_processes(profile_id? | profile_query?, exact?, dry_run?)`
+  → kills only untracked ShardX browser processes still holding that profile's
+  user-data-dir; use after `list_running` is empty but Chrome still locks it
 - `list_profiles`, `get_profile`, `create_profile`, `create_temporary_profile`,
   `edit_profile`, `delete_profile`
   - `create_profile` / `create_temporary_profile` accept optional `launch`
