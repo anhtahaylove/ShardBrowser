@@ -283,7 +283,7 @@ async function cleanupStaleProfileProcesses(profileId) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const server = new McpServer({ name: "shardx", version: "0.1.13" });
+const server = new McpServer({ name: "shardx", version: "0.1.14" });
 
 // ================= API tools =================
 
