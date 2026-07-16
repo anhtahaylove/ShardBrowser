@@ -321,7 +321,7 @@ async function stopStartedProfile(profileId) {
   }
 }
 
-const server = new McpServer({ name: "shardx", version: "0.1.16" });
+const server = new McpServer({ name: "shardx", version: "0.1.17" });
 
 // ================= API tools =================
 
