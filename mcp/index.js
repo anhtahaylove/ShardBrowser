@@ -14,6 +14,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
@@ -417,7 +418,8 @@ async function stopStartedProfile(profileId) {
   }
 }
 
-const server = new McpServer({ name: "shardx", version: "0.1.17" });
+const MCP_VERSION = createRequire(import.meta.url)("./package.json").version;
+const server = new McpServer({ name: "shardx", version: MCP_VERSION });
 
 // ================= API tools =================
 
