@@ -801,6 +801,20 @@ fn random_fingerprint_for(platform: Option<&str>) -> Result<String, ApiError> {
 
 // ---- server ----
 
+#[cfg(windows)]
+fn disable_listener_inheritance(listener: &tokio::net::TcpListener) -> std::io::Result<()> {
+    use std::os::windows::io::AsRawSocket;
+    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT};
+
+    let result =
+        unsafe { SetHandleInformation(listener.as_raw_socket() as HANDLE, HANDLE_FLAG_INHERIT, 0) };
+    if result == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 pub async fn serve(secret: String, port: u16) {
     set_secret(&secret);
     publish_runtime_status(ApiRuntimeStatus {
@@ -839,6 +853,18 @@ pub async fn serve(secret: String, port: u16) {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     match tokio::net::TcpListener::bind(addr).await {
         Ok(listener) => {
+            #[cfg(windows)]
+            if let Err(e) = disable_listener_inheritance(&listener) {
+                let message = format!("Could not disable API listener inheritance: {e}");
+                publish_runtime_status(ApiRuntimeStatus {
+                    enabled: true,
+                    port: Some(port),
+                    running: false,
+                    error: Some(message.clone()),
+                });
+                eprintln!("[launcher] {message}");
+                return;
+            }
             publish_runtime_status(ApiRuntimeStatus {
                 enabled: true,
                 port: Some(port),
@@ -867,5 +893,33 @@ pub async fn serve(secret: String, port: u16) {
             });
             eprintln!("[launcher] API bind {addr} failed: {e}");
         }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod listener_handle_tests {
+    use super::disable_listener_inheritance;
+    use std::os::windows::io::AsRawSocket;
+    use windows_sys::Win32::Foundation::{
+        GetHandleInformation, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT,
+    };
+
+    #[tokio::test]
+    async fn listener_handle_is_not_inheritable() {
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind test listener");
+        let handle = listener.as_raw_socket() as HANDLE;
+
+        let marked =
+            unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
+        assert_ne!(marked, 0, "mark listener inheritable for regression test");
+
+        disable_listener_inheritance(&listener).expect("disable listener inheritance");
+
+        let mut flags = 0;
+        let read = unsafe { GetHandleInformation(handle, &mut flags) };
+        assert_ne!(read, 0, "read listener handle flags");
+        assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
     }
 }
