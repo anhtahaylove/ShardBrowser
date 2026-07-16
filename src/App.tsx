@@ -1251,6 +1251,7 @@ function BrowsersView() {
   const [running, setRunning] = useState<Record<string, number>>({});
   const [runningCdp, setRunningCdp] = useState<Record<string, CdpInfo>>({});
   const [runningVerification, setRunningVerification] = useState<Record<string, VerificationStatus>>({});
+  const [verificationFocusBusy, setVerificationFocusBusy] = useState<string | null>(null);
   const [launchErrors, setLaunchErrors] = useState<Record<string, string>>({});
   // Re-render trigger so the uptime label ticks every second without
   // re-fetching the process list (which polls every 2s).
@@ -1538,6 +1539,19 @@ function BrowsersView() {
     } catch (e) { toast.err(String(e)); }
   };
 
+  const bringVerificationToFront = async (p: ProfileMeta) => {
+    if (verificationFocusBusy === p.id) return;
+    setVerificationFocusBusy(p.id);
+    try {
+      await invoke("devtools_activate", { profileId: p.id });
+      toast.ok("Verification tab brought to front");
+    } catch (e) {
+      toast.err(`Could not bring verification tab to front: ${safeUiError(e)}`);
+    } finally {
+      setVerificationFocusBusy(null);
+    }
+  };
+
   // Per-profile action menu shared by right-click and ⋮ button.
   const profileMenu = (p: ProfileMeta) => [
     { label: running[p.id] ? "Stop" : "Launch", onClick: () => startStop(p) },
@@ -1549,6 +1563,9 @@ function BrowsersView() {
           { sep: true, label: "", onClick: () => {} },
           { label: "Copy CDP HTTP URL", onClick: () => copyCdpHttp(p) },
           { label: "Copy DevTools inspect URL", onClick: () => copyDevToolsInspect(p) },
+          ...(runningVerification[p.id]?.required
+            ? [{ label: "Bring verification tab to front", onClick: () => bringVerificationToFront(p) }]
+            : []),
         ]
       : []),
     { sep: true, label: "", onClick: () => {} },
@@ -2004,15 +2021,26 @@ function BrowsersView() {
                     </span>
                     {launchError && !isRunning && <span className="status-error">See error below</span>}
                     {verification?.required && (
-                      <span
-                        className="pill-status ps-verification"
-                        role="status"
-                        title={`Cloudflare ${verification.kind} detected. Complete verification manually in the browser.`}
-                        aria-label={`Verification required for ${p.name}`}
-                      >
-                        <i className="dot" />
-                        Verification required
-                      </span>
+                      <>
+                        <span
+                          className="pill-status ps-verification"
+                          role="status"
+                          title={`Cloudflare ${verification.kind} detected. Complete verification manually in the browser.`}
+                          aria-label={`Verification required for ${p.name}`}
+                        >
+                          <i className="dot" />
+                          Verification required
+                        </span>
+                        <button
+                          type="button"
+                          className="status-action"
+                          onClick={() => bringVerificationToFront(p)}
+                          disabled={!cdpInfo || verificationFocusBusy === p.id}
+                          aria-label={`Bring verification tab to front for ${p.name}`}
+                        >
+                          {verificationFocusBusy === p.id ? "Bringing tab forward…" : "Bring tab to front"}
+                        </button>
+                      </>
                     )}
                     {cdpInfo && (
                       <span className="pill-status ps-cdp" title={cdpInfo.http_url}>

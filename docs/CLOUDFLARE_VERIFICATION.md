@@ -16,6 +16,21 @@ Turnstile có thể bật pre-clearance để sau khi xác minh, trình duyệt 
 `cf_clearance` cho các endpoint nhạy cảm cùng hostname. Cookie clearance gắn với
 visitor/device, không copy qua máy khác.
 
+## Khi không có quyền quản trị Cloudflare
+
+Giữ xử lý ở phía ShardX thay vì cố tự click challenge:
+
+1. `safe_open_url` phát hiện challenge và pause visible run tối đa 120 giây.
+2. Launcher hiển thị `Verification required`; nút `Bring tab to front` kích
+   hoạt đúng CDP page target qua `/json/activate/<target-id>`.
+3. Người dùng hoàn tất checkbox trong browser profile đang chạy.
+4. MCP nhận biết challenge đã clear và tiếp tục trả kết quả cho automation.
+5. Giữ nguyên persistent profile để browser tự tái sử dụng `cf_clearance`.
+
+Headless run không tự chờ vì không có cửa sổ cho người dùng xác minh. Có thể đặt
+`verification_timeout_ms: 0` để visible run cũng chỉ report trạng thái mà không
+pause. Không clear cookie, đổi proxy hoặc thay fingerprint giữa lúc challenge.
+
 ## Thiết kế WAF Skip rule hẹp
 
 Chỉ dùng Skip rule khi automation đến từ **một IP tin cậy cố định** và chỉ cần

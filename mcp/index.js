@@ -19,7 +19,7 @@ import path from "node:path";
 import { z } from "zod";
 import { chromium } from "patchright";
 
-import { classifyCloudflareChallenge } from "./challenge.js";
+import { classifyCloudflareChallenge, waitForChallengeClear } from "./challenge.js";
 
 function readWindowsUserEnv(name) {
   if (process.platform !== "win32") return "";
@@ -162,6 +162,25 @@ async function updateChallengeStatus(profileId, page, response) {
     status.launcher_status_reported = false;
   }
   return status;
+}
+
+async function waitForVerification(profileId, page, initialChallenge, timeoutMs) {
+  await page.bringToFront().catch(() => {});
+  const result = await waitForChallengeClear(
+    initialChallenge,
+    () => challengeStatusForPage(page),
+    { timeoutMs, isClosed: () => page.isClosed() },
+  );
+  if (page.isClosed()) {
+    return { ...result, page_closed: true, resumed: false, timed_out: false };
+  }
+  const challenge = await updateChallengeStatus(profileId, page);
+  return {
+    ...result,
+    challenge,
+    timed_out: challenge.detected && result.timed_out,
+    resumed: result.waited && !challenge.detected,
+  };
 }
 
 // Locator with a default timeout, shared by element actions.
@@ -470,15 +489,16 @@ server.tool(
 
 server.tool(
   "safe_open_url",
-  "Resolve/start a profile, open an http(s) URL, wait for DOM content, and report any Cloudflare verification handoff without interacting with it.",
+  "Resolve/start a profile, open an http(s) URL, and automatically pause a visible run for manual Cloudflare verification before resuming. Never clicks, solves, or bypasses challenge controls.",
   {
     profile_id: z.string().optional(),
     profile_query: z.string().optional(),
     exact: z.boolean().optional(),
     url: z.string(),
     headless: z.boolean().optional(),
+    verification_timeout_ms: z.number().int().min(0).max(600000).optional(),
   },
-  async ({ profile_id, profile_query, exact, url, headless }) => {
+  async ({ profile_id, profile_query, exact, url, headless, verification_timeout_ms }) => {
     // Reject non-http(s) input before resolving/starting a profile so an
     // invalid navigation request has no browser-process side effect.
     const targetUrl = assertHttpUrl(url);
@@ -488,27 +508,36 @@ server.tool(
     const open = async () => {
       const page = await pageFor(profile.id, { headless: !!headless });
       const response = await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-      return { page, response };
+      let challenge = await updateChallengeStatus(profile.id, page, response);
+      let verification = null;
+      const timeoutMs = verification_timeout_ms ?? (headless ? 0 : 120000);
+      if (challenge.detected && timeoutMs > 0) {
+        const wait = await waitForVerification(profile.id, page, challenge, timeoutMs);
+        if (wait.page_closed) throw new Error("verification page closed while waiting");
+        challenge = wait.challenge;
+        verification = {
+          paused: wait.waited,
+          resumed: wait.resumed,
+          timed_out: wait.timed_out,
+          elapsed_ms: wait.elapsed_ms,
+        };
+      }
+      return {
+        url: page.url(),
+        title: await page.title(),
+        challenge,
+        verification,
+      };
     };
     let result;
     try {
-      const { page, response } = await open();
-      result = {
-        url: page.url(),
-        title: await page.title(),
-        challenge: await updateChallengeStatus(profile.id, page, response),
-      };
+      result = await open();
     } catch (error) {
       const cleanup = await cleanupStaleProfileProcesses(profile.id);
       if (!cleanup.killed_pids.length) throw error;
       try { await api(`/profiles/${profile.id}/stop`, { method: "POST" }); } catch {}
       await sleep(500);
-      const { page, response } = await open();
-      result = {
-        url: page.url(),
-        title: await page.title(),
-        challenge: await updateChallengeStatus(profile.id, page, response),
-      };
+      result = await open();
       self_healed = {
         stale_count: cleanup.stale.length,
         killed_count: cleanup.killed_pids.length,
@@ -524,6 +553,7 @@ server.tool(
       url: result.url,
       title: result.title,
       challenge: result.challenge,
+      verification: result.verification,
       self_healed,
     });
   },
@@ -619,49 +649,31 @@ server.tool(
         next_step: "Open the target page in the visible browser, then call this tool again.",
       });
     }
-    await page.bringToFront().catch(() => {});
-    const startedAt = Date.now();
-    const deadline = startedAt + (timeout_ms ?? 120000);
-    let challenge = await updateChallengeStatus(profile.id, page);
-    const waited = challenge.detected;
-
-    while (challenge.detected && !page.isClosed() && Date.now() < deadline) {
-      await sleep(Math.min(1000, Math.max(1, deadline - Date.now())));
-      const next = await challengeStatusForPage(page);
-      if (next.detected !== challenge.detected || next.kind !== challenge.kind) {
-        challenge = await updateChallengeStatus(profile.id, page);
-      } else {
-        challenge = {
-          ...next,
-          launcher_status_reported: challenge.launcher_status_reported,
-        };
-      }
-    }
-
-    const elapsedMs = Date.now() - startedAt;
-    if (page.isClosed()) {
+    const initial = await updateChallengeStatus(profile.id, page);
+    const wait = await waitForVerification(profile.id, page, initial, timeout_ms ?? 120000);
+    if (wait.page_closed) {
       return text({
         profile: profileSummary(profile),
         running: true,
         cdp_ready: true,
         challenge_cleared: false,
-        waited,
+        waited: wait.waited,
         timed_out: false,
-        elapsed_ms: elapsedMs,
+        elapsed_ms: wait.elapsed_ms,
         reason: "page_closed",
-        challenge,
+        challenge: wait.challenge,
       });
     }
     return text({
       profile: profileSummary(profile),
       running: true,
       cdp_ready: true,
-      challenge_cleared: !challenge.detected,
-      waited,
-      timed_out: challenge.detected,
-      elapsed_ms: elapsedMs,
-      challenge,
-      ...(challenge.detected
+      challenge_cleared: !wait.challenge.detected,
+      waited: wait.waited,
+      timed_out: wait.timed_out,
+      elapsed_ms: wait.elapsed_ms,
+      challenge: wait.challenge,
+      ...(wait.challenge.detected
         ? { next_step: "Complete verification manually in the visible browser, then call this tool again." }
         : {}),
     });

@@ -21,3 +21,32 @@ export function classifyCloudflareChallenge({ headers, title, bodyText, turnstil
   }
   return { detected: false, provider: null, kind: null, confidence: null, signal: null };
 }
+
+export async function waitForChallengeClear(
+  initialChallenge,
+  check,
+  {
+    timeoutMs = 120000,
+    intervalMs = 1000,
+    now = Date.now,
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    isClosed = () => false,
+  } = {},
+) {
+  const startedAt = now();
+  const deadline = startedAt + timeoutMs;
+  let challenge = initialChallenge;
+  const waited = !!challenge?.detected;
+
+  while (challenge?.detected && !isClosed() && now() < deadline) {
+    await sleep(Math.min(intervalMs, Math.max(1, deadline - now())));
+    challenge = await check();
+  }
+
+  return {
+    challenge,
+    waited,
+    timed_out: !!challenge?.detected && now() >= deadline,
+    elapsed_ms: now() - startedAt,
+  };
+}

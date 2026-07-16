@@ -96,10 +96,12 @@ MCP_HTTP_PORT=40326 SHARDX_API=http://127.0.0.1:40325 SHARDX_TOKEN=… node inde
 - `find_profile_by_name(query, exact?, limit?)` → safe profile summaries only
 - `ensure_profile_started(profile_id? | profile_query?, exact?, headless?)`
   → idempotently starts one resolved profile and returns its CDP endpoint
-- `safe_open_url(profile_id? | profile_query?, exact?, url, headless?)`
+- `safe_open_url(profile_id? | profile_query?, exact?, url, headless?, verification_timeout_ms?)`
   → starts one resolved profile, opens an `http(s)` URL, returns title/url plus
-  Cloudflare challenge status; retries once after cleaning stale untracked
-  profile processes
+  Cloudflare challenge status; visible runs pause for manual verification for
+  up to 120 seconds by default, then resume automatically when it clears; set
+  `verification_timeout_ms: 0` to return immediately. Also retries once after
+  cleaning stale untracked profile processes
 - `challenge_status(profile_id? | profile_query?, exact?)`
   → read-only inspection of the current page in an already-running profile;
   reports a Cloudflare interstitial or visible Turnstile widget to Launcher
