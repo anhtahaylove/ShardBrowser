@@ -165,7 +165,8 @@ fn mcp_status_value(
 
 #[cfg(test)]
 mod mcp_status_tests {
-    use super::{devtools_frontend_url, mcp_status_value};
+    use super::{devtools_frontend_url, mcp_status_value, select_devtools_target};
+    use serde_json::json;
 
     #[test]
     fn version_mismatch_needs_update_not_ready() {
@@ -191,6 +192,19 @@ mod mcp_status_tests {
         assert_eq!(
             devtools_frontend_url("http://127.0.0.1:9222", "/devtools/inspector.html?ws=x"),
             "http://127.0.0.1:9222/devtools/inspector.html?ws=x"
+        );
+    }
+
+    #[test]
+    fn devtools_target_prefers_cloudflare_challenge_page() {
+        let targets = vec![
+            json!({ "id": "normal", "type": "page", "title": "WordPress", "url": "https://example.com/wp-admin/" }),
+            json!({ "id": "challenge", "type": "page", "title": "Just a moment...", "url": "https://example.com/?__cf_chl_rt_tk=x" }),
+        ];
+
+        assert_eq!(
+            select_devtools_target(&targets).and_then(|target| target["id"].as_str()),
+            Some("challenge")
         );
     }
 }
@@ -935,6 +949,33 @@ fn devtools_target_summary(cdp: &process::CdpInfo, target: &Value) -> Value {
     })
 }
 
+fn select_devtools_target(targets: &[Value]) -> Option<&Value> {
+    let is_challenge = |target: &&Value| {
+        let title = target
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let url = target
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        title.contains("just a moment")
+            || title.contains("chờ một chút")
+            || url.contains("__cf_chl")
+            || url.contains("challenges.cloudflare.com")
+    };
+    targets.iter().find(is_challenge).or_else(|| {
+        targets.iter().find(|target| {
+            target
+                .get("url")
+                .and_then(Value::as_str)
+                .is_some_and(|url| !url.is_empty() && !url.starts_with("devtools://"))
+        })
+    })
+}
+
 #[tauri::command]
 async fn devtools_context(profile_id: String) -> Result<Value, String> {
     let cdp = process::Tracker::shared()
@@ -962,20 +1003,52 @@ async fn devtools_context(profile_id: String) -> Result<Value, String> {
             .collect(),
         None => Vec::new(),
     };
-    let current = targets
-        .iter()
-        .find(|target| {
-            target
-                .get("url")
-                .and_then(Value::as_str)
-                .is_some_and(|url| !url.is_empty() && !url.starts_with("devtools://"))
-        })
-        .cloned();
+    let current = select_devtools_target(&targets).cloned();
     Ok(serde_json::json!({
         "profile_id": profile_id,
         "cdp": cdp,
         "targets": targets,
         "current": current,
+    }))
+}
+
+#[tauri::command]
+async fn devtools_activate(profile_id: String) -> Result<Value, String> {
+    let context = devtools_context(profile_id.clone()).await?;
+    let target = context
+        .get("current")
+        .filter(|target| !target.is_null())
+        .cloned()
+        .ok_or_else(|| "No page target is available for this profile.".to_string())?;
+    let target_id = target
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| "The selected page target has no id.".to_string())?;
+    let cdp_http_url = context
+        .get("cdp")
+        .and_then(|cdp| cdp.get("http_url"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| "The profile has no CDP HTTP URL.".to_string())?;
+    let mut activate_url = url::Url::parse(cdp_http_url).map_err(|e| e.to_string())?;
+    activate_url.set_path(&format!("/json/activate/{target_id}"));
+    activate_url.set_query(None);
+
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .map_err(|e| e.to_string())?
+        .get(activate_url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?;
+
+    Ok(serde_json::json!({
+        "profile_id": profile_id,
+        "activated": true,
+        "target": target,
     }))
 }
 
@@ -1447,6 +1520,7 @@ pub fn run() {
             read_text_file,
             process_list,
             devtools_context,
+            devtools_activate,
             process_kill,
             proxy_list,
             proxy_save,

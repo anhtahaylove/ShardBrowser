@@ -935,6 +935,20 @@ textarea { resize: vertical; min-height: 60px; line-height: 1.5; }
   border-color: #f59e0b55;
 }
 .pill-status.ps-verification .dot { background: var(--warn); box-shadow: 0 0 6px #f59e0b88; }
+.status-action {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--warn);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  padding: 0;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.status-action:disabled { cursor: default; opacity: .55; }
 .status-stack {
   display: inline-flex;
   flex-direction: column;
