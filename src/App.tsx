@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -25,6 +25,14 @@ const clip = {
 };
 
 const readTextFile = (path: string) => invoke<string>("read_text_file", { path });
+
+const safeUiError = (error: unknown) => {
+  const text = error instanceof Error ? error.message : String(error);
+  return text
+    .replace(/Bearer\s+[^\s"']+/gi, "Bearer ***")
+    .replace(/("SHARDX_TOKEN"\s*:\s*")[^"]*(")/gi, "$1***$2")
+    .replace(/SHARDX_TOKEN\s*=\s*[^\s;]+/gi, "SHARDX_TOKEN=***");
+};
 
 // Single UTM tag appended to every outbound proxyshard.com link.
 const UTM_QS = "utm_source=shardx&utm_medium=referral&utm_campaign=shardx-launcher";
@@ -63,9 +71,14 @@ function ToastHost() {
   }, []);
   if (items.length === 0) return null;
   return (
-    <div className="toast-host">
+    <div className="toast-host" aria-live="polite" aria-atomic="false">
       {items.map((t) => (
-        <div key={t.id} className={`toast toast-${t.kind}`}>
+        <div
+          key={t.id}
+          className={`toast toast-${t.kind}`}
+          role={t.kind === "err" ? "alert" : "status"}
+          aria-live={t.kind === "err" ? "assertive" : "polite"}
+        >
           <span className="toast-icon">{t.kind === "ok" ? "✓" : t.kind === "err" ? "✕" : "ℹ"}</span>
           <span>{t.text}</span>
         </div>
@@ -84,6 +97,76 @@ type ConfirmReq = {
   resolve: (v: any) => void;
 };
 let confirmSub: ((req: ConfirmReq | null) => void) | null = null;
+
+const DIALOG_FOCUSABLE = [
+  "button:not([disabled])",
+  "[href]",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
+
+function DialogPanel({
+  children, className = "", label, onClose,
+}: {
+  children: ReactNode;
+  className?: string;
+  label: string;
+  onClose: () => void;
+}) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const panel = panelRef.current;
+    const initial = panel?.querySelector<HTMLElement>("[data-dialog-initial-focus]")
+      ?? panel?.querySelector<HTMLElement>("input:not([disabled]), select:not([disabled]), textarea:not([disabled])")
+      ?? panel?.querySelector<HTMLElement>("button:not([disabled])");
+    (initial ?? panel)?.focus();
+    return () => previous?.focus();
+  }, []);
+
+  return (
+    <div
+      ref={panelRef}
+      className={`dialog ${className}`.trim()}
+      role="dialog"
+      aria-modal="true"
+      aria-label={label}
+      tabIndex={-1}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          closeRef.current();
+          return;
+        }
+        if (e.key !== "Tab") return;
+        const focusable = [...(panelRef.current?.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE) ?? [])]
+          .filter((el) => el.offsetParent !== null);
+        if (focusable.length === 0) {
+          e.preventDefault();
+          panelRef.current?.focus();
+          return;
+        }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }}
+    >
+      {children}
+    </div>
+  );
+}
 
 function confirmModal(opts: {
   title?: string;
@@ -111,10 +194,10 @@ function ConfirmHost() {
   const done = (v: any) => { req.resolve(v); setReq(null); };
   return (
     <div className="dialog-bg" onClick={() => done(null)}>
-      <div className="dialog dialog-confirm" onClick={(e) => e.stopPropagation()}>
+      <DialogPanel className="dialog-confirm" label={req.title ?? "Confirm"} onClose={() => done(null)}>
         <header className="dialog-head">
           <h2>{req.title ?? "Confirm"}</h2>
-          <button className="icon-btn" onClick={() => done(null)}>✕</button>
+          <button className="icon-btn" onClick={() => done(null)} aria-label="Close confirmation">✕</button>
         </header>
         <div className="dialog-body">
           <p className="confirm-msg">{req.message}</p>
@@ -130,7 +213,7 @@ function ConfirmHost() {
             </button>
           ))}
         </div>
-      </div>
+      </DialogPanel>
     </div>
   );
 }
@@ -168,7 +251,7 @@ function StarModal() {
   if (!show) return null;
   return (
     <div className="dialog-bg" onClick={close}>
-      <div className="dialog star-dialog" onClick={(e) => e.stopPropagation()}>
+      <DialogPanel className="star-dialog" label="Support ShardX on GitHub" onClose={close}>
         <button className="icon-btn star-close" onClick={close} aria-label="Close">✕</button>
         <div className="star-body">
           <div className="star-badge"><GithubMark size={26} /><span className="star-spark">★</span></div>
@@ -183,7 +266,7 @@ function StarModal() {
             <button className="btn-primary star-btn" onClick={star}><GithubMark /> Star on GitHub</button>
           </div>
         </div>
-      </div>
+      </DialogPanel>
     </div>
   );
 }
@@ -197,16 +280,24 @@ function useContextMenu() {
   useEffect(() => {
     if (!menu) return;
     const dismiss = () => close();
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") dismiss(); };
     window.addEventListener("click", dismiss);
     window.addEventListener("scroll", dismiss, true);
+    window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("click", dismiss);
       window.removeEventListener("scroll", dismiss, true);
+      window.removeEventListener("keydown", onKey);
     };
   }, [menu]);
   const open = (e: React.MouseEvent, items: ContextItem[]) => {
     e.preventDefault();
-    setMenu({ x: e.clientX, y: e.clientY, items });
+    const rect = e.currentTarget.getBoundingClientRect();
+    setMenu({
+      x: e.detail === 0 ? rect.left : e.clientX,
+      y: e.detail === 0 ? rect.bottom + 4 : e.clientY,
+      items,
+    });
   };
   // Clamp menu into viewport post-layout.
   const ref = useRef<HTMLDivElement>(null);
@@ -904,6 +995,7 @@ function Sidebar({
           className="theme-toggle"
           onClick={onToggleTheme}
           title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+          aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
         >
           <span className={`theme-seg ${theme === "light" ? "active" : ""}`}>
             <IconSun /> Light
@@ -976,6 +1068,7 @@ function CopyField({ value, secret }: { value: string; secret?: boolean }) {
         type="button"
         className="copy-icon"
         title="Copy"
+        aria-label={secret ? "Copy secret value" : "Copy value"}
         onClick={async () => { try { await clip.write(value); toast.ok("Copied"); } catch (e) { toast.err(String(e)); } }}
       >
         <IconCopy />
@@ -1139,6 +1232,8 @@ function useStoreChanged(onChange: () => void) {
 function BrowsersView() {
   const [profiles, setProfiles] = useState<ProfileMeta[]>([]);
   const [proxies, setProxies] = useState<ProxyEntry[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [folder, setFolder] = useState("all");
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -1186,11 +1281,25 @@ function BrowsersView() {
 
   const reload = async () => {
     try {
-      setProfiles(await invoke<ProfileMeta[]>("profile_list"));
-      setProxies(await invoke<ProxyEntry[]>("proxy_list"));
+      const [nextProfiles, nextProxies] = await Promise.all([
+        invoke<ProfileMeta[]>("profile_list"),
+        invoke<ProxyEntry[]>("proxy_list"),
+      ]);
+      setProfiles(nextProfiles);
+      setProxies(nextProxies);
+      setLoadError(null);
     } catch (e) {
-      toast.err(String(e));
+      const message = safeUiError(e);
+      setLoadError(message);
+      toast.err(message);
+    } finally {
+      setLoaded(true);
     }
+  };
+  const retryLoad = () => {
+    setLoaded(false);
+    setLoadError(null);
+    void reload();
   };
   useEffect(() => { reload(); }, []);
   // Pick up profiles/proxies created via the automation API or MCP live.
@@ -1342,7 +1451,7 @@ function BrowsersView() {
       // Don't optimistically flip `running` here; the 2s poll above picks
       // up the new child immediately and anchors the uptime clock.
     } catch (e) {
-      const msg = String(e);
+      const msg = safeUiError(e);
       setLaunchErrors((errors) => ({ ...errors, [p.id]: msg }));
       toast.err(`Launch failed: ${msg}`);
     } finally {
@@ -1694,6 +1803,7 @@ function BrowsersView() {
             <button
               className="folder-tab folder-tab-add"
               title="Create a new folder"
+              aria-label="Create a new folder"
               onClick={() => setFolderModal({ profileId: null })}
             >
               +
@@ -1759,13 +1869,14 @@ function BrowsersView() {
         );
       })()}
 
-      <div className="rows">
+      <div className="rows" aria-busy={!loaded}>
         <div className="rows-head t-cols">
           <div></div>
           <div>
             <input
               type="checkbox"
               title="Select all on this page"
+              aria-label="Select all profiles on this page"
               // Header checkbox toggles only visible page rows; other pages preserved.
               checked={paged.length > 0 && paged.every((p) => selected.has(p.id))}
               ref={(el) => {
@@ -1801,7 +1912,23 @@ function BrowsersView() {
             />
           </div>
         )}
-        {paged.map((p) => {
+        {!loaded && (
+          <div className="empty-rich loading-state" role="status">
+            <div className="empty-shard"><span className="spin">◌</span></div>
+            <h3>Loading profiles</h3>
+            <p>Reading profiles and proxy bindings from local storage…</p>
+          </div>
+        )}
+        {loaded && loadError && (
+          <div className="inline-error" role="alert">
+            <div>
+              <strong>Profiles could not be loaded</strong>
+              <span>{loadError}</span>
+            </div>
+            <button className="btn-ghost btn-sm" onClick={retryLoad}>Retry</button>
+          </div>
+        )}
+        {loaded && !loadError && paged.map((p) => {
           const px = p.proxy_id ? proxyMap[p.proxy_id] : null;
           const isRunning = !!running[p.id];
           const launchError = launchErrors[p.id];
@@ -1841,9 +1968,14 @@ function BrowsersView() {
                   <span className={`shard ${isRunning ? "shard-on" : "shard-off"}`} />
                 </div>
                 <div>
-                  <input type="checkbox" checked={isSel} onChange={() => toggleSel(p.id)} />
+                  <input
+                    type="checkbox"
+                    checked={isSel}
+                    aria-label={`Select profile ${p.name}`}
+                    onChange={() => toggleSel(p.id)}
+                  />
                 </div>
-                <div className="cell-name" onClick={() => expand(p.id)}>
+                <div className="cell-name" onClick={() => expand(p.id)} title={p.name}>
                   <div className="name-main">
                     {p.pinned && <span className="pin-mark" title="Pinned"><Icon.Pin2 /></span>}
                     {p.name}
@@ -1856,15 +1988,7 @@ function BrowsersView() {
                       <i className="dot" />
                       {isRunning ? "Running" : launchError ? "Launch failed" : "Idle"}
                     </span>
-                    {launchError && !isRunning && (
-                      <button
-                        className="status-error"
-                        onClick={() => toast.err(launchError)}
-                        title={launchError}
-                      >
-                        Details
-                      </button>
-                    )}
+                    {launchError && !isRunning && <span className="status-error">See error below</span>}
                     {cdpInfo && (
                       <span className="pill-status ps-cdp" title={cdpInfo.http_url}>
                         <i className="dot" />
@@ -1911,6 +2035,7 @@ function BrowsersView() {
                     className={`btn-launch ${isRunning ? "btn-launch-stop" : ""}`}
                     onClick={() => startStop(p)}
                     disabled={!isRunning && startBusy.has(p.id)}
+                    aria-label={`${isRunning ? "Stop" : "Start"} profile ${p.name}`}
                     title={
                       !isRunning && startBusy.has(p.id)
                         ? "Starting (UDP probe + geo + spawn)…"
@@ -1928,28 +2053,45 @@ function BrowsersView() {
                     )}
                   </button>
                   <button
-                    className={`icon-btn ${p.pinned ? "icon-btn-on" : ""}`}
+                    className={`icon-btn profile-action-secondary ${p.pinned ? "icon-btn-on" : ""}`}
                     onClick={() => togglePin(p)}
                     title={p.pinned ? "Unpin" : "Pin to top"}
+                    aria-label={`${p.pinned ? "Unpin" : "Pin"} profile ${p.name}`}
                   >
                     <Icon.Pin />
                   </button>
-                  <button className="icon-btn" onClick={() => expand(p.id)} title="Edit"><Icon.Edit /></button>
-                  <button className="icon-btn" onClick={() => cloneProfile(p.id)} title="Clone"><Icon.Clone /></button>
+                  <button className="icon-btn" onClick={() => expand(p.id)} title="Edit" aria-label={`Edit profile ${p.name}`}><Icon.Edit /></button>
+                  <button className="icon-btn profile-action-secondary" onClick={() => cloneProfile(p.id)} title="Clone" aria-label={`Clone profile ${p.name}`}><Icon.Clone /></button>
                   {cdpInfo && (
                     <>
-                      <button className="icon-btn devtools-btn" onClick={() => copyCdpHttp(p)} title="Copy CDP HTTP URL">CDP</button>
-                      <button className="icon-btn devtools-btn" onClick={() => copyDevToolsInspect(p)} title="Copy DevTools inspect URL">DT</button>
+                      <button className="icon-btn devtools-btn profile-action-secondary" onClick={() => copyCdpHttp(p)} title="Copy CDP HTTP URL" aria-label={`Copy CDP HTTP URL for ${p.name}`}>CDP</button>
+                      <button className="icon-btn devtools-btn profile-action-secondary" onClick={() => copyDevToolsInspect(p)} title="Copy DevTools inspect URL" aria-label={`Copy DevTools inspect URL for ${p.name}`}>DT</button>
                     </>
                   )}
-                  <button className="icon-btn danger" onClick={() => remove(p.id)} title="Delete"><Icon.Trash /></button>
+                  <button className="icon-btn danger profile-action-secondary" onClick={() => remove(p.id)} title="Delete" aria-label={`Delete profile ${p.name}`}><Icon.Trash /></button>
                   <button
                     className="icon-btn"
                     onClick={(e) => { e.stopPropagation(); ctx.open(e, profileMenu(p)); }}
                     title="More actions"
+                    aria-label={`More actions for profile ${p.name}`}
                   ><Icon.More /></button>
                 </div>
               </div>
+              {launchError && !isRunning && (
+                <div className="launch-error-inline" role="alert">
+                  <div>
+                    <strong>Could not start {p.name}</strong>
+                    <span>{launchError}</span>
+                  </div>
+                  <button
+                    className="btn-ghost btn-sm"
+                    onClick={() => startStop(p)}
+                    disabled={startBusy.has(p.id)}
+                  >
+                    {startBusy.has(p.id) ? "Retrying…" : "Retry launch"}
+                  </button>
+                </div>
+              )}
               {isExpanded && draft && (
                 <InlineEditor
                   draft={draft}
@@ -1964,19 +2106,31 @@ function BrowsersView() {
             </div>
           );
         })}
-        {visible.length === 0 && !expanded && (
+        {loaded && !loadError && visible.length === 0 && !expanded && (
           <div className="empty-rich">
             <div className="empty-shard"><ShardLogo /></div>
-            <h3>No profiles yet</h3>
-            <p>Pick a fingerprint template to start from a curated real-Chrome snapshot, or build one from scratch.</p>
+            <h3>{search.trim() ? "No matching profiles" : folder !== "all" ? "Folder is empty" : "No profiles yet"}</h3>
+            <p>
+              {search.trim()
+                ? `No profile matches “${search.trim()}”. Clear the search to show all profiles.`
+                : folder !== "all"
+                  ? `No profiles are assigned to “${folder}”.`
+                  : "Pick a fingerprint template to start from a curated real-Chrome snapshot, or build one from scratch."}
+            </p>
             <div className="empty-cta">
-              <button className="btn-ghost" onClick={() => setTemplatePickerOpen(true)}><ShardMini /> From template</button>
-              <button className="btn-primary" onClick={newProfile}>+ New profile</button>
+              {search.trim() ? (
+                <button className="btn-ghost" onClick={() => setSearch("")}>Clear search</button>
+              ) : (
+                <>
+                  <button className="btn-ghost" onClick={() => setTemplatePickerOpen(true)}><ShardMini /> From template</button>
+                  <button className="btn-primary" onClick={newProfile}>+ New profile</button>
+                </>
+              )}
             </div>
           </div>
         )}
       </div>
-      {pageCount > 1 && (
+      {loaded && !loadError && pageCount > 1 && (
         <div className="pager">
           <button className="btn-ghost btn-sm" disabled={page <= 1}
             onClick={() => setPage((p) => Math.max(1, p - 1))}>‹ Prev</button>
@@ -2032,10 +2186,10 @@ function QuickEditDialog({
 
   return (
     <div className="dialog-bg" onClick={onClose}>
-      <div className="dialog" onClick={(e) => e.stopPropagation()}>
+      <DialogPanel label={`${kind === "proxy" ? "Bind proxy" : "Edit notes"} — ${profile.name}`} onClose={onClose}>
         <header className="dialog-head">
           <h2><ShardMini /> {kind === "proxy" ? "Bind proxy" : "Edit notes"} — {profile.name}</h2>
-          <button className="icon-btn" onClick={onClose}>✕</button>
+          <button className="icon-btn" onClick={onClose} aria-label="Close quick edit">✕</button>
         </header>
         <div className="dialog-body">
           {kind === "proxy" ? (
@@ -2063,7 +2217,7 @@ function QuickEditDialog({
             <ShardMini /> Save
           </button>
         </footer>
-      </div>
+      </DialogPanel>
     </div>
   );
 }
@@ -2516,6 +2670,8 @@ function CSSelect<T extends string | number>({
   placeholder?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const listboxId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   // Body portal so ancestor overflow:hidden can't clip the menu.
@@ -2537,8 +2693,20 @@ function CSSelect<T extends string | number>({
   };
 
   const toggle = () => {
-    if (!open) place();
+    if (!open) {
+      place();
+      const selected = options.findIndex((o) => o.value === value);
+      setActiveIndex(selected >= 0 ? selected : options.length > 0 ? 0 : -1);
+    }
     setOpen((v) => !v);
+  };
+
+  const choose = (index: number) => {
+    const option = options[index];
+    if (!option) return;
+    onChange(option.value);
+    setOpen(false);
+    triggerRef.current?.focus();
   };
 
   useEffect(() => {
@@ -2548,45 +2716,91 @@ function CSSelect<T extends string | number>({
       if (triggerRef.current?.contains(t) || menuRef.current?.contains(t)) return;
       setOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
     // Re-anchor on page scroll/resize; ignore scrolls inside the menu.
     const onScroll = (e: Event) => {
       if (menuRef.current && menuRef.current.contains(e.target as Node)) return;
       place();
     };
     document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
     window.addEventListener("resize", place);
     window.addEventListener("scroll", onScroll, true);
     return () => {
       document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", onScroll, true);
     };
   }, [open]);
+  useEffect(() => {
+    if (open && activeIndex >= 0) {
+      document.getElementById(`${listboxId}-option-${activeIndex}`)?.scrollIntoView({ block: "nearest" });
+    }
+  }, [activeIndex, listboxId, open]);
 
   const current = options.find((o) => o.value === value);
   return (
     <div className={`cs ${open ? "cs-open" : ""}`}>
-      <button ref={triggerRef} type="button" className="cs-trigger" onClick={toggle}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="cs-trigger"
+        role="combobox"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={listboxId}
+        aria-activedescendant={open && activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined}
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            e.preventDefault();
+            if (!open) {
+              place();
+              setOpen(true);
+              const selected = options.findIndex((o) => o.value === value);
+              setActiveIndex(selected >= 0 ? selected : e.key === "ArrowDown" ? 0 : options.length - 1);
+            } else if (options.length > 0) {
+              const delta = e.key === "ArrowDown" ? 1 : -1;
+              setActiveIndex((i) => (i + delta + options.length) % options.length);
+            }
+            return;
+          }
+          if (open && (e.key === "Home" || e.key === "End")) {
+            e.preventDefault();
+            setActiveIndex(e.key === "Home" ? 0 : options.length - 1);
+            return;
+          }
+          if (e.key === "Escape" && open) {
+            e.preventDefault();
+            setOpen(false);
+            return;
+          }
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            if (open) choose(activeIndex);
+            else toggle();
+          }
+        }}
+      >
         <span className="cs-value">{current?.label ?? placeholder ?? ""}</span>
         <span className="cs-caret" aria-hidden>▾</span>
       </button>
       {open && anchor && createPortal(
         <div
           ref={menuRef}
+          id={listboxId}
           className="cs-menu"
           role="listbox"
           style={{ left: anchor.left, top: anchor.top, width: anchor.width }}
         >
-          {options.map((o) => (
+          {options.map((o, index) => (
             <div
               key={String(o.value)}
+              id={`${listboxId}-option-${index}`}
               role="option"
               aria-selected={o.value === value}
-              className={`cs-opt ${o.value === value ? "active" : ""}`}
-              onClick={() => { onChange(o.value); setOpen(false); }}
+              className={`cs-opt ${o.value === value ? "active" : ""} ${index === activeIndex ? "highlighted" : ""}`}
+              onMouseEnter={() => setActiveIndex(index)}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => choose(index)}
             >
               {o.label}
             </div>
@@ -2621,7 +2835,21 @@ function SelectField<T extends string | number>({
 
 // ---- topbar + metrics ----
 
-function Topbar({ crumbs, search, onSearch }: { crumbs: string[]; search: string; onSearch: (v: string) => void }) {
+function Topbar({ crumbs, search = "", onSearch }: { crumbs: string[]; search?: string; onSearch?: (v: string) => void }) {
+  const searchRef = useRef<HTMLInputElement>(null);
+  const shortcut = HOST_OS === "macOS" ? "⌘K" : "Ctrl+K";
+  useEffect(() => {
+    if (!onSearch) return;
+    const focusSearch = (e: KeyboardEvent) => {
+      const modifier = HOST_OS === "macOS" ? e.metaKey : e.ctrlKey;
+      if (!modifier || e.key.toLowerCase() !== "k") return;
+      e.preventDefault();
+      searchRef.current?.focus();
+      searchRef.current?.select();
+    };
+    window.addEventListener("keydown", focusSearch);
+    return () => window.removeEventListener("keydown", focusSearch);
+  }, [onSearch]);
   return (
     <div className="topbar">
       <div className="crumbs">
@@ -2632,10 +2860,25 @@ function Topbar({ crumbs, search, onSearch }: { crumbs: string[]; search: string
           </span>
         ))}
       </div>
-      <div className="search">
-        <span className="search-icon">⌕</span>
-        <input placeholder="Search…   ⌘K" value={search} onChange={(e) => onSearch(e.target.value)} />
-      </div>
+      {onSearch && (
+        <div className="search">
+          <span className="search-icon" aria-hidden>⌕</span>
+          <input
+            ref={searchRef}
+            type="search"
+            aria-label={`Search ${crumbs[crumbs.length - 1] ?? "items"}`}
+            placeholder="Search…"
+            value={search}
+            onChange={(e) => onSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== "Escape") return;
+              if (search) onSearch("");
+              else e.currentTarget.blur();
+            }}
+          />
+          <kbd className="search-shortcut" aria-hidden>{shortcut}</kbd>
+        </div>
+      )}
     </div>
   );
 }
@@ -2671,6 +2914,8 @@ type ProxyTestSnapshot = {
 
 function ProxiesView() {
   const [proxies, setProxies] = useState<ProxyEntry[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [editing, setEditing] = useState<ProxyEntry | null>(null);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [snapshots, setSnapshots] = useState<Record<string, ProxyTestSnapshot>>({});
@@ -2735,10 +2980,26 @@ function ProxiesView() {
 
   const reload = async () => {
     try {
-      setProxies(await invoke<ProxyEntry[]>("proxy_list"));
-      // Profile list powers the per-proxy bound-count column.
-      setProfiles(await invoke<ProfileMeta[]>("profile_list"));
-    } catch (e) { toast.err(String(e)); }
+      const [nextProxies, nextProfiles] = await Promise.all([
+        invoke<ProxyEntry[]>("proxy_list"),
+        // Profile list powers the per-proxy bound-count column.
+        invoke<ProfileMeta[]>("profile_list"),
+      ]);
+      setProxies(nextProxies);
+      setProfiles(nextProfiles);
+      setLoadError(null);
+    } catch (e) {
+      const message = safeUiError(e);
+      setLoadError(message);
+      toast.err(message);
+    } finally {
+      setLoaded(true);
+    }
+  };
+  const retryLoad = () => {
+    setLoaded(false);
+    setLoadError(null);
+    void reload();
   };
   useEffect(() => { reload(); }, []);
   // Pick up proxies/profiles added via the automation API or MCP live.
@@ -2793,7 +3054,7 @@ function ProxiesView() {
   const remove = async (id: string) => {
     if ((await confirmModal({ title: "Delete proxy", message: "Delete this proxy?", danger: true })) !== true) return;
     try { await invoke("proxy_delete", { id }); reload(); toast.ok("Proxy deleted"); }
-    catch (e) { toast.err(String(e)); }
+    catch (e) { toast.err(safeUiError(e)); }
   };
 
   // Capped-parallel bulk TCP/UDP/geo to avoid socket fan-out.
@@ -2886,12 +3147,13 @@ function ProxiesView() {
           <button className="btn-primary" onClick={() => setBulkOpen(true)}>+ New proxy</button>
         </div>
       </div>
-      <div className="rows">
+      <div className="rows" aria-busy={!loaded}>
         <div className="rows-head p-cols">
           <div>
             <input
               type="checkbox"
               title="Select all on this page"
+              aria-label="Select all proxies on this page"
               // Page-only header toggle (matches profile table behaviour).
               checked={pagedProxies.length > 0 && pagedProxies.every((p) => proxySel.has(p.id))}
               ref={(el) => {
@@ -2915,7 +3177,23 @@ function ProxiesView() {
           </div>
           <div>Name</div><div>Type</div><div>Host:Port</div><div>Country</div><div>Profiles</div><div>Test result</div><div></div>
         </div>
-        {pagedProxies.map((p) => {
+        {!loaded && (
+          <div className="empty-rich loading-state" role="status">
+            <div className="empty-shard"><span className="spin">◌</span></div>
+            <h3>Loading proxies</h3>
+            <p>Reading proxy endpoints and their latest test results…</p>
+          </div>
+        )}
+        {loaded && loadError && (
+          <div className="inline-error" role="alert">
+            <div>
+              <strong>Proxies could not be loaded</strong>
+              <span>{loadError}</span>
+            </div>
+            <button className="btn-ghost btn-sm" onClick={retryLoad}>Retry</button>
+          </div>
+        )}
+        {loaded && !loadError && pagedProxies.map((p) => {
           const r = snapshots[p.id];
           const isBusy = !!busy[p.id];
           const cc = r?.country_code || p.country || "";
@@ -2939,6 +3217,7 @@ function ProxiesView() {
                   <input
                     type="checkbox"
                     checked={isSel}
+                    aria-label={`Select proxy ${p.name || `${p.host}:${p.port}`}`}
                     onChange={() => {
                       setProxySel((s) => {
                         const n = new Set(s);
@@ -3038,31 +3317,40 @@ function ProxiesView() {
                     className="icon-btn"
                     onClick={(e) => setInfoFor({ proxy: p, anchor: { x: e.clientX, y: e.clientY } })}
                     title="Details + history"
+                    aria-label={`View details for proxy ${p.name || `${p.host}:${p.port}`}`}
                   ><Icon.Info /></button>
-                  <button className="icon-btn" onClick={() => fullTest(p)} disabled={isBusy} title="Test TCP + UDP + geo"><Icon.Refresh /></button>
-                  <button className="icon-btn" onClick={() => setEditing(p)} title="Edit"><Icon.Edit /></button>
-                  <button className="icon-btn danger" onClick={() => remove(p.id)} title="Delete"><Icon.Trash /></button>
+                  <button className="icon-btn" onClick={() => fullTest(p)} disabled={isBusy} title="Test TCP + UDP + geo" aria-label={`Test proxy ${p.name || `${p.host}:${p.port}`}`}><Icon.Refresh /></button>
+                  <button className="icon-btn" onClick={() => setEditing(p)} title="Edit" aria-label={`Edit proxy ${p.name || `${p.host}:${p.port}`}`}><Icon.Edit /></button>
+                  <button className="icon-btn danger" onClick={() => remove(p.id)} title="Delete" aria-label={`Delete proxy ${p.name || `${p.host}:${p.port}`}`}><Icon.Trash /></button>
                 </div>
               </div>
             </div>
           );
         })}
-        {proxies.length === 0 && (
+        {loaded && !loadError && filteredProxies.length === 0 && (
           <div className="empty-rich">
             <div className="empty-shard"><IconWire /></div>
-            <h3>No proxies yet</h3>
-            <p>Add a SOCKS5/HTTP(S) endpoint so profiles can route through it.</p>
+            <h3>{search.trim() ? "No matching proxies" : "No proxies yet"}</h3>
+            <p>
+              {search.trim()
+                ? `No proxy matches “${search.trim()}”. Clear the search to show all proxies.`
+                : "Add a SOCKS5/HTTP(S) endpoint so profiles can route through it."}
+            </p>
             <div className="empty-cta">
-              <button className="btn-primary" onClick={() => setBulkOpen(true)}>+ New proxy</button>
+              {search.trim() ? (
+                <button className="btn-ghost" onClick={() => setSearch("")}>Clear search</button>
+              ) : (
+                <button className="btn-primary" onClick={() => setBulkOpen(true)}>+ New proxy</button>
+              )}
             </div>
           </div>
         )}
       </div>
-      {proxyPageCount > 1 && (
+      {loaded && !loadError && proxyPageCount > 1 && (
         <div className="pager">
           <button className="btn-ghost btn-sm" disabled={proxyPage <= 1}
             onClick={() => setProxyPage((p) => Math.max(1, p - 1))}>‹ Prev</button>
-          <span className="pager-info">Page {proxyPage} of {proxyPageCount} · {proxies.length} proxies</span>
+          <span className="pager-info">Page {proxyPage} of {proxyPageCount} · {filteredProxies.length} proxies</span>
           <button className="btn-ghost btn-sm" disabled={proxyPage >= proxyPageCount}
             onClick={() => setProxyPage((p) => Math.min(proxyPageCount, p + 1))}>Next ›</button>
         </div>
@@ -3238,7 +3526,7 @@ function ProxyBulkImporter({ onClose }: { onClose: () => void }) {
       const parsed = await invoke<ProxyEntry[]>("proxy_bulk_parse", { text, kind });
       if (parsed.length === 0) { toast.err("No valid proxy lines found"); return; }
       setRows(parsed.map((e) => ({ entry: e, selected: true, status: "idle" })));
-    } catch (e) { toast.err(String(e)); }
+    } catch (e) { toast.err(safeUiError(e)); }
   };
 
   const testOne = async (idx: number) => {
@@ -3296,10 +3584,10 @@ function ProxyBulkImporter({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="dialog-bg" onClick={onClose}>
-      <div className="dialog dialog-wide" onClick={(e) => e.stopPropagation()}>
+      <DialogPanel className="dialog-wide" label="Bulk import proxies" onClose={onClose}>
         <header className="dialog-head">
           <h2><ShardMini /> Bulk import proxies</h2>
-          <button className="icon-btn" onClick={onClose}>✕</button>
+          <button className="icon-btn" onClick={onClose} aria-label="Close bulk proxy import">✕</button>
         </header>
         <div className="dialog-body">
           {rows.length === 0 ? (
@@ -3365,9 +3653,10 @@ host:8080               # no auth
               <div className="bulk-preview-list">
                 {rows.map((r, i) => (
                   <div key={`${r.entry.host}:${r.entry.port}:${i}`} className={`bulk-row bulk-row-${r.status}`}>
-                    <input
-                      type="checkbox"
-                      checked={r.selected}
+                  <input
+                    type="checkbox"
+                    checked={r.selected}
+                    aria-label={`Include proxy ${r.entry.name || `${r.entry.host}:${r.entry.port}`}`}
                       onChange={() =>
                         setRows((rs) => rs.map((x, j) => j === i ? { ...x, selected: !x.selected } : x))
                       }
@@ -3398,7 +3687,7 @@ host:8080               # no auth
                         <span className="status-pill status-failed" title={r.error}>Failed</span>
                       )}
                     </div>
-                    <button className="btn-sm btn-ghost icon-only" onClick={() => testOne(i)} disabled={r.status === "testing"} title="Test this row"><Icon.Refresh /></button>
+                    <button className="btn-sm btn-ghost icon-only" onClick={() => testOne(i)} disabled={r.status === "testing"} title="Test this row" aria-label={`Test proxy ${r.entry.host}:${r.entry.port}`}><Icon.Refresh /></button>
                   </div>
                 ))}
               </div>
@@ -3415,7 +3704,7 @@ host:8080               # no auth
             </button>
           )}
         </footer>
-      </div>
+      </DialogPanel>
     </div>
   );
 }
@@ -3458,10 +3747,10 @@ function ProxyEditor({ initial, onClose }: { initial: ProxyEntry; onClose: () =>
   };
   return (
     <div className="dialog-bg" onClick={onClose}>
-      <div className="dialog" onClick={(e) => e.stopPropagation()}>
+      <DialogPanel label={initial.id ? "Edit proxy" : "New proxy"} onClose={onClose}>
         <header className="dialog-head">
           <h2><ShardMini /> {initial.id ? "Edit proxy" : "New proxy"}</h2>
-          <button className="icon-btn" onClick={onClose}>✕</button>
+          <button className="icon-btn" onClick={onClose} aria-label="Close proxy editor">✕</button>
         </header>
         <div className="dialog-body">
           <Field label="Name" value={p.name} onChange={(v: string) => setP({ ...p, name: v })} />
@@ -3499,7 +3788,7 @@ function ProxyEditor({ initial, onClose }: { initial: ProxyEntry; onClose: () =>
           <button className="btn-ghost" onClick={onClose}>Cancel</button>
           <button className="btn-primary" onClick={save}><ShardMini /> Save</button>
         </footer>
-      </div>
+      </DialogPanel>
     </div>
   );
 }
@@ -3548,7 +3837,7 @@ function FingerprintsView() {
 
   return (
     <section className="page">
-      <Topbar crumbs={["Library", "Fingerprints"]} search="" onSearch={() => {}} />
+      <Topbar crumbs={["Library", "Fingerprints"]} />
       <div className="page-title">
         <h1>Fingerprint Library</h1>
         <div className="page-actions">
@@ -3655,10 +3944,10 @@ function FingerprintImporter({ onClose }: { onClose: () => void }) {
   };
   return (
     <div className="dialog-bg" onClick={onClose}>
-      <div className="dialog dialog-wide" onClick={(e) => e.stopPropagation()}>
+      <DialogPanel className="dialog-wide" label="Paste FingerprintConfig JSON" onClose={onClose}>
         <header className="dialog-head">
           <h2><ShardMini /> Paste FingerprintConfig JSON</h2>
-          <button className="icon-btn" onClick={onClose}>✕</button>
+          <button className="icon-btn" onClick={onClose} aria-label="Close fingerprint import">✕</button>
         </header>
         <div className="dialog-body">
           <Field label="Name (optional, becomes the file id)" value={name} onChange={setName} placeholder="e.g. mac-m4-pro-real" />
@@ -3671,7 +3960,7 @@ function FingerprintImporter({ onClose }: { onClose: () => void }) {
           <button className="btn-ghost" onClick={onClose}>Cancel</button>
           <button className="btn-primary" onClick={save}><ShardMini /> Import</button>
         </footer>
-      </div>
+      </DialogPanel>
     </div>
   );
 }
@@ -3695,10 +3984,10 @@ function FolderModal({
   const showList = mode === "move" && existing.length > 0;
   return (
     <div className="dialog-bg" onClick={onClose}>
-      <div className="dialog" onClick={(e) => e.stopPropagation()}>
+      <DialogPanel label={mode === "move" ? "Move to folder" : "New folder"} onClose={onClose}>
         <header className="dialog-head">
           <h2><ShardMini /> {mode === "move" ? "Move to folder" : "New folder"}</h2>
-          <button className="icon-btn" onClick={onClose}>✕</button>
+          <button className="icon-btn" onClick={onClose} aria-label="Close folder dialog">✕</button>
         </header>
         <div className="dialog-body">
           {showList && (
@@ -3735,7 +4024,7 @@ function FolderModal({
             </button>
           </div>
         </div>
-      </div>
+      </DialogPanel>
     </div>
   );
 }
@@ -3763,10 +4052,10 @@ function TemplatePicker({
   const tpls = host ? lib.filter((e) => e.platform === host) : [];
   return (
     <div className="dialog-bg" onClick={onClose}>
-      <div className="dialog dialog-wide" onClick={(e) => e.stopPropagation()}>
+      <DialogPanel className="dialog-wide" label={`Pick a ${host || "browser"} fingerprint`} onClose={onClose}>
         <header className="dialog-head">
           <h2><ShardMini /> Pick a {host || ""} fingerprint</h2>
-          <button className="icon-btn" onClick={onClose}>✕</button>
+          <button className="icon-btn" onClick={onClose} aria-label="Close fingerprint picker">✕</button>
         </header>
         <div className="dialog-body">
           {tpls.length === 0 ? (
@@ -3790,7 +4079,7 @@ function TemplatePicker({
             </div>
           )}
         </div>
-      </div>
+      </DialogPanel>
     </div>
   );
 }
@@ -3822,6 +4111,7 @@ function FirstRunGate({ children }: { children: ReactNode }) {
   const [installed, setInstalled] = useState<boolean | null>(null);
   const [prog, setProg] = useState<RtProgress | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   // Single in-flight install at a time.
   const installing = useRef(false);
 
@@ -3835,18 +4125,20 @@ function FirstRunGate({ children }: { children: ReactNode }) {
 
     (async () => {
       // Subscribe BEFORE invoking so we don't miss the first event.
-      unProg = await listen<RtProgress>("runtime:progress", (e) => {
-        if (!cancelled) setProg(e.payload);
-      });
-      unDone = await listen("runtime:done", () => {
-        if (!cancelled) { setProg(null); setInstalled(true); }
-      });
-
       let status: RtStatus;
       try {
+        unProg = await listen<RtProgress>("runtime:progress", (e) => {
+          if (!cancelled) setProg(e.payload);
+        });
+        unDone = await listen("runtime:done", () => {
+          if (!cancelled) { setProg(null); setInstalled(true); }
+        });
         status = await invoke<RtStatus>("runtime_status");
       } catch (e: any) {
-        if (!cancelled) setErr(String(e));
+        if (!cancelled) {
+          setErr(safeUiError(e));
+          setInstalled(false);
+        }
         return;
       }
       if (cancelled) return;
@@ -3871,7 +4163,7 @@ function FirstRunGate({ children }: { children: ReactNode }) {
         await invoke<RtStatus>("runtime_install", { force: false });
         if (!cancelled) setInstalled(true);
       } catch (e: any) {
-        if (!cancelled) setErr(typeof e === "string" ? e : (e?.message ?? String(e)));
+        if (!cancelled) setErr(safeUiError(e));
       } finally {
         installing.current = false;
       }
@@ -3882,70 +4174,65 @@ function FirstRunGate({ children }: { children: ReactNode }) {
       unProg?.();
       unDone?.();
     };
-  }, []);
+  }, [attempt]);
 
-  if (installed === null) {
-    return null;
-  }
   if (installed) {
     return <>{children}</>;
   }
 
+  const checking = installed === null;
+  const retry = () => {
+    if (installing.current || checking) return;
+    setErr(null);
+    setProg(null);
+    setInstalled(null);
+    setAttempt((n) => n + 1);
+  };
+
   return (
     <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 1000,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "var(--bg, #0b0b0e)",
-        color: "var(--fg, #e6e6e6)",
-      }}
+      className="runtime-gate"
+      role={err ? "alert" : "status"}
+      aria-live={err ? "assertive" : "polite"}
+      aria-busy={checking || (!!prog && !err)}
     >
-      <div style={{ width: 460, padding: "32px 36px", textAlign: "center" }}>
-        <div style={{ fontSize: 20, fontWeight: 600, marginBottom: 8 }}>
-          Setting up ShardX browser
-        </div>
-        <div className="muted small" style={{ marginBottom: 24 }}>
-          First-run download from our CDN. Done once per install
-          (~{prog?.total ? fmt(prog.total) : "150 MB"}).
-        </div>
+      <div className="runtime-gate-card">
+        <div className="runtime-gate-logo"><ShardLogo /></div>
+        <h1>{err ? "ShardX browser setup needs attention" : checking ? "Checking ShardX browser" : "Setting up ShardX browser"}</h1>
+        <p className="muted small runtime-gate-copy">
+          {err
+            ? "The Launcher could not finish checking or installing the local browser runtime."
+            : checking
+              ? "Checking the installed browser runtime and fingerprint library…"
+              : <>First-run download from our CDN. Done once per install (~{prog?.total ? fmt(prog.total) : "150 MB"}).</>}
+        </p>
 
         {prog && (
           <>
-            <div className="muted small" style={{ marginBottom: 6, textAlign: "left" }}>
+            <div className="muted small runtime-progress-label">
               {prog.label} —{" "}
               {prog.phase === "download"
                 ? `${fmt(prog.received)} / ${fmt(prog.total)}  (${prog.percent}%)`
                 : "extracting…"}
             </div>
             <div
-              style={{
-                height: 8,
-                background: "var(--bg-muted, #1f1f24)",
-                borderRadius: 4,
-                overflow: "hidden",
-              }}
+              className="runtime-progress"
+              role="progressbar"
+              aria-label={prog.label}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.max(0, Math.min(100, prog.percent))}
             >
-              <div
-                style={{
-                  width: `${prog.percent}%`,
-                  height: "100%",
-                  background: "var(--accent, #4ade80)",
-                  transition: "width 0.1s linear",
-                }}
-              />
+              <div className="runtime-progress-fill" style={{ width: `${prog.percent}%` }} />
             </div>
           </>
         )}
-        {!prog && !err && (
-          <div className="muted small">Contacting CDN…</div>
-        )}
+        {!prog && !err && <div className="runtime-checking"><span className="spin">◌</span> {checking ? "Checking local runtime…" : "Contacting CDN…"}</div>}
         {err && (
-          <div style={{ color: "var(--err, #fb7185)", marginTop: 12, fontSize: 13 }}>
-            {err}
+          <div className="runtime-error">
+            <strong>Setup failed</strong>
+            <span>{err}</span>
+            <button className="btn-primary" onClick={retry} disabled={installing.current || checking}>Retry setup</button>
           </div>
         )}
       </div>
@@ -4110,7 +4397,7 @@ function ProxyShardView() {
 
   return (
     <section className="page ps-page">
-      <Topbar crumbs={["Workspace", "ProxyShard"]} search="" onSearch={() => {}} />
+      <Topbar crumbs={["Workspace", "ProxyShard"]} />
 
       <div className="metric-strip">
         <Metric label="Account" value={connected ? "Connected" : "—"} accent={connected} pulse={connected} />
@@ -4382,10 +4669,10 @@ function PsResiGenerator({ type, onClose }: { type: ResiType; onClose: () => voi
 
   return (
     <div className="dialog-bg" onClick={onClose}>
-      <div className="dialog dialog-wide" onClick={(e) => e.stopPropagation()}>
+      <DialogPanel className="dialog-wide" label={`Generate residential proxies — ${plan}`} onClose={onClose}>
         <header className="dialog-head">
           <h2><ShardMini /> Generate residential proxies — {plan}</h2>
-          <button className="icon-btn" onClick={onClose}>✕</button>
+          <button className="icon-btn" onClick={onClose} aria-label="Close proxy generator">✕</button>
         </header>
         <div className="dialog-body">
           <div className="form-row">
@@ -4454,7 +4741,7 @@ function PsResiGenerator({ type, onClose }: { type: ResiType; onClose: () => voi
             <Icon.Download /> {saving ? "Generating…" : `Generate ${Math.max(1, Math.round(count))}`}
           </button>
         </footer>
-      </div>
+      </DialogPanel>
     </div>
   );
 }
@@ -4526,7 +4813,7 @@ function PsOrdersCard({ onChanged }: { onChanged: () => void }) {
               ]}
             />
           </div>
-          <button className="icon-btn" onClick={() => load()} title="Refresh"><Icon.Refresh /></button>
+          <button className="icon-btn" onClick={() => load()} title="Refresh" aria-label="Refresh ProxyShard orders"><Icon.Refresh /></button>
         </div>
       </div>
       {loading && <p className="muted small">Loading…</p>}
@@ -4547,7 +4834,7 @@ function PsOrdersCard({ onChanged }: { onChanged: () => void }) {
                 <button className="btn-ghost btn-sm" onClick={() => setImporting(o)} title="Pick which proxies to add to your list">
                   <Icon.Download /> Add to proxies
                 </button>
-                <button className="icon-btn" onClick={() => setTagging(o)} title="Edit tag"><Icon.Edit /></button>
+                <button className="icon-btn" onClick={() => setTagging(o)} title="Edit tag" aria-label={`Edit tag for order ${o.order_id}`}><Icon.Edit /></button>
                 {status === "on-hold" && (
                   <button className="btn-ghost btn-sm" disabled={busy[o.order_id]} onClick={() => renew(o)}>Renew</button>
                 )}
@@ -4663,10 +4950,10 @@ function PsImportModal({ order, onClose }: { order: PsOrder; onClose: () => void
 
   return (
     <div className="dialog-bg" onClick={onClose}>
-      <div className="dialog dialog-wide" onClick={(e) => e.stopPropagation()}>
+      <DialogPanel className="dialog-wide" label={`Add proxies — ${order.product_name}`} onClose={onClose}>
         <header className="dialog-head">
           <h2><ShardMini /> Add proxies — {order.product_name} #{order.order_id}</h2>
-          <button className="icon-btn" onClick={onClose}>✕</button>
+          <button className="icon-btn" onClick={onClose} aria-label="Close add proxies dialog">✕</button>
         </header>
         <div className="dialog-body">
           <div className="ps-import-top">
@@ -4690,7 +4977,7 @@ function PsImportModal({ order, onClose }: { order: PsOrder; onClose: () => void
           {items && items.length > 0 && (
             <div className="rows ps-import-list">
               <div className="row ps-import-head">
-                <input type="checkbox" checked={allChecked} onChange={toggleAll} title="Select all" />
+                <input type="checkbox" checked={allChecked} onChange={toggleAll} title="Select all" aria-label="Select all generated proxies" />
                 <span className="muted small">{sel.size} of {items.length} selected</span>
                 <span className="muted small" style={{ textAlign: "right" }}>{canSetP0f ? "p0f" : ""}</span>
               </div>
@@ -4698,7 +4985,7 @@ function PsImportModal({ order, onClose }: { order: PsOrder; onClose: () => void
                 const port = kind === "http" ? d.http_port : d.socks_port;
                 return (
                   <div key={d.ip} className="row ps-import-row">
-                    <input type="checkbox" checked={sel.has(d.ip)} onChange={() => toggle(d.ip)} />
+                    <input type="checkbox" checked={sel.has(d.ip)} onChange={() => toggle(d.ip)} aria-label={`Select proxy ${d.ip}:${port}`} />
                     <span className="mono small cell-click" onClick={() => toggle(d.ip)}>{d.ip}:{port}</span>
                     <span className="muted small">{d.username}</span>
                     <span className={`status-pill ${d.status === "active" ? "status-active" : ""}`}>{d.status}</span>
@@ -4723,7 +5010,7 @@ function PsImportModal({ order, onClose }: { order: PsOrder; onClose: () => void
             <Icon.Download /> {saving ? "Adding…" : `Add ${sel.size}`}
           </button>
         </footer>
-      </div>
+      </DialogPanel>
     </div>
   );
 }
@@ -4742,10 +5029,10 @@ function PsTagModal({ order, onClose, onDone }: { order: PsOrder; onClose: () =>
   };
   return (
     <div className="dialog-bg" onClick={onClose}>
-      <div className="dialog" onClick={(e) => e.stopPropagation()}>
+      <DialogPanel label="Edit tag" onClose={onClose}>
         <header className="dialog-head">
           <h2><Icon.Edit /> Edit tag</h2>
-          <button className="icon-btn" onClick={onClose}>✕</button>
+          <button className="icon-btn" onClick={onClose} aria-label="Close tag editor">✕</button>
         </header>
         <div className="dialog-body">
           <p className="muted small">{order.product_name} · order #{order.order_id}</p>
@@ -4755,7 +5042,7 @@ function PsTagModal({ order, onClose, onDone }: { order: PsOrder; onClose: () =>
           <button className="btn-ghost" onClick={onClose}>Cancel</button>
           <button className="btn-primary" onClick={submit} disabled={busy}><ShardMini /> {busy ? "Saving…" : "Save"}</button>
         </footer>
-      </div>
+      </DialogPanel>
     </div>
   );
 }
@@ -4776,10 +5063,10 @@ function PsTopupModal({ order, onClose, onDone }: { order: PsOrder; onClose: () 
   };
   return (
     <div className="dialog-bg" onClick={onClose}>
-      <div className="dialog" onClick={(e) => e.stopPropagation()}>
+      <DialogPanel label="Add traffic" onClose={onClose}>
         <header className="dialog-head">
           <h2><ShardMini /> Add traffic</h2>
-          <button className="icon-btn" onClick={onClose}>✕</button>
+          <button className="icon-btn" onClick={onClose} aria-label="Close add traffic dialog">✕</button>
         </header>
         <div className="dialog-body">
           <p className="muted small">{order.product_name} · order #{order.order_id}</p>
@@ -4792,7 +5079,7 @@ function PsTopupModal({ order, onClose, onDone }: { order: PsOrder; onClose: () 
             <ShardMini /> {busy ? "Buying…" : `Buy ${amount} GB`}
           </button>
         </footer>
-      </div>
+      </DialogPanel>
     </div>
   );
 }
@@ -4912,7 +5199,7 @@ function PsBuyCard({ onPurchased }: { onPurchased: () => void }) {
     setCalcing(true);
     setCalc(null);
     try { setCalc(await fetchCalc()); }
-    catch (e) { toast.err(String(e)); }
+    catch (e) { toast.err(safeUiError(e)); }
     finally { setCalcing(false); }
   };
 
@@ -4940,7 +5227,7 @@ function PsBuyCard({ onPurchased }: { onPurchased: () => void }) {
       toast.ok(r.message ? `${r.message}${r.order_id ? ` (#${r.order_id})` : ""}` : "Order placed");
       setCalc(null);
       onPurchased();
-    } catch (e) { toast.err(String(e)); }
+    } catch (e) { toast.err(safeUiError(e)); }
     finally { setBuying(false); }
   };
 
@@ -5036,10 +5323,26 @@ function SettingsView() {
     api_enabled: true,
     api_port: 40325,
   });
+  const [settingsBaseline, setSettingsBaseline] = useState<Settings | null>(null);
+  const [settingsLoadError, setSettingsLoadError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [api, setApi] = useState<ApiInfo | null>(null);
   const [tokenBusy, setTokenBusy] = useState(false);
   const refreshApi = () => invoke<ApiInfo>("api_info").then(setApi).catch(() => {});
-  useEffect(() => { invoke<Settings>("settings_get").then(setS); refreshApi(); }, []);
+  const loadSettings = async () => {
+    setSettingsLoadError(null);
+    try {
+      const value = await invoke<Settings>("settings_get");
+      setS(value);
+      setSettingsBaseline(value);
+    } catch (e) {
+      const message = safeUiError(e);
+      setSettingsLoadError(message);
+      toast.err(message);
+    }
+  };
+  useEffect(() => { void loadSettings(); void refreshApi(); }, []);
   const regenToken = async () => {
     const ok = await confirmModal({
       title: "Regenerate Automation API token",
@@ -5056,7 +5359,7 @@ function SettingsView() {
       setApi(await invoke<ApiInfo>("api_regenerate_token"));
       toast.ok("Token regenerated — update MCP/Codex clients");
     }
-    catch (e) { toast.err(String(e)); }
+    catch (e) { toast.err(safeUiError(e)); }
     finally { setTokenBusy(false); }
   };
   const copyCodexTokenEnv = async () => {
@@ -5065,19 +5368,23 @@ function SettingsView() {
     try {
       await clip.write(`[Environment]::SetEnvironmentVariable('SHARDX_TOKEN','${escapedToken}','User')`);
       toast.ok("Copied SHARDX_TOKEN User env command");
-    } catch (e) { toast.err(String(e)); }
+    } catch (e) { toast.err(safeUiError(e)); }
   };
 
   const [mcpBusy, setMcpBusy] = useState(false);
   const [mcpPath, setMcpPath] = useState("");
   const [mcpStatus, setMcpStatus] = useState<McpStatus | null>(null);
+  const [mcpStatusError, setMcpStatusError] = useState<string | null>(null);
   const [codexStatus, setCodexStatus] = useState<CodexMcpStatus | null>(null);
+  const [codexStatusError, setCodexStatusError] = useState<string | null>(null);
   const [codexBusy, setCodexBusy] = useState(false);
   const applyMcpStatus = (status: McpStatus) => {
     setMcpStatus(status);
     setMcpPath(status.path ?? "");
   };
-  const refreshMcp = () => invoke<McpStatus>("mcp_status").then(applyMcpStatus).catch(() => {});
+  const refreshMcp = () => invoke<McpStatus>("mcp_status")
+    .then((status) => { applyMcpStatus(status); setMcpStatusError(null); })
+    .catch((e) => setMcpStatusError(safeUiError(e)));
   useEffect(() => {
     refreshMcp();
     const timer = setInterval(refreshMcp, 5000);
@@ -5100,7 +5407,7 @@ function SettingsView() {
       setS((cur) => ({ ...cur, mcp_path: path }));
       await refreshMcp();
       toast.ok(`MCP downloaded to ${path}`);
-    } catch (e) { toast.err("MCP download failed: " + String(e)); }
+    } catch (e) { toast.err("MCP download failed: " + safeUiError(e)); }
     finally { setMcpBusy(false); }
   };
   const useExistingMcp = async () => {
@@ -5112,7 +5419,7 @@ function SettingsView() {
       applyMcpStatus(status);
       setS((cur) => ({ ...cur, mcp_path: status.path }));
       toast.ok(`Using MCP at ${status.path}`);
-    } catch (e) { toast.err(String(e)); }
+    } catch (e) { toast.err(safeUiError(e)); }
     finally { setMcpBusy(false); }
   };
   const mcpIndexPath = (dir: string) => {
@@ -5128,7 +5435,7 @@ function SettingsView() {
     try {
       await clip.write(command);
       toast.ok("Copied dependency install command");
-    } catch (e) { toast.err(String(e)); }
+    } catch (e) { toast.err(safeUiError(e)); }
   };
   const copyMcpConfig = async () => {
     if (!mcpPath) return;
@@ -5144,7 +5451,7 @@ function SettingsView() {
     try {
       await clip.write(JSON.stringify(snippet, null, 2));
       toast.ok("Copied MCP config snippet");
-    } catch (e) { toast.err(String(e)); }
+    } catch (e) { toast.err(safeUiError(e)); }
   };
   const codexAddCommand = () => {
     if (!mcpPath) return;
@@ -5155,7 +5462,7 @@ function SettingsView() {
     try {
       await clip.write("codex mcp get shardbrowser");
       toast.ok("Copied Codex inspect command");
-    } catch (e) { toast.err(String(e)); }
+    } catch (e) { toast.err(safeUiError(e)); }
   };
   const copyCodexRegistration = async () => {
     const command = codexAddCommand();
@@ -5163,7 +5470,7 @@ function SettingsView() {
     try {
       await clip.write(command);
       toast.ok("Copied Codex add command");
-    } catch (e) { toast.err(String(e)); }
+    } catch (e) { toast.err(safeUiError(e)); }
   };
   const copyCodexRepair = async () => {
     const command = codexAddCommand();
@@ -5171,21 +5478,40 @@ function SettingsView() {
     try {
       await clip.write(`codex mcp remove shardbrowser; ${command}`);
       toast.ok("Copied Codex repair command");
-    } catch (e) { toast.err(String(e)); }
+    } catch (e) { toast.err(safeUiError(e)); }
   };
   const checkCodexMcp = async () => {
     setCodexBusy(true);
+    setCodexStatusError(null);
     try {
       const status = await invoke<CodexMcpStatus>("codex_mcp_status");
       setCodexStatus(status);
+      setCodexStatusError(null);
       if (status.ready) toast.ok("Codex MCP registration matches");
       else toast.err(status.message);
-    } catch (e) { toast.err(String(e)); }
+    } catch (e) {
+      const message = safeUiError(e);
+      setCodexStatusError(message);
+      toast.err(message);
+    }
     finally { setCodexBusy(false); }
   };
   const save = async () => {
-    try { await invoke("settings_save", { value: s }); toast.ok("Settings saved"); }
-    catch (e) { toast.err(String(e)); }
+    if (!settingsBaseline || saving) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await invoke("settings_save", { value: s });
+      setSettingsBaseline({ ...s });
+      await refreshApi();
+      toast.ok("Settings saved");
+    } catch (e) {
+      const message = safeUiError(e);
+      setSaveError(message);
+      toast.err(message);
+    } finally {
+      setSaving(false);
+    }
   };
   const mcpFilesDownloaded = !!mcpStatus?.files_downloaded;
   const mcpReady = !!mcpStatus?.ready;
@@ -5193,17 +5519,50 @@ function SettingsView() {
   const mcpUpdateAvailable = mcpStatus?.state === "update_available";
   const mcpVersionLabel = mcpStatus?.version ? `v${mcpStatus.version}` : "Unknown";
   const mcpRequiredVersionLabel = mcpStatus?.required_version ? `v${mcpStatus.required_version}` : "this Launcher";
-  const codexChecked = !!codexStatus;
+  const codexChecked = !!codexStatus || !!codexStatusError;
   const codexNeedsRepair = codexStatus?.state === "needs_repair" || codexStatus?.state === "disabled" || codexStatus?.state === "unsupported_transport";
+  const settingsDirty = !!settingsBaseline && JSON.stringify(s) !== JSON.stringify(settingsBaseline);
   const requestedApiEnabled = s.api_enabled ?? true;
   const requestedApiPort = s.api_port ?? 40325;
   const unsavedApiChanges = !!api && (requestedApiEnabled !== api.enabled || requestedApiPort !== api.port);
   const apiRestartPending = !!api && (unsavedApiChanges || api.restart_required);
   const runtimeApiUrl = api?.runtime_base_url ?? api?.base_url;
+  const refreshMcpAndCodex = async () => {
+    setMcpBusy(true);
+    try {
+      await refreshMcp();
+      if (mcpFilesDownloaded) await checkCodexMcp();
+    } finally {
+      setMcpBusy(false);
+    }
+  };
+  const codexPrimary = !mcpStatus
+    ? { key: "mcp-check", label: mcpStatusError ? "Retry MCP status" : "Checking MCP status…", run: refreshMcp, busy: !mcpStatusError }
+    : !mcpFilesDownloaded
+      ? { key: "download", label: mcpBusy ? "Downloading…" : "Download MCP server", run: downloadMcp, busy: mcpBusy }
+    : !codexChecked
+      ? { key: "check", label: codexBusy ? "Checking Codex…" : "Check Codex registration", run: checkCodexMcp, busy: codexBusy }
+      : codexStatus?.ready
+        ? { key: "refresh", label: mcpBusy || codexBusy ? "Refreshing…" : "Refresh status", run: refreshMcpAndCodex, busy: mcpBusy || codexBusy }
+        : codexStatus?.state === "not_registered"
+          ? { key: "add", label: "Copy Codex add command", run: copyCodexRegistration, busy: false }
+          : codexNeedsRepair
+            ? { key: "repair", label: "Copy Codex repair command", run: copyCodexRepair, busy: false }
+            : { key: "check", label: codexBusy ? "Checking Codex…" : "Retry Codex check", run: checkCodexMcp, busy: codexBusy };
   return (
     <section className="page settings-page">
-      <Topbar crumbs={["System", "Settings"]} search="" onSearch={() => {}} />
+      <Topbar crumbs={["System", "Settings"]} />
       <div className="page-title"><h1>Settings</h1></div>
+
+      {settingsLoadError && (
+        <div className="inline-error settings-load-error" role="alert">
+          <div>
+            <strong>Settings could not be loaded</strong>
+            <span>{settingsLoadError}</span>
+          </div>
+          <button className="btn-ghost btn-sm" onClick={() => void loadSettings()}>Retry</button>
+        </div>
+      )}
 
 
       <div className="card" style={{ marginBottom: 14 }}>
@@ -5271,7 +5630,7 @@ function SettingsView() {
         </label>
         {api && (
           <>
-            <div className={`api-state ${api.running ? "api-state-on" : api.error ? "api-state-error" : "api-state-off"}`}>
+            <div className={`api-state ${api.running ? "api-state-on" : api.error ? "api-state-error" : "api-state-off"}`} role={api.error ? "alert" : "status"}>
               <strong>{api.running ? "Server running" : api.error ? "Server failed to start" : api.runtime_enabled ? "Server unavailable" : "Server disabled"}</strong>
               <span>{api.running ? runtimeApiUrl : api.error ?? (api.runtime_enabled ? "The listener is not running." : "Enable it, save settings, then restart the app.")}</span>
             </div>
@@ -5321,11 +5680,11 @@ function SettingsView() {
           profiles and a CDP browser) into a folder you choose. The app does not run
           it — install deps, set SHARDX_TOKEN in your user environment, restart your MCP client, then register it. Requires Node.js.
         </p>
-        <div className={`mcp-status mcp-status-${mcpStatus?.state ?? "unknown"}`}>
+        <div className={`mcp-status mcp-status-${mcpStatus?.state ?? "unknown"}`} role={mcpStatusError ? "alert" : "status"} aria-live={mcpStatusError ? "assertive" : "polite"}>
           <strong>
-            {mcpReady ? "MCP ready" : mcpUpdateAvailable ? "MCP update available" : mcpMissing ? "MCP folder missing" : mcpFilesDownloaded ? "MCP setup incomplete" : "MCP server not downloaded"}
+            {!mcpStatus ? "Checking MCP status" : mcpReady ? "MCP ready" : mcpUpdateAvailable ? "MCP update available" : mcpMissing ? "MCP folder missing" : mcpFilesDownloaded ? "MCP setup incomplete" : "MCP server not downloaded"}
           </strong>
-          <span>{mcpStatus?.message ?? "Checking MCP status…"}</span>
+          <span>{mcpStatusError ?? mcpStatus?.message ?? "Checking MCP status…"}</span>
         </div>
         <div className="mcp-readiness" aria-label="MCP setup readiness">
           <div className={`mcp-readiness-item ${mcpStatus?.files_downloaded ? "is-ready" : "is-pending"}`}>
@@ -5344,6 +5703,10 @@ function SettingsView() {
             <strong>{mcpStatus?.api_reachable ? "✓" : "○"} API reachable</strong>
             <span>{mcpStatus?.api_reachable ? runtimeApiUrl : api?.error ? "Bind failed" : "Unavailable"}</span>
           </div>
+          <div className={`mcp-readiness-item ${codexStatus?.ready ? "is-ready" : codexChecked ? "is-error" : "is-pending"}`}>
+            <strong>{codexStatus?.ready ? "✓" : codexChecked ? "!" : "○"} Codex registration</strong>
+            <span>{codexStatus?.ready ? "Ready" : codexChecked ? "Needs attention" : "Not checked"}</span>
+          </div>
         </div>
         <ol className="settings-steps">
           <li>
@@ -5355,65 +5718,39 @@ function SettingsView() {
           <li>{mcpStatus?.api_reachable ? "Automation API health check passed." : "Fix or enable the Automation API, then refresh status."}</li>
           <li>Set <code>SHARDX_TOKEN</code> in your user environment, restart your MCP client, then register <code>index.js</code>.</li>
         </ol>
-        {!mcpFilesDownloaded && (
-          <div className="row-inline" style={{ gap: 10 }}>
-            <button className="btn-ghost" onClick={downloadMcp} disabled={mcpBusy}>
-              <Icon.Download /> {mcpBusy ? "Downloading…" : mcpMissing ? "Repair / choose folder…" : "Download MCP server"}
-            </button>
-            <button className="btn-ghost" onClick={useExistingMcp} disabled={mcpBusy}>
-              Use existing folder…
-            </button>
-          </div>
-        )}
+        <div className="mcp-primary-action">
+          <button className="btn-primary" onClick={() => void codexPrimary.run()} disabled={codexPrimary.busy}>
+            {codexPrimary.key === "download" && <Icon.Download />}
+            {(codexPrimary.key === "refresh" || codexPrimary.key === "mcp-check") && <Icon.Refresh />}
+            {codexPrimary.label}
+          </button>
+          <span className="muted small">
+            {codexPrimary.key === "mcp-check"
+              ? "Reads the configured MCP folder without changing files."
+              : codexPrimary.key === "download"
+              ? "Download once, or choose an existing folder under Advanced actions."
+              : codexPrimary.key === "check"
+                ? "Compares the current Codex shardbrowser entry without changing it."
+                : codexPrimary.key === "add"
+                  ? "Copies the registration command; run it, then restart Codex."
+                  : codexPrimary.key === "repair"
+                    ? "Copies a remove-and-add repair command; no config is changed automatically."
+                    : "Re-checks MCP files, API reachability, and Codex registration."}
+          </span>
+        </div>
         {(mcpPath || mcpReady) && (
           <div className="mcp-setup-box">
             <label>
               <span className="lbl">Downloaded folder</span>
               <CopyField value={mcpPath} />
             </label>
-            <div className="row-inline mcp-setup-actions">
-              <button className="btn-ghost btn-sm" onClick={() => openPath(mcpPath).catch((e) => toast.err(String(e)))}>
-                Open folder
-              </button>
-              <button className="btn-ghost btn-sm" onClick={copyMcpInstall}>Copy install command</button>
-              <button className="btn-ghost btn-sm" onClick={copyMcpConfig}>Copy MCP config</button>
-              <button className="btn-ghost btn-sm" onClick={checkCodexMcp} disabled={codexBusy}>
-                {codexBusy ? "Checking Codex…" : "Check Codex registration"}
-              </button>
-              <button className="btn-ghost btn-sm" onClick={copyCodexInspect}>Copy Codex inspect command</button>
-              <button className="btn-ghost btn-sm" onClick={copyCodexRegistration}>Copy Codex add command</button>
-              <button className="btn-ghost btn-sm" onClick={copyCodexRepair}>Copy Codex repair command</button>
-              <button className="btn-ghost btn-sm" onClick={refreshMcp} disabled={mcpBusy}>
-                <Icon.Refresh /> Refresh status
-              </button>
-              {mcpFilesDownloaded && (
-                <>
-                  <button
-                    className="btn-ghost btn-sm"
-                    onClick={useExistingMcp}
-                    disabled={mcpBusy}
-                    title="Point Settings at another already-downloaded MCP folder"
-                  >
-                    Use existing folder…
-                  </button>
-                  <button
-                    className="btn-ghost btn-sm"
-                    onClick={downloadMcp}
-                    disabled={mcpBusy}
-                    title="Download a fresh copy or repair the selected MCP folder in place"
-                  >
-                    <Icon.Refresh /> {mcpBusy ? "Downloading…" : "Download / repair…"}
-                  </button>
-                </>
-              )}
-            </div>
             <div className="settings-note">
               Codex registration lives outside ShardX. Use <strong>inspect</strong> to check the
               current <code>shardbrowser</code> entry, <strong>add</strong> for first setup, or
               <strong> repair</strong> after moving/updating the MCP folder. Restart Codex after
               adding or repairing so it reloads the MCP tools.
             </div>
-            <div className={`codex-client-status codex-client-status-${codexStatus?.state ?? "unknown"}`}>
+            <div className={`codex-client-status codex-client-status-${codexStatusError ? "error" : codexStatus?.state ?? "unknown"}`} role={codexStatusError || (codexStatus && !codexStatus.ready) ? "alert" : "status"} aria-live={codexStatusError || (codexStatus && !codexStatus.ready) ? "assertive" : "polite"}>
               <strong>
                 {codexStatus?.ready
                   ? "Codex registered"
@@ -5428,7 +5765,7 @@ function SettingsView() {
                           : "Codex registration not checked"}
               </strong>
               <span>
-                {codexStatus?.message ?? "Run a one-time check to compare Codex's shardbrowser entry with this MCP folder and API URL."}
+                {codexStatusError ?? codexStatus?.message ?? "Run a one-time check to compare Codex's shardbrowser entry with this MCP folder and API URL."}
               </span>
             </div>
             {codexStatus && (
@@ -5464,10 +5801,38 @@ function SettingsView() {
             )}
           </div>
         )}
+        <details className="mcp-advanced">
+          <summary>Advanced actions</summary>
+          <div className="row-inline mcp-setup-actions">
+            {mcpPath && (
+              <>
+                <button className="btn-ghost btn-sm" onClick={() => openPath(mcpPath).catch((e) => toast.err(safeUiError(e)))}>Open folder</button>
+                <button className="btn-ghost btn-sm" onClick={copyMcpInstall}>Copy install command</button>
+                <button className="btn-ghost btn-sm" onClick={copyMcpConfig}>Copy MCP config</button>
+                <button className="btn-ghost btn-sm" onClick={copyCodexInspect}>Copy Codex inspect command</button>
+                {codexPrimary.key !== "add" && <button className="btn-ghost btn-sm" onClick={copyCodexRegistration}>Copy Codex add command</button>}
+                {codexPrimary.key !== "repair" && <button className="btn-ghost btn-sm" onClick={copyCodexRepair}>Copy Codex repair command</button>}
+              </>
+            )}
+            <button className="btn-ghost btn-sm" onClick={useExistingMcp} disabled={mcpBusy}>Use existing folder…</button>
+            {mcpStatus && codexPrimary.key !== "download" && (
+              <button className="btn-ghost btn-sm" onClick={downloadMcp} disabled={mcpBusy} title="Download a fresh copy or repair the selected MCP folder in place">
+                <Icon.Refresh /> {mcpBusy ? "Downloading…" : "Download / repair…"}
+              </button>
+            )}
+          </div>
+        </details>
       </div>
 
-      <div className="card-actions">
-        <button className="btn-primary" onClick={async () => { await save(); refreshApi(); }}><ShardMini /> Save settings</button>
+      <div className="settings-save-bar" role="region" aria-label="Settings save status">
+        <div className="settings-save-state" aria-live="polite">
+          <strong>{settingsDirty ? "Unsaved changes" : "All changes saved"}</strong>
+          {apiRestartPending && <span className="restart-required">Restart required for Automation API changes</span>}
+          {saveError && <span className="save-error" role="alert">{saveError}</span>}
+        </div>
+        <button className="btn-primary" onClick={() => void save()} disabled={!settingsDirty || saving || !settingsBaseline}>
+          <ShardMini /> {saving ? "Saving…" : "Save settings"}
+        </button>
       </div>
     </section>
   );
