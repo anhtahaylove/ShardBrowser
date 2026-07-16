@@ -123,6 +123,10 @@ jobs:
           restore-keys: |
             ${{ matrix.label }}-cargo-
 
+      - name: Remove cached bundle outputs
+        run: >-
+          node -e "require('node:fs').rmSync('src-tauri/target/${{ matrix.target }}/release/bundle', { recursive: true, force: true })"
+
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
