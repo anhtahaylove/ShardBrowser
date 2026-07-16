@@ -118,6 +118,7 @@ pub fn long_lived_token(secret: &str) -> Result<String, String> {
 
 // ---- error type ----
 
+#[derive(Debug)]
 struct ApiError(StatusCode, String);
 
 impl IntoResponse for ApiError {
@@ -184,6 +185,7 @@ async fn list_profiles() -> ApiResult {
                 "running": r.is_some(),
                 "pid": r.map(|x| x.pid),
                 "cdp": r.and_then(|x| x.cdp.clone()),
+                "verification": r.and_then(|x| x.verification.clone()),
             })
         })
         .collect();
@@ -535,6 +537,87 @@ async fn stop_profile(Path(id): Path<String>) -> ApiResult {
     Ok(Json(json!({ "profile_id": id, "stopped": stopped })))
 }
 
+#[derive(Deserialize)]
+struct VerificationStatusReq {
+    required: bool,
+    kind: Option<String>,
+}
+
+fn verification_from_request(
+    body: VerificationStatusReq,
+) -> Result<Option<crate::process::VerificationStatus>, ApiError> {
+    if !body.required {
+        return Ok(None);
+    }
+    let kind = match body.kind.as_deref() {
+        Some("interstitial") => "interstitial",
+        Some("turnstile") => "turnstile",
+        _ => {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "kind must be interstitial or turnstile when verification is required",
+            ));
+        }
+    };
+    Ok(Some(crate::process::VerificationStatus {
+        required: true,
+        provider: "cloudflare".into(),
+        kind: kind.into(),
+        updated_at: unix_now(),
+    }))
+}
+
+async fn report_verification_status(
+    Path(id): Path<String>,
+    Json(body): Json<VerificationStatusReq>,
+) -> ApiResult {
+    let verification = verification_from_request(body)?;
+
+    if !crate::process::Tracker::shared().set_verification(&id, verification.clone()) {
+        return Err(err(StatusCode::CONFLICT, "profile is not running"));
+    }
+    Ok(Json(json!({
+        "profile_id": id,
+        "verification": verification,
+    })))
+}
+
+#[cfg(test)]
+mod verification_status_tests {
+    use super::{verification_from_request, VerificationStatusReq};
+    use axum::http::StatusCode;
+
+    #[test]
+    fn clear_report_ignores_kind_and_returns_no_status() {
+        let status = verification_from_request(VerificationStatusReq {
+            required: false,
+            kind: Some("unexpected".into()),
+        })
+        .unwrap();
+        assert!(status.is_none());
+    }
+
+    #[test]
+    fn required_report_accepts_only_known_cloudflare_kinds() {
+        let status = verification_from_request(VerificationStatusReq {
+            required: true,
+            kind: Some("interstitial".into()),
+        })
+        .unwrap()
+        .unwrap();
+        assert!(status.required);
+        assert_eq!(status.provider, "cloudflare");
+        assert_eq!(status.kind, "interstitial");
+
+        let error = verification_from_request(VerificationStatusReq {
+            required: true,
+            kind: Some("other".into()),
+        })
+        .unwrap_err();
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+    }
+}
+
 async fn export_cookies(Path(id): Path<String>) -> ApiResult {
     let cookies = crate::cookies::export(&id)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -733,6 +816,10 @@ pub async fn serve(secret: String, port: u16) {
         .route("/profiles/:id", get(get_profile).patch(edit_profile).delete(delete_profile))
         .route("/profiles/:id/start", post(start_profile))
         .route("/profiles/:id/stop", post(stop_profile))
+        .route(
+            "/profiles/:id/verification-status",
+            post(report_verification_status),
+        )
         .route("/profiles/:id/cookies", get(export_cookies).post(import_cookies))
         .route("/folders", get(list_folders))
         .route("/folders/:folder", patch(rename_folder_ep).delete(delete_folder_ep))

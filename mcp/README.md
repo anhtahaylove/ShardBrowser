@@ -97,8 +97,15 @@ MCP_HTTP_PORT=40326 SHARDX_API=http://127.0.0.1:40325 SHARDX_TOKEN=… node inde
 - `ensure_profile_started(profile_id? | profile_query?, exact?, headless?)`
   → idempotently starts one resolved profile and returns its CDP endpoint
 - `safe_open_url(profile_id? | profile_query?, exact?, url, headless?)`
-  → starts one resolved profile, opens an `http(s)` URL, returns title/url;
-  retries once after cleaning stale untracked profile processes
+  → starts one resolved profile, opens an `http(s)` URL, returns title/url plus
+  Cloudflare challenge status; retries once after cleaning stale untracked
+  profile processes
+- `challenge_status(profile_id? | profile_query?, exact?)`
+  → read-only inspection of the current page in an already-running profile;
+  reports a Cloudflare interstitial or visible Turnstile widget to Launcher
+- `wait_for_human_verification(profile_id? | profile_query?, exact?, timeout_ms?)`
+  → focuses an already-running profile and waits for a person to complete the
+  verification; never clicks, solves, or bypasses challenge controls
 - `devtools_context(profile_id? | profile_query?, exact?, headless?)`
   → starts/resolves one profile and returns its CDP endpoint, `/json/list`
   page targets, and the current title/url for DevTools handoff
@@ -169,8 +176,14 @@ headless) if it isn't running; actions target the profile's *active* tab:
    `browser_navigate(profile_id, "https://…")` — starts the browser with
    CDP and opens the page.
 4. `devtools_context` when handing the live ShardX page to a DevTools client.
-5. `browser_evaluate` / `browser_screenshot` / `browser_click` / `browser_fill`.
-6. `stop_profile` when done (temporary profiles self-delete on close).
+5. If navigation reports `challenge.detected`, call `challenge_status`, complete
+   verification manually in the visible browser, then use
+   `wait_for_human_verification` before continuing automation.
+6. `browser_evaluate` / `browser_screenshot` / `browser_click` / `browser_fill`.
+7. `stop_profile` when done (temporary profiles self-delete on close).
+
+For owner-side Cloudflare tuning and rollback guidance, see
+[`docs/CLOUDFLARE_VERIFICATION.md`](../docs/CLOUDFLARE_VERIFICATION.md).
 
 ## Chrome DevTools MCP handoff
 

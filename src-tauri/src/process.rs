@@ -33,6 +33,8 @@ struct ChildEntry {
     killer: tokio::sync::mpsc::Sender<()>,
     /// Set once DevToolsActivePort is read; None for UI launches.
     cdp: Option<CdpInfo>,
+    /// Safe, ephemeral human-verification handoff reported by MCP.
+    verification: Option<VerificationStatus>,
     /// Process start; serialised as elapsed ms in RunningProfile.
     started_at: Instant,
 }
@@ -44,6 +46,14 @@ pub struct CdpInfo {
     pub http_url: String,
     /// ws://127.0.0.1:<port>/devtools/browser/<id> for Puppeteer/Playwright.
     pub web_socket_debugger_url: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct VerificationStatus {
+    pub required: bool,
+    pub provider: String,
+    pub kind: String,
+    pub updated_at: u64,
 }
 
 impl Tracker {
@@ -62,7 +72,13 @@ impl Tracker {
             let mut g = self.inner.lock().unwrap();
             g.insert(
                 profile_id.clone(),
-                ChildEntry { pid, killer: tx, cdp: None, started_at: Instant::now() },
+                ChildEntry {
+                    pid,
+                    killer: tx,
+                    cdp: None,
+                    verification: None,
+                    started_at: Instant::now(),
+                },
             );
         }
 
@@ -140,6 +156,22 @@ impl Tracker {
         self.inner.lock().ok()?.get(profile_id)?.cdp.clone()
     }
 
+    /// Update the in-memory verification handoff for a running profile.
+    pub fn set_verification(
+        &self,
+        profile_id: &str,
+        verification: Option<VerificationStatus>,
+    ) -> bool {
+        let Ok(mut g) = self.inner.lock() else {
+            return false;
+        };
+        let Some(entry) = g.get_mut(profile_id) else {
+            return false;
+        };
+        entry.verification = verification;
+        true
+    }
+
     pub fn running(&self) -> Vec<RunningProfile> {
         let g = self.inner.lock().unwrap();
         g.iter()
@@ -147,6 +179,7 @@ impl Tracker {
                 profile_id: id.clone(),
                 pid: e.pid,
                 cdp: e.cdp.clone(),
+                verification: e.verification.clone(),
                 uptime_ms: e.started_at.elapsed().as_millis() as u64,
             })
             .collect()
@@ -192,6 +225,8 @@ pub struct RunningProfile {
     pub pid: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cdp: Option<CdpInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification: Option<VerificationStatus>,
     /// Milliseconds since the engine was spawned; frontend formats as
     /// "1h 23m" / "12m 30s" / "45s".
     pub uptime_ms: u64,

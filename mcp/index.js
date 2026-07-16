@@ -19,6 +19,8 @@ import path from "node:path";
 import { z } from "zod";
 import { chromium } from "patchright";
 
+import { classifyCloudflareChallenge } from "./challenge.js";
+
 function readWindowsUserEnv(name) {
   if (process.platform !== "win32") return "";
   try {
@@ -106,6 +108,60 @@ async function pageFor(profileId, opts) {
   const p = pages[0] ?? (await ctx.newPage());
   activePage.set(profileId, p);
   return p;
+}
+
+async function existingPageFor(profileId, opts) {
+  const browser = await browserFor(profileId, opts);
+  const context = browser.contexts()[0];
+  if (!context) return null;
+  const current = activePage.get(profileId);
+  if (current && !current.isClosed() && current.context() === context) return current;
+  const page = context.pages().find((candidate) => !candidate.url().startsWith("devtools://")) || null;
+  if (page) activePage.set(profileId, page);
+  return page;
+}
+
+async function challengeStatusForPage(page, response) {
+  const [title, bodyText, turnstileVisible] = await Promise.all([
+    page.title().catch(() => ""),
+    page.locator("body").innerText({ timeout: 2000 }).catch(() => ""),
+    page
+      .locator('iframe[src*="challenges.cloudflare.com"], .cf-turnstile')
+      .first()
+      .isVisible()
+      .catch(() => false),
+  ]);
+  return {
+    ...classifyCloudflareChallenge({
+      headers: response?.headers?.() || {},
+      title,
+      bodyText,
+      turnstileVisible,
+    }),
+    url: page.isClosed() ? "" : page.url(),
+    title,
+    manual_action_required: false,
+  };
+}
+
+async function updateChallengeStatus(profileId, page, response) {
+  const status = await challengeStatusForPage(page, response);
+  status.manual_action_required = status.detected;
+  try {
+    await api(`/profiles/${profileId}/verification-status`, {
+      method: "POST",
+      body: {
+        required: status.detected,
+        kind: status.kind,
+      },
+    });
+    status.launcher_status_reported = true;
+  } catch {
+    // Challenge detection must keep working with older Launcher builds that
+    // do not expose the optional verification-status handoff endpoint.
+    status.launcher_status_reported = false;
+  }
+  return status;
 }
 
 // Locator with a default timeout, shared by element actions.
@@ -414,7 +470,7 @@ server.tool(
 
 server.tool(
   "safe_open_url",
-  "Resolve/start a profile, open an http(s) URL, wait for DOM content, and return title/url.",
+  "Resolve/start a profile, open an http(s) URL, wait for DOM content, and report any Cloudflare verification handoff without interacting with it.",
   {
     profile_id: z.string().optional(),
     profile_query: z.string().optional(),
@@ -431,21 +487,28 @@ server.tool(
     let self_healed = null;
     const open = async () => {
       const page = await pageFor(profile.id, { headless: !!headless });
-      await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-      return page;
+      const response = await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+      return { page, response };
     };
-    let page;
     let result;
     try {
-      page = await open();
-      result = { url: page.url(), title: await page.title() };
+      const { page, response } = await open();
+      result = {
+        url: page.url(),
+        title: await page.title(),
+        challenge: await updateChallengeStatus(profile.id, page, response),
+      };
     } catch (error) {
       const cleanup = await cleanupStaleProfileProcesses(profile.id);
       if (!cleanup.killed_pids.length) throw error;
       try { await api(`/profiles/${profile.id}/stop`, { method: "POST" }); } catch {}
       await sleep(500);
-      page = await open();
-      result = { url: page.url(), title: await page.title() };
+      const { page, response } = await open();
+      result = {
+        url: page.url(),
+        title: await page.title(),
+        challenge: await updateChallengeStatus(profile.id, page, response),
+      };
       self_healed = {
         stale_count: cleanup.stale.length,
         killed_count: cleanup.killed_pids.length,
@@ -456,7 +519,152 @@ server.tool(
         await stopStartedProfile(profile.id);
       }
     }
-    return text({ profile: profileSummary(profile), url: result.url, title: result.title, self_healed });
+    return text({
+      profile: profileSummary(profile),
+      url: result.url,
+      title: result.title,
+      challenge: result.challenge,
+      self_healed,
+    });
+  },
+);
+
+server.tool(
+  "challenge_status",
+  "Inspect the current page of a running profile for a Cloudflare interstitial or visible Turnstile widget. Read-only: never starts the profile or interacts with verification controls.",
+  {
+    profile_id: z.string().optional(),
+    profile_query: z.string().optional(),
+    exact: z.boolean().optional(),
+  },
+  async ({ profile_id, profile_query, exact }) => {
+    const profile = await resolveProfile({ profile_id, profile_query, exact });
+    const running = await api("/running");
+    const entry = running.find((item) => item.profile_id === profile.id);
+    if (!entry) {
+      return text({
+        profile: profileSummary(profile),
+        running: false,
+        cdp_ready: false,
+        checked: false,
+        reason: "profile_not_running",
+        challenge: null,
+      });
+    }
+    if (!entry.cdp?.http_url) {
+      return text({
+        profile: profileSummary(profile),
+        running: true,
+        cdp_ready: false,
+        checked: false,
+        reason: "cdp_unavailable",
+        challenge: null,
+      });
+    }
+    const page = await existingPageFor(profile.id, { autostart: false });
+    if (!page) {
+      return text({
+        profile: profileSummary(profile),
+        running: true,
+        cdp_ready: true,
+        checked: false,
+        reason: "no_page",
+        challenge: null,
+      });
+    }
+    return text({
+      profile: profileSummary(profile),
+      running: true,
+      cdp_ready: true,
+      checked: true,
+      challenge: await updateChallengeStatus(profile.id, page),
+    });
+  },
+);
+
+server.tool(
+  "wait_for_human_verification",
+  "Wait for a person to complete a detected Cloudflare verification in an already-running visible profile. Never clicks, solves, or bypasses the challenge.",
+  {
+    profile_id: z.string().optional(),
+    profile_query: z.string().optional(),
+    exact: z.boolean().optional(),
+    timeout_ms: z.number().int().min(1000).max(600000).optional(),
+  },
+  async ({ profile_id, profile_query, exact, timeout_ms }) => {
+    const profile = await resolveProfile({ profile_id, profile_query, exact });
+    const running = await api("/running");
+    const entry = running.find((item) => item.profile_id === profile.id);
+    if (!entry?.cdp?.http_url) {
+      return text({
+        profile: profileSummary(profile),
+        running: !!entry,
+        cdp_ready: false,
+        challenge_cleared: false,
+        waited: false,
+        reason: entry ? "cdp_unavailable" : "profile_not_running",
+        next_step: "Start a visible CDP-enabled profile with ensure_profile_started, then open the target page again.",
+      });
+    }
+
+    const page = await existingPageFor(profile.id, { autostart: false });
+    if (!page) {
+      return text({
+        profile: profileSummary(profile),
+        running: true,
+        cdp_ready: true,
+        challenge_cleared: false,
+        waited: false,
+        reason: "no_page",
+        next_step: "Open the target page in the visible browser, then call this tool again.",
+      });
+    }
+    await page.bringToFront().catch(() => {});
+    const startedAt = Date.now();
+    const deadline = startedAt + (timeout_ms ?? 120000);
+    let challenge = await updateChallengeStatus(profile.id, page);
+    const waited = challenge.detected;
+
+    while (challenge.detected && !page.isClosed() && Date.now() < deadline) {
+      await sleep(Math.min(1000, Math.max(1, deadline - Date.now())));
+      const next = await challengeStatusForPage(page);
+      if (next.detected !== challenge.detected || next.kind !== challenge.kind) {
+        challenge = await updateChallengeStatus(profile.id, page);
+      } else {
+        challenge = {
+          ...next,
+          launcher_status_reported: challenge.launcher_status_reported,
+        };
+      }
+    }
+
+    const elapsedMs = Date.now() - startedAt;
+    if (page.isClosed()) {
+      return text({
+        profile: profileSummary(profile),
+        running: true,
+        cdp_ready: true,
+        challenge_cleared: false,
+        waited,
+        timed_out: false,
+        elapsed_ms: elapsedMs,
+        reason: "page_closed",
+        challenge,
+      });
+    }
+    return text({
+      profile: profileSummary(profile),
+      running: true,
+      cdp_ready: true,
+      challenge_cleared: !challenge.detected,
+      waited,
+      timed_out: challenge.detected,
+      elapsed_ms: elapsedMs,
+      challenge,
+      ...(challenge.detected
+        ? { next_step: "Complete verification manually in the visible browser, then call this tool again." }
+        : {}),
+    });
   },
 );
 
@@ -708,8 +916,12 @@ server.tool(
   { profile_id: z.string(), url: z.string(), headless: z.boolean().optional() },
   async ({ profile_id, url, headless }) => {
     const page = await pageFor(profile_id, { headless: !!headless });
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    return text({ url: page.url(), title: await page.title() });
+    const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    return text({
+      url: page.url(),
+      title: await page.title(),
+      challenge: await updateChallengeStatus(profile_id, page, response),
+    });
   },
 );
 

@@ -358,10 +358,17 @@ type CdpInfo = {
   http_url: string;
   web_socket_debugger_url: string;
 };
+type VerificationStatus = {
+  required: boolean;
+  provider: "cloudflare";
+  kind: "interstitial" | "turnstile";
+  updated_at: number;
+};
 type RunningProcess = {
   profile_id: string;
   pid: number;
   cdp?: CdpInfo;
+  verification?: VerificationStatus;
   uptime_ms: number;
 };
 type DevtoolsTarget = {
@@ -1243,6 +1250,7 @@ function BrowsersView() {
   // ticking uptime display in the Status column.
   const [running, setRunning] = useState<Record<string, number>>({});
   const [runningCdp, setRunningCdp] = useState<Record<string, CdpInfo>>({});
+  const [runningVerification, setRunningVerification] = useState<Record<string, VerificationStatus>>({});
   const [launchErrors, setLaunchErrors] = useState<Record<string, string>>({});
   // Re-render trigger so the uptime label ticks every second without
   // re-fetching the process list (which polls every 2s).
@@ -1333,6 +1341,11 @@ function BrowsersView() {
         if (cancelled) return;
         const now = Date.now();
         setRunningCdp(Object.fromEntries(list.filter((r) => r.cdp).map((r) => [r.profile_id, r.cdp!])));
+        setRunningVerification(
+          Object.fromEntries(
+            list.filter((r) => r.verification?.required).map((r) => [r.profile_id, r.verification!]),
+          ),
+        );
         if (list.length > 0) {
           setLaunchErrors((errors) => {
             let next: Record<string, string> | null = null;
@@ -1935,6 +1948,7 @@ function BrowsersView() {
           const isExpanded = expanded === p.id;
           const isSel = selected.has(p.id);
           const cdpInfo = runningCdp[p.id];
+          const verification = runningVerification[p.id];
           return (
             <div
               key={p.id}
@@ -1989,6 +2003,17 @@ function BrowsersView() {
                       {isRunning ? "Running" : launchError ? "Launch failed" : "Idle"}
                     </span>
                     {launchError && !isRunning && <span className="status-error">See error below</span>}
+                    {verification?.required && (
+                      <span
+                        className="pill-status ps-verification"
+                        role="status"
+                        title={`Cloudflare ${verification.kind} detected. Complete verification manually in the browser.`}
+                        aria-label={`Verification required for ${p.name}`}
+                      >
+                        <i className="dot" />
+                        Verification required
+                      </span>
+                    )}
                     {cdpInfo && (
                       <span className="pill-status ps-cdp" title={cdpInfo.http_url}>
                         <i className="dot" />

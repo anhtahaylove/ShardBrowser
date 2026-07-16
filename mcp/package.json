@@ -7,7 +7,8 @@
     "shardx-mcp": "index.js"
   },
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node --test challenge.test.js"
   },
   "engines": {
     "node": ">=18"
