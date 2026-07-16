@@ -104,7 +104,13 @@ MCP_HTTP_PORT=40326 SHARDX_API=http://127.0.0.1:40325 SHARDX_TOKEN=… node inde
   cleaning stale untracked profile processes
 - `challenge_status(profile_id? | profile_query?, exact?)`
   → read-only inspection of the current page in an already-running profile;
-  reports a Cloudflare interstitial or visible Turnstile widget to Launcher
+  reports a Cloudflare interstitial or visible Turnstile widget to Launcher,
+  persists a privacy-minimal checkpoint, and sends one Windows notification
+  when a new verification handoff begins
+- `verification_checkpoint(profile_id? | profile_query?, exact?)`
+  → reads the pending verification checkpoint without starting, inspecting, or
+  changing the profile; checkpoints contain no URL, token, cookie, profile
+  name, fingerprint, or proxy data and expire after 24 hours
 - `wait_for_human_verification(profile_id? | profile_query?, exact?, timeout_ms?)`
   → focuses an already-running profile and waits for a person to complete the
   verification; never clicks, solves, or bypasses challenge controls
@@ -178,7 +184,9 @@ headless) if it isn't running; actions target the profile's *active* tab:
    `browser_navigate(profile_id, "https://…")` — starts the browser with
    CDP and opens the page.
 4. `devtools_context` when handing the live ShardX page to a DevTools client.
-5. If navigation reports `challenge.detected`, call `challenge_status`, complete
+5. If navigation reports `challenge.detected`, ShardX records a checkpoint and
+   sends one Windows notification. After an MCP/client restart, call
+   `verification_checkpoint` to recover that handoff state. Complete
    verification manually in the visible browser, then use
    `wait_for_human_verification` before continuing automation.
 6. `browser_evaluate` / `browser_screenshot` / `browser_click` / `browser_fill`.
@@ -186,6 +194,8 @@ headless) if it isn't running; actions target the profile's *active* tab:
 
 For owner-side Cloudflare tuning and rollback guidance, see
 [`docs/CLOUDFLARE_VERIFICATION.md`](../docs/CLOUDFLARE_VERIFICATION.md).
+For an authorized, non-browser fallback for WordPress plugin administration,
+see [`docs/WORDPRESS_WPCLI_FALLBACK.md`](../docs/WORDPRESS_WPCLI_FALLBACK.md).
 
 ## Chrome DevTools MCP handoff
 

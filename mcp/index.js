@@ -20,6 +20,12 @@ import { z } from "zod";
 import { chromium } from "patchright";
 
 import { classifyCloudflareChallenge, waitForChallengeClear } from "./challenge.js";
+import {
+  clearVerificationCheckpoint,
+  notifyVerificationRequired,
+  readVerificationCheckpoint,
+  saveVerificationCheckpoint,
+} from "./verification-checkpoint.js";
 
 function readWindowsUserEnv(name) {
   if (process.platform !== "win32") return "";
@@ -144,9 +150,24 @@ async function challengeStatusForPage(page, response) {
   };
 }
 
-async function updateChallengeStatus(profileId, page, response) {
+async function updateChallengeStatus(profileId, page, response, operation = "challenge_check") {
   const status = await challengeStatusForPage(page, response);
   status.manual_action_required = status.detected;
+  try {
+    if (status.detected) {
+      const saved = await saveVerificationCheckpoint(profileId, status, { operation });
+      status.checkpoint = saved.checkpoint;
+      status.windows_notification_dispatched = saved.created && notifyVerificationRequired();
+    } else {
+      await clearVerificationCheckpoint(profileId);
+      status.checkpoint = null;
+      status.windows_notification_dispatched = false;
+    }
+  } catch {
+    // Filesystem or notification failures must not interrupt challenge handoff.
+    status.checkpoint = null;
+    status.windows_notification_dispatched = false;
+  }
   try {
     await api(`/profiles/${profileId}/verification-status`, {
       method: "POST",
@@ -164,7 +185,7 @@ async function updateChallengeStatus(profileId, page, response) {
   return status;
 }
 
-async function waitForVerification(profileId, page, initialChallenge, timeoutMs) {
+async function waitForVerification(profileId, page, initialChallenge, timeoutMs, operation) {
   await page.bringToFront().catch(() => {});
   const result = await waitForChallengeClear(
     initialChallenge,
@@ -174,7 +195,7 @@ async function waitForVerification(profileId, page, initialChallenge, timeoutMs)
   if (page.isClosed()) {
     return { ...result, page_closed: true, resumed: false, timed_out: false };
   }
-  const challenge = await updateChallengeStatus(profileId, page);
+  const challenge = await updateChallengeStatus(profileId, page, undefined, operation);
   return {
     ...result,
     challenge,
@@ -508,11 +529,11 @@ server.tool(
     const open = async () => {
       const page = await pageFor(profile.id, { headless: !!headless });
       const response = await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-      let challenge = await updateChallengeStatus(profile.id, page, response);
+      let challenge = await updateChallengeStatus(profile.id, page, response, "safe_open_url");
       let verification = null;
       const timeoutMs = verification_timeout_ms ?? (headless ? 0 : 120000);
       if (challenge.detected && timeoutMs > 0) {
-        const wait = await waitForVerification(profile.id, page, challenge, timeoutMs);
+        const wait = await waitForVerification(profile.id, page, challenge, timeoutMs, "safe_open_url");
         if (wait.page_closed) throw new Error("verification page closed while waiting");
         challenge = wait.challenge;
         verification = {
@@ -607,7 +628,29 @@ server.tool(
       running: true,
       cdp_ready: true,
       checked: true,
-      challenge: await updateChallengeStatus(profile.id, page),
+      challenge: await updateChallengeStatus(profile.id, page, undefined, "challenge_status"),
+    });
+  },
+);
+
+server.tool(
+  "verification_checkpoint",
+  "Read a privacy-minimal persisted checkpoint for a Cloudflare verification handoff. Does not inspect, start, or change the browser profile.",
+  {
+    profile_id: z.string().optional(),
+    profile_query: z.string().optional(),
+    exact: z.boolean().optional(),
+  },
+  async ({ profile_id, profile_query, exact }) => {
+    const profile = await resolveProfile({ profile_id, profile_query, exact });
+    const checkpoint = await readVerificationCheckpoint(profile.id);
+    return text({
+      profile: profileSummary(profile),
+      pending: !!checkpoint,
+      checkpoint,
+      ...(checkpoint
+        ? { next_step: "Bring the visible verification tab to front and call wait_for_human_verification." }
+        : {}),
     });
   },
 );
@@ -649,8 +692,19 @@ server.tool(
         next_step: "Open the target page in the visible browser, then call this tool again.",
       });
     }
-    const initial = await updateChallengeStatus(profile.id, page);
-    const wait = await waitForVerification(profile.id, page, initial, timeout_ms ?? 120000);
+    const initial = await updateChallengeStatus(
+      profile.id,
+      page,
+      undefined,
+      "wait_for_human_verification",
+    );
+    const wait = await waitForVerification(
+      profile.id,
+      page,
+      initial,
+      timeout_ms ?? 120000,
+      "wait_for_human_verification",
+    );
     if (wait.page_closed) {
       return text({
         profile: profileSummary(profile),
@@ -932,7 +986,7 @@ server.tool(
     return text({
       url: page.url(),
       title: await page.title(),
-      challenge: await updateChallengeStatus(profile_id, page, response),
+      challenge: await updateChallengeStatus(profile_id, page, response, "browser_navigate"),
     });
   },
 );

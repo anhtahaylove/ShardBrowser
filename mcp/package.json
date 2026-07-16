@@ -1,6 +1,6 @@
 {
   "name": "shardx-mcp",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "description": "MCP server for the ShardX Launcher — drives the local automation API and a profile's browser over CDP.",
   "type": "module",
   "bin": {
@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node index.js",
-    "test": "node --test challenge.test.js"
+    "test": "node --test challenge.test.js verification-checkpoint.test.js"
   },
   "engines": {
     "node": ">=18"
