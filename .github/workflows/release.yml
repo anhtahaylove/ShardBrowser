@@ -346,12 +346,12 @@ jobs:
       - name: Validate and package ShardX MCP
         run: |
           node --check mcp/index.js
-          for helper in health_check find_profile_by_name ensure_profile_started safe_open_url devtools_context cleanup_stale_profile_processes; do
+          for helper in health_check find_profile_by_name ensure_profile_started safe_open_url devtools_context cleanup_stale_profile_processes challenge_status wait_for_human_verification; do
             grep -q "\"$helper\"" mcp/index.js
           done
           package_root="$RUNNER_TEMP/ShardX-MCP"
           mkdir -p "$package_root"
-          cp mcp/index.js mcp/package.json mcp/README.md "$package_root/"
+          cp mcp/index.js mcp/challenge.js mcp/package.json mcp/README.md "$package_root/"
           tar -czf dist/ShardX-MCP.tar.gz -C "$RUNNER_TEMP" ShardX-MCP
           tar -tzf dist/ShardX-MCP.tar.gz
 
