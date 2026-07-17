@@ -43,6 +43,15 @@ jobs:
       - name: Frontend build
         run: npm run build
 
+      - name: Install MCP dependencies
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+          PATCHRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm ci --prefix mcp
+
+      - name: MCP tests
+        run: npm test --prefix mcp
+
       - name: MCP syntax and helper contract
         run: |
           node --check mcp/index.js

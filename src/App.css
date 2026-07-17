@@ -1163,6 +1163,22 @@ textarea { resize: vertical; min-height: 60px; line-height: 1.5; }
 .inline-editor .cs-opt { font-size: 13.5px; padding: 9px 11px; }
 .inline-editor .seg-btn { font-size: 12.5px; padding: 8px 10px; }
 .inline-editor .tri-btn { font-size: 12px; padding: 7px 0; }
+.inline-proxy-details {
+  padding: 9px 10px;
+  border: 1px solid var(--bd-1);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+}
+.inline-proxy-details summary {
+  width: fit-content;
+  color: var(--tx-2);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.inline-proxy-details[open] summary { color: var(--tx-1); }
+.inline-proxy-body { display: flex; flex-direction: column; gap: 6px; margin-top: 9px; }
+.inline-proxy-error { color: var(--err); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
 
 .form-row {
   display: grid;

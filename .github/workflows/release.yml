@@ -345,15 +345,24 @@ jobs:
 
       - name: Validate and package ShardX MCP
         run: |
+          test -f mcp/package-lock.json
           node --check mcp/index.js
           for helper in health_check find_profile_by_name ensure_profile_started safe_open_url devtools_context cleanup_stale_profile_processes challenge_status verification_checkpoint wait_for_human_verification; do
             grep -q "\"$helper\"" mcp/index.js
           done
           package_root="$RUNNER_TEMP/ShardX-MCP"
           mkdir -p "$package_root"
-          cp mcp/index.js mcp/challenge.js mcp/verification-checkpoint.js mcp/package.json mcp/README.md "$package_root/"
+          cp mcp/index.js mcp/challenge.js mcp/verification-checkpoint.js mcp/package.json mcp/package-lock.json mcp/README.md "$package_root/"
           tar -czf dist/ShardX-MCP.tar.gz -C "$RUNNER_TEMP" ShardX-MCP
-          tar -tzf dist/ShardX-MCP.tar.gz
+          archive_entries="$(tar -tzf dist/ShardX-MCP.tar.gz)"
+          printf '%s\n' "$archive_entries"
+          for required in index.js challenge.js verification-checkpoint.js package.json package-lock.json README.md; do
+            printf '%s\n' "$archive_entries" | grep -qx "ShardX-MCP/$required"
+          done
+          if printf '%s\n' "$archive_entries" | grep -q '/node_modules/'; then
+            echo "MCP archive must not contain node_modules." >&2
+            exit 1
+          fi
 
       - name: Generate SHA-256 checksums
         run: |
@@ -381,6 +390,13 @@ jobs:
           generate_release_notes: true
           body: |
             Custom integration release for [anhtahaylove/ShardBrowser](https://github.com/anhtahaylove/ShardBrowser).
+
+            ## Highlights
+
+            * Reproducible MCP setup with the packaged lockfile, `npm ci`, and MCP tests in CI.
+            * Smaller MCP profile summaries that omit free-form notes.
+            * Vite 6.4.3 with a clean production and development dependency audit.
+            * Create Profile can parse, save, and bind one new proxy inline, with rollback on partial failure.
 
             ## Install
 

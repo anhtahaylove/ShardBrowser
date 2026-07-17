@@ -220,7 +220,6 @@ function profileSummary(profile, match) {
     id: profile.id,
     name: profile.name,
     folder: profile.folder,
-    notes: profile.notes,
     running: !!profile.running,
     cdp: profile.cdp,
     ...(match ? { match } : {}),
