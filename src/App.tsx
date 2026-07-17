@@ -423,6 +423,7 @@ type McpStatus = {
   path: string | null;
   installed: boolean;
   files_downloaded: boolean;
+  lockfile_present: boolean;
   version: string | null;
   version_current: boolean;
   required_version: string;
@@ -1245,6 +1246,10 @@ function BrowsersView() {
   const [folder, setFolder] = useState("all");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [draft, setDraft] = useState<ProfileForm | null>(null);
+  const [inlineProxyText, setInlineProxyText] = useState("");
+  const [inlineProxyError, setInlineProxyError] = useState<string | null>(null);
+  const [profileSaveBusy, setProfileSaveBusy] = useState(false);
+  const profileSaveBusyRef = useRef(false);
   // Value = epoch ms at which the engine was first observed running. Used
   // both as a truthy flag (any number = running) and as the anchor for the
   // ticking uptime display in the Status column.
@@ -1710,23 +1715,53 @@ function BrowsersView() {
   };
 
   const expand = async (id: string) => {
+    if (profileSaveBusy) return;
     if (expanded === id) { setExpanded(null); setDraft(null); return; }
     const stored = await invoke<any>("profile_get", { id });
+    setInlineProxyText("");
+    setInlineProxyError(null);
     setDraft(fromStored(stored));
     setExpanded(id);
   };
 
   const newProfile = async () => {
+    if (profileSaveBusy) return;
+    setInlineProxyText("");
+    setInlineProxyError(null);
     setDraft(defaultForm());
     setExpanded("__new__");
   };
 
   const saveDraft = async () => {
-    if (!draft) return;
+    if (!draft || profileSaveBusyRef.current) return;
+    const creating = !draft.id;
+    const hasInlineProxy = creating && inlineProxyText.trim().length > 0;
+    let createdProfileId: string | null = null;
+    let createdProxyId: string | null = null;
+    profileSaveBusyRef.current = true;
+    setProfileSaveBusy(true);
+    setInlineProxyError(null);
     try {
+      let proxyId = draft.proxy_id;
+      if (hasInlineProxy) {
+        const parsed = await invoke<ProxyEntry[]>("proxy_bulk_parse", {
+          text: inlineProxyText.trim(),
+          kind: "socks5",
+        });
+        if (parsed.length !== 1) {
+          setInlineProxyError("Enter exactly one valid proxy using a supported host/port format.");
+          return;
+        }
+        const savedProxy = await invoke<ProxyEntry>("proxy_save", { entry: parsed[0] });
+        createdProxyId = savedProxy.id;
+        proxyId = savedProxy.id;
+      }
       const fp = fingerprints.find((g) => g.id === draft.gpu_preset_id) ?? null;
-      const saved = await invoke<ProfileMeta>("profile_save", { payload: toStored(draft, fp) });
-      await invoke("profile_bind_proxy", { profileId: saved.id, proxyId: draft.proxy_id });
+      const saved = await invoke<ProfileMeta>("profile_save", {
+        payload: toStored({ ...draft, proxy_id: proxyId }, fp),
+      });
+      if (creating) createdProfileId = saved.id;
+      await invoke("profile_bind_proxy", { profileId: saved.id, proxyId });
       // A profile created while a folder tab is active should land in that
       // folder (otherwise it pops into "All" and the user has to drag it
       // back themselves).  `__new__` test scopes this to creations only —
@@ -1737,9 +1772,31 @@ function BrowsersView() {
       }
       setExpanded(null);
       setDraft(null);
+      setInlineProxyText("");
       reload();
       toast.ok(draft.id ? "Profile saved" : `Created "${saved.name}"`);
-    } catch (e) { toast.err(String(e)); }
+    } catch (e) {
+      let profileRolledBack = createdProfileId === null;
+      if (createdProfileId) {
+        try {
+          await invoke("profile_delete", { id: createdProfileId });
+          profileRolledBack = true;
+        } catch {
+          profileRolledBack = false;
+        }
+      }
+      if (createdProxyId && profileRolledBack) {
+        try { await invoke("proxy_delete", { id: createdProxyId }); } catch { /* Keep the original failure. */ }
+      }
+      const message = hasInlineProxy
+        ? "The proxy or profile could not be saved. Check the proxy format and try again."
+        : safeUiError(e);
+      if (hasInlineProxy) setInlineProxyError(message);
+      toast.err(message);
+    } finally {
+      profileSaveBusyRef.current = false;
+      setProfileSaveBusy(false);
+    }
   };
 
   const toggleSel = (id: string) => {
@@ -1937,8 +1994,20 @@ function BrowsersView() {
               setDraft={setDraft}
               proxies={proxies}
               fingerprints={fingerprints}
+              inlineProxyText={inlineProxyText}
+              inlineProxyError={inlineProxyError}
+              saving={profileSaveBusy}
+              onInlineProxyChange={(value) => {
+                setInlineProxyText(value);
+                setInlineProxyError(null);
+              }}
               onSave={saveDraft}
-              onCancel={() => { setExpanded(null); setDraft(null); }}
+              onCancel={() => {
+                setExpanded(null);
+                setDraft(null);
+                setInlineProxyText("");
+                setInlineProxyError(null);
+              }}
             />
           </div>
         )}
@@ -2151,7 +2220,10 @@ function BrowsersView() {
                   setDraft={setDraft}
                   proxies={proxies}
                   fingerprints={fingerprints}
-
+                  inlineProxyText=""
+                  inlineProxyError={null}
+                  saving={profileSaveBusy}
+                  onInlineProxyChange={() => {}}
                   onSave={saveDraft}
                   onCancel={() => { setExpanded(null); setDraft(null); }}
                 />
@@ -2285,16 +2357,23 @@ const OS_OPTIONS: { id: OsPlatform; label: string }[] = [
 ];
 
 function InlineEditor({
-  draft, setDraft, proxies, fingerprints, onSave, onCancel,
+  draft, setDraft, proxies, fingerprints, inlineProxyText, inlineProxyError,
+  saving, onInlineProxyChange, onSave, onCancel,
 }: {
   draft: ProfileForm;
   setDraft: (f: ProfileForm) => void;
   proxies: ProxyEntry[];
   fingerprints: FingerprintEntry[];
-  onSave: () => void;
+  inlineProxyText: string;
+  inlineProxyError: string | null;
+  saving: boolean;
+  onInlineProxyChange: (value: string) => void;
+  onSave: () => void | Promise<void>;
   onCancel: () => void;
 }) {
   const f = draft;
+  const inlineProxyHelpId = useId();
+  const inlineProxyErrorId = useId();
   const u = <K extends keyof ProfileForm>(k: K, v: ProfileForm[K]) => setDraft({ ...f, [k]: v });
 
   // OS filter init from bound fingerprint's platform; new profile uses host OS.
@@ -2409,7 +2488,10 @@ function InlineEditor({
             <span className="lbl">Proxy</span>
             <CSSelect
               value={f.proxy_id ?? ""}
-              onChange={(v) => u("proxy_id", v ? v : null)}
+              onChange={(v) => {
+                onInlineProxyChange("");
+                u("proxy_id", v ? v : null);
+              }}
               options={[
                 { value: "", label: "— direct connection —" },
                 ...proxies.map((px) => ({
@@ -2419,6 +2501,38 @@ function InlineEditor({
               ]}
             />
           </label>
+          {!f.id && (
+            <details className="inline-proxy-details">
+              <summary>Enter a new proxy</summary>
+              <div className="inline-proxy-body">
+                <label htmlFor={inlineProxyHelpId}>
+                  <span className="lbl">Proxy address</span>
+                  <input
+                    id={inlineProxyHelpId}
+                    type="password"
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={inlineProxyText}
+                    aria-describedby={inlineProxyError ? `${inlineProxyHelpId}-help ${inlineProxyErrorId}` : `${inlineProxyHelpId}-help`}
+                    aria-invalid={!!inlineProxyError}
+                    placeholder="socks5://user:pass@host:port"
+                    onChange={(e) => {
+                      onInlineProxyChange(e.target.value);
+                      if (e.target.value) u("proxy_id", null);
+                    }}
+                  />
+                </label>
+                <span id={`${inlineProxyHelpId}-help`} className="muted small">
+                  One proxy only. Supports SOCKS5, HTTP, HTTPS, host:port, and the existing bulk-import formats.
+                </span>
+                {inlineProxyError && (
+                  <span id={inlineProxyErrorId} className="inline-proxy-error" role="alert">
+                    {inlineProxyError}
+                  </span>
+                )}
+              </div>
+            </details>
+          )}
         </div>
 
         {/* ----- col 2: locale + noise ----- */}
@@ -2594,9 +2708,9 @@ function InlineEditor({
         </div>
       </div>
       <div className="ie-foot">
-        <button className="btn-ghost" onClick={onCancel}>Cancel</button>
-        <button className="btn-primary" onClick={onSave}>
-          <ShardMini /> {f.id ? "Save changes" : "Create profile"}
+        <button className="btn-ghost" onClick={onCancel} disabled={saving}>Cancel</button>
+        <button className="btn-primary" onClick={onSave} disabled={saving} aria-busy={saving}>
+          <ShardMini /> {saving ? "Saving…" : f.id ? "Save changes" : "Create profile"}
         </button>
       </div>
     </div>
@@ -5482,12 +5596,13 @@ function SettingsView() {
   const shellQuote = (value: string) => `'${value.replace(/'/g, HOST_OS === "Windows" ? "''" : "'\\''")}'`;
   const copyMcpInstall = async () => {
     if (!mcpPath) return;
+    const installCommand = mcpStatus?.lockfile_present ? "npm ci" : "npm install";
     const command = HOST_OS === "Windows"
-      ? `Set-Location -LiteralPath '${mcpPath.replace(/'/g, "''")}'; $env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD='1'; $env:PATCHRIGHT_SKIP_BROWSER_DOWNLOAD='1'; npm install`
-      : `cd '${mcpPath.replace(/'/g, "'\\''")}' && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 PATCHRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install`;
+      ? `Set-Location -LiteralPath '${mcpPath.replace(/'/g, "''")}'; $env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD='1'; $env:PATCHRIGHT_SKIP_BROWSER_DOWNLOAD='1'; ${installCommand}`
+      : `cd '${mcpPath.replace(/'/g, "'\\''")}' && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 PATCHRIGHT_SKIP_BROWSER_DOWNLOAD=1 ${installCommand}`;
     try {
       await clip.write(command);
-      toast.ok("Copied dependency install command");
+      toast.ok(`Copied ${installCommand} dependency command`);
     } catch (e) { toast.err(safeUiError(e)); }
   };
   const copyMcpConfig = async () => {
@@ -5750,7 +5865,7 @@ function SettingsView() {
           </div>
           <div className={`mcp-readiness-item ${mcpStatus?.dependencies_installed ? "is-ready" : "is-pending"}`}>
             <strong>{mcpStatus?.dependencies_installed ? "✓" : "○"} Dependencies installed</strong>
-            <span>{mcpStatus?.dependencies_installed ? "node_modules ready" : "npm install required"}</span>
+            <span>{mcpStatus?.dependencies_installed ? "node_modules ready" : mcpStatus?.lockfile_present ? "npm ci required" : "Legacy setup: npm install required"}</span>
           </div>
           <div className={`mcp-readiness-item ${mcpStatus?.api_reachable ? "is-ready" : api?.error ? "is-error" : "is-pending"}`}>
             <strong>{mcpStatus?.api_reachable ? "✓" : "○"} API reachable</strong>
@@ -5767,7 +5882,7 @@ function SettingsView() {
               ? <>MCP files are {mcpVersionLabel}; use <strong>Download / repair</strong> to update them for this Launcher.</>
               : mcpFilesDownloaded ? "MCP files are already downloaded; no second download is needed." : "Download the server once, or select a previous MCP folder."}
           </li>
-          <li>{mcpStatus?.dependencies_installed ? "Runtime dependencies are installed." : <>Run <code>npm install</code> inside the downloaded folder.</>}</li>
+          <li>{mcpStatus?.dependencies_installed ? "Runtime dependencies are installed." : mcpStatus?.lockfile_present ? <>Run <code>npm ci</code> inside the downloaded folder.</> : <>Legacy folder without a lockfile: run <code>npm install</code>.</>}</li>
           <li>{mcpStatus?.api_reachable ? "Automation API health check passed." : "Fix or enable the Automation API, then refresh status."}</li>
           <li>Set <code>SHARDX_TOKEN</code> in your user environment, restart your MCP client, then register <code>index.js</code>.</li>
         </ol>

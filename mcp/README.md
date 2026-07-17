@@ -20,10 +20,21 @@ MCP client.
 patchright's own Chromium is never needed — install with the browser
 download skipped to keep `node_modules` small:
 
-```bash
-cd <downloaded>/mcp
-PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 PATCHRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install
+```powershell
+Set-Location -LiteralPath 'C:\path\to\downloaded\mcp'
+$env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD='1'
+$env:PATCHRIGHT_SKIP_BROWSER_DOWNLOAD='1'
+npm ci
 ```
+
+```bash
+cd /path/to/downloaded/mcp
+PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 PATCHRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci
+```
+
+Release archives include `package-lock.json`, so `npm ci` recreates the tested
+dependency graph. Use `npm install` only for a legacy or custom source folder
+that does not contain a lockfile.
 
 ### 2. Register with your MCP client (stdio)
 

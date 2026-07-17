@@ -99,6 +99,7 @@ async fn automation_api_reachable() -> bool {
 fn mcp_status_value(
     path: Option<String>,
     files_downloaded: bool,
+    lockfile_present: bool,
     version: Option<String>,
     version_current: bool,
     dependencies_installed: bool,
@@ -138,7 +139,12 @@ fn mcp_status_value(
     } else if !dependencies_installed {
         (
             "dependencies_missing",
-            "MCP files are downloaded; run npm install in the selected folder.".to_string(),
+            if lockfile_present {
+                "MCP files are downloaded; run npm ci in the selected folder."
+            } else {
+                "This legacy MCP folder has no package-lock.json; run npm install in the selected folder."
+            }
+            .to_string(),
         )
     } else {
         (
@@ -152,6 +158,7 @@ fn mcp_status_value(
         // Keep `installed` for compatibility with the v0.1.11 UI/API shape.
         "installed": files_downloaded,
         "files_downloaded": files_downloaded,
+        "lockfile_present": lockfile_present,
         "version": version,
         "version_current": version_current,
         "required_version": env!("CARGO_PKG_VERSION"),
@@ -173,6 +180,7 @@ mod mcp_status_tests {
         let status = mcp_status_value(
             Some("C:\\MCP\\ShardBrowser\\mcp".into()),
             true,
+            true,
             Some("0.1.11".into()),
             false,
             true,
@@ -184,7 +192,38 @@ mod mcp_status_tests {
         assert_eq!(status["state"].as_str(), Some("update_available"));
         assert_eq!(status["ready"].as_bool(), Some(false));
         assert_eq!(status["version"].as_str(), Some("0.1.11"));
+        assert_eq!(status["lockfile_present"].as_bool(), Some(true));
         assert_eq!(status["required_version"].as_str(), Some(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn missing_dependencies_use_lockfile_aware_install_guidance() {
+        let locked = mcp_status_value(
+            Some("C:\\MCP\\ShardBrowser\\mcp".into()),
+            true,
+            true,
+            Some(env!("CARGO_PKG_VERSION").into()),
+            true,
+            false,
+            true,
+            false,
+            false,
+        );
+        let legacy = mcp_status_value(
+            Some("C:\\MCP\\Legacy\\mcp".into()),
+            true,
+            false,
+            Some(env!("CARGO_PKG_VERSION").into()),
+            true,
+            false,
+            true,
+            false,
+            false,
+        );
+
+        assert_eq!(locked["state"].as_str(), Some("dependencies_missing"));
+        assert!(locked["message"].as_str().unwrap().contains("npm ci"));
+        assert!(legacy["message"].as_str().unwrap().contains("npm install"));
     }
 
     #[test]
@@ -235,11 +274,13 @@ async fn mcp_status() -> Result<Value, String> {
     if let Some(path) = resolved {
         let version = mcp_setup::package_version(&path);
         let version_current = version.as_deref() == Some(env!("CARGO_PKG_VERSION"));
+        let lockfile_present = path.join("package-lock.json").is_file();
         let dependencies_installed = mcp_setup::dependencies_installed(&path);
         let path = path.display().to_string();
         return Ok(mcp_status_value(
             Some(path),
             true,
+            lockfile_present,
             version,
             version_current,
             dependencies_installed,
@@ -252,6 +293,7 @@ async fn mcp_status() -> Result<Value, String> {
     let missing_saved_path = saved_path.is_some();
     Ok(mcp_status_value(
         saved_path,
+        false,
         false,
         None,
         false,
