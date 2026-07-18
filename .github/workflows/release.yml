@@ -33,6 +33,7 @@ jobs:
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
+      public_release: ${{ steps.version.outputs.public_release }}
 
     steps:
       - name: Checkout
@@ -42,6 +43,31 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 20
+
+      - name: Set up Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Verify updater signing key matches the shipped public key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ] || [ -z "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ]; then
+            echo "Tauri updater artifacts require TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD repository secrets." >&2
+            exit 1
+          fi
+          fixture="$RUNNER_TEMP/shardx-updater-key-check.bin"
+          printf 'ShardX updater signing key check\n' > "$fixture"
+          npx tauri signer sign "$fixture"
+          test -s "$fixture.sig"
+          SHARDX_UPDATER_TEST_ARTIFACT="$fixture" \
+          SHARDX_UPDATER_TEST_SIGNATURE="$fixture.sig" \
+            cargo test --quiet --manifest-path src-tauri/Cargo.toml \
+              --lib updater_private_key_matches_shipped_public_key -- --ignored
+          rm -f "$fixture" "$fixture.sig"
 
       - name: Validate requested version
         id: version
@@ -77,6 +103,11 @@ jobs:
 
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.publish_release }}" = "true" ]; then
+            echo "public_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "public_release=false" >> "$GITHUB_OUTPUT"
+          fi
 
   build:
     needs: validate
@@ -141,6 +172,17 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Validate Tauri updater signing secrets
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ] || [ -z "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ]; then
+            echo "Tauri updater artifacts require TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD repository secrets." >&2
+            exit 1
+          fi
+
       - name: Validate Windows signing certificate
         if: runner.os == 'Windows'
         id: windows_signing
@@ -148,13 +190,20 @@ jobs:
         env:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          PUBLIC_RELEASE: ${{ needs.validate.outputs.public_release }}
+          EXPECTED_WINDOWS_CERTIFICATE_SUBJECT: ${{ vars.EXPECTED_WINDOWS_CERTIFICATE_SUBJECT }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE) -or
               [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) {
-            throw "Public Windows builds require WINDOWS_CERTIFICATE and WINDOWS_CERTIFICATE_PASSWORD repository secrets."
+            throw "Windows builds require WINDOWS_CERTIFICATE and WINDOWS_CERTIFICATE_PASSWORD repository secrets."
           }
 
           $pfxPath = Join-Path $env:RUNNER_TEMP "shardx-authenticode.pfx"
+          $configPath = Join-Path $env:RUNNER_TEMP "tauri.windows-signing.conf.json"
+          $importedCertificatesPath = Join-Path $env:RUNNER_TEMP "shardx-imported-certificate-thumbprints.txt"
+          "pfx=$pfxPath" >> $env:GITHUB_OUTPUT
+          "config=$configPath" >> $env:GITHUB_OUTPUT
+          "imported_certificates=$importedCertificatesPath" >> $env:GITHUB_OUTPUT
           try {
             [IO.File]::WriteAllBytes(
               $pfxPath,
@@ -165,13 +214,27 @@ jobs:
           }
 
           $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
-          $cert = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          $importedCertificates = @(
+            Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          )
+          $importedCertificates.Thumbprint | Set-Content -Path $importedCertificatesPath -Encoding ascii
+          $cert = $importedCertificates |
+            Where-Object { $_.HasPrivateKey } |
+            Where-Object {
+              $_.EnhancedKeyUsageList.ObjectId.Value -contains "1.3.6.1.5.5.7.3.3" -or
+              $_.EnhancedKeyUsageList.FriendlyName -contains "Code Signing"
+            } |
+            Select-Object -First 1
 
-          if (-not $cert -or -not $cert.HasPrivateKey) {
-            throw "The imported certificate does not contain a private key."
+          if (-not $cert) {
+            throw "The imported PFX does not contain a private Code Signing certificate."
           }
-          if ($cert.NotAfter -le (Get-Date)) {
-            throw "The Windows code-signing certificate is expired."
+          if ($cert.NotAfter -le (Get-Date).AddDays(30)) {
+            throw "The Windows code-signing certificate must be valid for at least 30 more days."
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:EXPECTED_WINDOWS_CERTIFICATE_SUBJECT) -and
+              $cert.Subject -ne $env:EXPECTED_WINDOWS_CERTIFICATE_SUBJECT) {
+            throw "Windows code-signing certificate subject does not match EXPECTED_WINDOWS_CERTIFICATE_SUBJECT."
           }
           $codeSigningEku = $cert.EnhancedKeyUsageList |
             Where-Object {
@@ -183,14 +246,23 @@ jobs:
           }
 
           $internalSelfSigned = $cert.Subject -eq $cert.Issuer
-          $cerPath = ""
-          $trustedRootThumbprint = ""
-          $trustedPublisherThumbprint = ""
           if ($internalSelfSigned) {
+            if ($env:PUBLIC_RELEASE -eq "true") {
+              throw "Public releases must not use a self-signed Windows code-signing certificate."
+            }
             Write-Host "Using self-signed certificate; signatures will be verified by signer thumbprint."
           }
+          if ($env:PUBLIC_RELEASE -eq "true") {
+            $chain = [Security.Cryptography.X509Certificates.X509Chain]::new()
+            $chain.ChainPolicy.RevocationMode = [Security.Cryptography.X509Certificates.X509RevocationMode]::Online
+            $chain.ChainPolicy.RevocationFlag = [Security.Cryptography.X509Certificates.X509RevocationFlag]::EntireChain
+            $chain.ChainPolicy.VerificationFlags = [Security.Cryptography.X509Certificates.X509VerificationFlags]::NoFlag
+            if (-not $chain.Build($cert)) {
+              $errors = ($chain.ChainStatus | ForEach-Object { $_.StatusInformation.Trim() }) -join "; "
+              throw "Public Windows code-signing certificate chain is not trusted: $errors"
+            }
+          }
 
-          $configPath = Join-Path $env:RUNNER_TEMP "tauri.windows-signing.conf.json"
           @{
             bundle = @{
               windows = @{
@@ -201,21 +273,22 @@ jobs:
             }
           } | ConvertTo-Json -Depth 4 | Set-Content -Path $configPath -Encoding utf8NoBOM
 
-          "config=$configPath" >> $env:GITHUB_OUTPUT
-          "pfx=$pfxPath" >> $env:GITHUB_OUTPUT
-          "cer=$cerPath" >> $env:GITHUB_OUTPUT
           "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
           "internal_self_signed=$($internalSelfSigned.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
-          "trusted_root_thumbprint=$trustedRootThumbprint" >> $env:GITHUB_OUTPUT
-          "trusted_publisher_thumbprint=$trustedPublisherThumbprint" >> $env:GITHUB_OUTPUT
 
       - name: Build signed Windows Tauri bundle
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx tauri build --target ${{ matrix.target }} --config "${{ steps.windows_signing.outputs.config }}"
 
       - name: Build non-Windows Tauri bundle
         if: runner.os != 'Windows'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx tauri build --target ${{ matrix.target }}
 
       - name: Collect bundles
@@ -226,7 +299,8 @@ jobs:
             -type f \
             \( -name '*.dmg' -o -name '*.app.tar.gz' \
                -o -name '*.msi' -o -name '*.exe' \
-               -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) \
+               -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
+               -o -name '*.sig' \) \
             -exec cp -v {} staging/ \;
           ls -la staging/
 
@@ -263,21 +337,44 @@ jobs:
         env:
           INTERNAL_SELF_SIGNED: ${{ steps.windows_signing.outputs.internal_self_signed }}
           SIGNING_CERT_THUMBPRINT: ${{ steps.windows_signing.outputs.thumbprint }}
+          PUBLIC_RELEASE: ${{ needs.validate.outputs.public_release }}
         run: |
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Where-Object { $_.FullName -match "\\x64\\signtool\.exe$" } |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) {
+            throw "signtool.exe was not found in the Windows SDK."
+          }
+
           $files = Get-ChildItem staging -File |
             Where-Object { $_.Extension -in @(".exe", ".msi") }
           if (-not $files) {
             throw "No Windows executable or installer was collected."
           }
+          $expectedSigner = $null
           foreach ($file in $files) {
             $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
             if (-not $signature.SignerCertificate) {
               throw "No Authenticode signer found on $($file.Name)."
             }
+            if (-not $expectedSigner) {
+              $expectedSigner = $signature.SignerCertificate.Thumbprint
+            }
+            if ($signature.SignerCertificate.Thumbprint -ne $expectedSigner -or
+                $signature.SignerCertificate.Thumbprint -ne $env:SIGNING_CERT_THUMBPRINT) {
+              throw "Unexpected Authenticode signer on $($file.Name)."
+            }
+            if (-not $signature.TimeStamperCertificate) {
+              throw "No Authenticode timestamp found on $($file.Name)."
+            }
+            & $signtool verify /pa /all /v $file.FullName
+            if ($LASTEXITCODE -ne 0 -and $env:INTERNAL_SELF_SIGNED -ne "true") {
+              throw "signtool verification failed for $($file.Name)."
+            }
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "signtool reported the expected untrusted chain for internal self-signed $($file.Name)."
+            }
             if ($env:INTERNAL_SELF_SIGNED -eq "true") {
-              if ($signature.SignerCertificate.Thumbprint -ne $env:SIGNING_CERT_THUMBPRINT) {
-                throw "Unexpected Authenticode signer on $($file.Name)."
-              }
               if ($signature.Status -in @("HashMismatch", "NotSigned")) {
                 throw "Invalid internal Authenticode signature on $($file.Name): $($signature.Status)"
               }
@@ -287,6 +384,10 @@ jobs:
             if ($signature.Status -ne "Valid") {
               throw "Invalid Authenticode signature on $($file.Name): $($signature.Status)"
             }
+            if ($env:PUBLIC_RELEASE -ne "true") {
+              Write-Host "Trusted Authenticode signature on internal build: $($file.Name)"
+              continue
+            }
             Write-Host "Valid Authenticode signature: $($file.Name)"
           }
 
@@ -295,22 +396,17 @@ jobs:
         shell: pwsh
         run: |
           $pfx = "${{ steps.windows_signing.outputs.pfx }}"
-          $cer = "${{ steps.windows_signing.outputs.cer }}"
+          $importedCertificates = "${{ steps.windows_signing.outputs.imported_certificates }}"
           $config = "${{ steps.windows_signing.outputs.config }}"
-          $thumbprint = "${{ steps.windows_signing.outputs.thumbprint }}"
-          $trustedRootThumbprint = "${{ steps.windows_signing.outputs.trusted_root_thumbprint }}"
-          $trustedPublisherThumbprint = "${{ steps.windows_signing.outputs.trusted_publisher_thumbprint }}"
           if ($pfx) { Remove-Item -LiteralPath $pfx -Force -ErrorAction SilentlyContinue }
-          if ($cer) { Remove-Item -LiteralPath $cer -Force -ErrorAction SilentlyContinue }
           if ($config) { Remove-Item -LiteralPath $config -Force -ErrorAction SilentlyContinue }
-          if ($thumbprint) {
-            Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumbprint" -Force -ErrorAction SilentlyContinue
-          }
-          if ($trustedRootThumbprint) {
-            Remove-Item -LiteralPath "Cert:\CurrentUser\Root\$trustedRootThumbprint" -Force -ErrorAction SilentlyContinue
-          }
-          if ($trustedPublisherThumbprint) {
-            Remove-Item -LiteralPath "Cert:\CurrentUser\TrustedPublisher\$trustedPublisherThumbprint" -Force -ErrorAction SilentlyContinue
+          if ($importedCertificates -and (Test-Path -LiteralPath $importedCertificates)) {
+            foreach ($thumbprint in Get-Content -LiteralPath $importedCertificates) {
+              if ($thumbprint) {
+                Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumbprint" -Force -ErrorAction SilentlyContinue
+              }
+            }
+            Remove-Item -LiteralPath $importedCertificates -Force -ErrorAction SilentlyContinue
           }
 
       - name: Upload signed/internal build artifacts
@@ -364,6 +460,9 @@ jobs:
             exit 1
           fi
 
+      - name: Generate static updater manifest
+        run: node scripts/generate-updater-manifest.mjs --dist dist --tag "${{ needs.validate.outputs.tag }}" --repo "${{ github.repository }}"
+
       - name: Generate SHA-256 checksums
         run: |
           cd dist
@@ -378,6 +477,29 @@ jobs:
       - name: List collected release assets
         run: ls -la dist/
 
+      - name: Write release notes
+        run: |
+          cat > release-notes.md <<'EOF'
+          Custom integration release for [anhtahaylove/ShardBrowser](https://github.com/anhtahaylove/ShardBrowser).
+
+          ## Highlights
+
+          * Signed Tauri in-app updater with explicit download/install consent, progress, retry, and invalid-signature rejection.
+          * Static updater manifest (`latest.json`) and per-platform updater signatures for Windows, macOS, and Linux.
+          * Playwright regression coverage for startup, responsive profile actions, Settings/MCP, keyboard accessibility, and updater states.
+          * Public Windows releases require a CA-issued trusted Authenticode certificate, consistent publisher, and timestamp.
+          * Custom font folders remain gated because the bundled browser engine has not proven coherent font enumeration, rendering, metrics, canvas, and profile isolation.
+
+          ## Install
+
+          * **Windows** — the installer and portable executable passed Authenticode signer/thumbprint, timestamp, `Get-AuthenticodeSignature`, and `signtool /pa /all /v` checks with a trusted public-release certificate.
+          * **macOS** — Apple Silicon .dmg; this build is not notarized because the fork does not currently have an Apple Developer ID.
+          * **Linux** — .AppImage or .deb.
+          * **MCP** — ShardX-MCP.tar.gz contains the matching MCP source and Codex helpers. Launcher Settings downloads this asset from this exact fork release.
+
+          Verify downloaded assets with SHA256SUMS.txt, latest.json signatures, or the GitHub build-provenance attestation.
+          EOF
+
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -388,22 +510,5 @@ jobs:
           prerelease: false
           fail_on_unmatched_files: true
           generate_release_notes: true
-          body: |
-            Custom integration release for [anhtahaylove/ShardBrowser](https://github.com/anhtahaylove/ShardBrowser).
-
-            ## Highlights
-
-            * Reproducible MCP setup with the packaged lockfile, `npm ci`, and MCP tests in CI.
-            * Smaller MCP profile summaries that omit free-form notes.
-            * Vite 6.4.3 with a clean production and development dependency audit.
-            * Create Profile can parse, save, and bind one new proxy inline, with rollback on partial failure.
-
-            ## Install
-
-            * **Windows** — the installer and portable executable are Authenticode-signed and timestamped. This custom fork currently uses an internal self-signed certificate, so Windows may show an unknown-publisher prompt; verify the signer, SHA256SUMS.txt, and GitHub build-provenance attestation.
-            * **macOS** — Apple Silicon .dmg; this build is not notarized because the fork does not currently have an Apple Developer ID.
-            * **Linux** — .AppImage or .deb.
-            * **MCP** — ShardX-MCP.tar.gz contains the matching MCP source and Codex helpers. Launcher Settings downloads this asset from this exact fork release.
-
-            Verify downloaded assets with SHA256SUMS.txt or the GitHub build-provenance attestation.
+          body_path: release-notes.md
           files: dist/*

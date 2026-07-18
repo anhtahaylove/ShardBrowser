@@ -326,9 +326,7 @@ textarea { resize: vertical; min-height: 60px; line-height: 1.5; }
   box-shadow: 0 1px 4px #8b5cf660;
 }
 
-/* Sidebar footer: app version + GitHub update-check.  Amber-tinted
-   variant when a newer release is published; whole pill is clickable
-   in that state and opens the Release URL in the default browser. */
+/* Sidebar footer: version and signed updater status. */
 .version-pill {
   display: flex; align-items: center; gap: 10px;
   width: 100%;
@@ -338,11 +336,10 @@ textarea { resize: vertical; min-height: 60px; line-height: 1.5; }
   border: 1px solid transparent;
   color: var(--tx-1);
   text-align: left;
-  cursor: default;
+  cursor: pointer;
   transition: background .12s ease, border-color .12s ease;
 }
 .version-pill:hover:not(:disabled)  { background: var(--bg-2); }
-.version-pill:disabled              { cursor: default; opacity: 0.85; }
 .version-pill .shard-mini           { color: var(--accent); flex: 0 0 auto; }
 .version-pill-text                  { display: flex; flex-direction: column; min-width: 0; }
 .version-pill-current               { font-size: 12px; font-weight: 500; }
@@ -357,6 +354,55 @@ textarea { resize: vertical; min-height: 60px; line-height: 1.5; }
 .version-pill.update-available:hover           { background: #f59e0b26; border-color: #f59e0b88; }
 .version-pill.update-available .shard-mini     { color: var(--warn); }
 .version-pill.update-available .version-pill-sub { color: var(--warn); font-weight: 500; }
+.version-pill.update-error { border-color: color-mix(in srgb, var(--err) 38%, transparent); }
+.version-pill.update-error .version-pill-sub { color: var(--err); }
+
+.update-dialog { width: min(620px, 92vw); }
+.update-dialog-body { gap: 14px; }
+.update-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--bd-1);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+}
+.update-summary > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.update-summary span { color: var(--tx-3); font-size: 11px; }
+.update-summary strong { color: var(--tx-1); font-size: 13px; overflow-wrap: anywhere; }
+.update-arrow { color: var(--tx-4); font-size: 16px; }
+.update-state { display: flex; flex-direction: column; gap: 5px; color: var(--tx-2); }
+.update-state strong { color: var(--tx-1); font-size: 13px; }
+.update-state span { color: var(--err); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; white-space: normal; }
+.update-state-available strong,
+.update-state-ready strong { color: var(--warn); }
+.update-progress-wrap { display: flex; flex-direction: column; gap: 7px; }
+.update-progress-meta { display: flex; justify-content: space-between; gap: 12px; color: var(--tx-3); font-size: 11px; }
+.update-progress-indeterminate .runtime-progress-fill {
+  width: 35%;
+  animation: update-progress-slide 1.2s ease-in-out infinite;
+}
+@keyframes update-progress-slide {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(310%); }
+}
+.update-notes {
+  border: 1px solid var(--bd-1);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  padding: 9px 11px;
+}
+.update-notes summary { cursor: pointer; color: var(--tx-2); font-size: 12px; font-weight: 600; }
+.update-notes p { margin: 9px 0 1px; color: var(--tx-3); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.update-consent-note { margin: 0; }
+.update-dialog-actions { flex-wrap: wrap; }
+
+@media (max-width: 560px) {
+  .update-summary { grid-template-columns: 1fr; gap: 8px; }
+  .update-arrow { transform: rotate(90deg); justify-self: start; }
+}
 
 /* ===== main ===== */
 
@@ -750,10 +796,10 @@ textarea { resize: vertical; min-height: 60px; line-height: 1.5; }
   grid-template-columns:
     4px       /* shard strip */
     28px      /* checkbox */
-    minmax(140px, 1.2fr)  /* name */
+    minmax(180px, 1.6fr)  /* name */
     100px                  /* status */
-    minmax(160px, 1.4fr)  /* proxy */
-    minmax(120px, 1.1fr)  /* notes */
+    minmax(150px, 1.2fr)  /* proxy */
+    minmax(120px, 1fr)    /* notes */
     minmax(70px, 90px)    /* time (cumulative uptime) */
     minmax(110px, 130px)  /* last run */
     minmax(340px, auto);  /* row actions (Start + icons + CDP when ready) */
@@ -1831,16 +1877,14 @@ button.status-pill.status-link:active { transform: translateY(1px); }
   --accent: #8b5cf6;
   position: relative;
   background: var(--bg-1);
-  border: 1px solid var(--bd-1);
-  border-left: 3px solid var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--bd-1));
   border-radius: var(--radius);
   padding: 12px 14px;
   display: flex; flex-direction: column; gap: 6px;
   transition: border-color .12s, background .12s;
 }
 .lib-card:hover {
-  border-color: var(--bd-2);
-  border-left-color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 68%, var(--bd-2));
   background: var(--bg-2);
 }
 .lib-card-head {
@@ -2001,7 +2045,14 @@ button.status-pill.status-link:active { transform: translateY(1px); }
 .runtime-gate-copy { margin: 8px auto 22px; max-width: 390px; line-height: 1.55; }
 .runtime-progress-label { margin-bottom: 7px; text-align: left; overflow-wrap: anywhere; }
 .runtime-progress { height: 8px; overflow: hidden; border-radius: 999px; background: var(--bg-3); }
-.runtime-progress-fill { height: 100%; border-radius: inherit; background: var(--grad-shard); transition: width .1s linear; }
+.runtime-progress-fill {
+  width: 100%; height: 100%;
+  border-radius: inherit;
+  background: var(--grad-shard);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform .1s linear;
+}
 .runtime-checking { color: var(--tx-2); font-size: 12.5px; }
 .runtime-error { display: flex; flex-direction: column; align-items: center; gap: 10px; color: var(--err); }
 .runtime-error span { width: 100%; color: var(--tx-2); line-height: 1.45; overflow-wrap: anywhere; }
@@ -2206,11 +2257,11 @@ button.status-pill.status-link:active { transform: translateY(1px); }
   pointer-events: none;
 }
 .toast {
+  --toast-accent: var(--accent);
   pointer-events: auto;
   display: flex; align-items: center; gap: 14px;
-  background: var(--bg-2);
-  border: 1px solid var(--bd-2);
-  border-left: 4px solid var(--accent);
+  background: color-mix(in srgb, var(--toast-accent) 5%, var(--bg-2));
+  border: 1px solid color-mix(in srgb, var(--toast-accent) 48%, var(--bd-2));
   padding: 16px 22px;
   font-size: 14.5px;
   font-weight: 500;
@@ -2230,15 +2281,15 @@ button.status-pill.status-link:active { transform: translateY(1px); }
   border-radius: 50%;
   font-size: 14px;
   font-weight: 700;
-  background: var(--accent);
+  background: var(--toast-accent);
   color: #fff;
   box-shadow: 0 0 12px #8b5cf640;
 }
-.toast-ok  { border-left-color: var(--ok); }
+.toast-ok  { --toast-accent: var(--ok); }
 .toast-ok .toast-icon { background: var(--ok); box-shadow: 0 0 14px #4ade8066; }
-.toast-err { border-left-color: var(--err); }
+.toast-err { --toast-accent: var(--err); }
 .toast-err .toast-icon { background: var(--err); box-shadow: 0 0 14px #fb718566; }
-.toast-info { border-left-color: var(--accent); }
+.toast-info { --toast-accent: var(--accent); }
 
 @keyframes toastIn {
   from { transform: translateX(40px) scale(0.96); opacity: 0; }
@@ -2316,10 +2367,13 @@ button.status-pill.status-link:active { transform: translateY(1px); }
   overflow: hidden;
 }
 .ps-bar-fill {
+  width: 100%;
   height: 100%;
   background: linear-gradient(90deg, var(--accent), var(--accent-hi, #a78bfa));
   border-radius: 999px;
-  transition: width .25s ease;
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform .25s ease;
 }
 
 /* Stack each card field's label above its control (these pages aren't

@@ -13,6 +13,7 @@ mod psapi;
 mod runtime;
 mod settings;
 mod store;
+mod updater;
 
 use serde_json::Value;
 
@@ -1528,6 +1529,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(updater::PendingUpdate::default())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let to_tray = settings::load().map(|s| s.minimize_to_tray).unwrap_or(true);
@@ -1609,7 +1612,10 @@ pub fn run() {
             codex_mcp_status,
             runtime::runtime_status,
             runtime::runtime_install,
-            runtime::launcher_update_check,
+            updater::launcher_update_check,
+            updater::launcher_update_download,
+            updater::launcher_update_install,
+            updater::launcher_update_restart,
         ])
         .setup(|app| {
             let _ = APP_HANDLE.set(app.handle().clone());

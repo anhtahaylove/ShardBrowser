@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -1270,6 +1270,7 @@ function BrowsersView() {
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [fingerprints, setFingerprints] = useState<FingerprintEntry[]>([]);
   const [quickEdit, setQuickEdit] = useState<{ kind: "proxy" | "notes"; profile: ProfileMeta } | null>(null);
+  const reloadInFlight = useRef<Promise<void> | null>(null);
   // Empty folders persist in localStorage until a profile lands in them.
   const [folderRegistry, setFolderRegistry] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem("shardx-folders") || "[]"); }
@@ -1293,22 +1294,28 @@ function BrowsersView() {
     });
   const ctx = useContextMenu();
 
-  const reload = async () => {
-    try {
-      const [nextProfiles, nextProxies] = await Promise.all([
-        invoke<ProfileMeta[]>("profile_list"),
-        invoke<ProxyEntry[]>("proxy_list"),
-      ]);
-      setProfiles(nextProfiles);
-      setProxies(nextProxies);
-      setLoadError(null);
-    } catch (e) {
-      const message = safeUiError(e);
-      setLoadError(message);
-      toast.err(message);
-    } finally {
-      setLoaded(true);
-    }
+  const reload = () => {
+    if (reloadInFlight.current) return reloadInFlight.current;
+    const request = (async () => {
+      try {
+        const [nextProfiles, nextProxies] = await Promise.all([
+          invoke<ProfileMeta[]>("profile_list"),
+          invoke<ProxyEntry[]>("proxy_list"),
+        ]);
+        setProfiles(nextProfiles);
+        setProxies(nextProxies);
+        setLoadError(null);
+      } catch (e) {
+        const message = safeUiError(e);
+        setLoadError(message);
+        toast.err(message);
+      } finally {
+        setLoaded(true);
+        reloadInFlight.current = null;
+      }
+    })();
+    reloadInFlight.current = request;
+    return request;
   };
   const retryLoad = () => {
     setLoaded(false);
@@ -2663,49 +2670,6 @@ function InlineEditor({
             <span className="muted small">Absolute unpacked extension directories; Launcher passes them through load-extension safely.</span>
           </label>
         </div>
-        <div className="ie-section">
-          <div className="ie-section-title">Custom fonts</div>
-          <div className="form-row">
-            <label>
-              <span className="lbl">Mode</span>
-              <CSSelect
-                value={f.custom_font_mode}
-                onChange={(v) => u("custom_font_mode", v as CustomFontMode)}
-                options={[
-                  { value: "off", label: "Off" },
-                  { value: "append", label: "Append to profile fonts" },
-                  { value: "replace", label: "Replace profile fonts" },
-                ]}
-              />
-            </label>
-            <NumField
-              label="Random fonts"
-              value={f.custom_font_random_count}
-              onChange={(v) => u("custom_font_random_count", Math.max(0, Math.min(100, Math.round(v))))}
-            />
-          </div>
-          <label>
-            <span className="lbl">Font folders</span>
-            <textarea
-              rows={3}
-              className="mono"
-              value={f.custom_font_dirs.join("\n")}
-              onChange={(e) => u("custom_font_dirs", linesToList(e.target.value))}
-              placeholder={"C:\\path\\to\\fonts"}
-            />
-          </label>
-          <label>
-            <span className="lbl">Font names / ids</span>
-            <textarea
-              rows={3}
-              className="mono"
-              value={f.custom_font_names.join("\n")}
-              onChange={(e) => u("custom_font_names", linesToList(e.target.value))}
-              placeholder={"Inter\nRoboto"}
-            />
-            <span className="muted small">Saved per profile and emitted as a ShardX custom-font manifest at launch.</span>
-          </label>
-        </div>
       </div>
       <div className="ie-foot">
         <button className="btn-ghost" onClick={onCancel} disabled={saving}>Cancel</button>
@@ -3092,6 +3056,7 @@ function ProxiesView() {
   const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null);
   const [profiles, setProfiles] = useState<ProfileMeta[]>([]);
   const [search, setSearch] = useState("");
+  const reloadInFlight = useRef<Promise<void> | null>(null);
   const ctx = useContextMenu();
 
   // Search filter: matches name / host / port / country tag / notes / username
@@ -3145,23 +3110,29 @@ function ProxiesView() {
     } catch (e) { toast.err(String(e)); }
   };
 
-  const reload = async () => {
-    try {
-      const [nextProxies, nextProfiles] = await Promise.all([
-        invoke<ProxyEntry[]>("proxy_list"),
-        // Profile list powers the per-proxy bound-count column.
-        invoke<ProfileMeta[]>("profile_list"),
-      ]);
-      setProxies(nextProxies);
-      setProfiles(nextProfiles);
-      setLoadError(null);
-    } catch (e) {
-      const message = safeUiError(e);
-      setLoadError(message);
-      toast.err(message);
-    } finally {
-      setLoaded(true);
-    }
+  const reload = () => {
+    if (reloadInFlight.current) return reloadInFlight.current;
+    const request = (async () => {
+      try {
+        const [nextProxies, nextProfiles] = await Promise.all([
+          invoke<ProxyEntry[]>("proxy_list"),
+          // Profile list powers the per-proxy bound-count column.
+          invoke<ProfileMeta[]>("profile_list"),
+        ]);
+        setProxies(nextProxies);
+        setProfiles(nextProfiles);
+        setLoadError(null);
+      } catch (e) {
+        const message = safeUiError(e);
+        setLoadError(message);
+        toast.err(message);
+      } finally {
+        setLoaded(true);
+        reloadInFlight.current = null;
+      }
+    })();
+    reloadInFlight.current = request;
+    return request;
   };
   const retryLoad = () => {
     setLoaded(false);
@@ -4390,7 +4361,10 @@ function FirstRunGate({ children }: { children: ReactNode }) {
               aria-valuemax={100}
               aria-valuenow={Math.max(0, Math.min(100, prog.percent))}
             >
-              <div className="runtime-progress-fill" style={{ width: `${prog.percent}%` }} />
+              <div
+                className="runtime-progress-fill"
+                style={{ transform: `scaleX(${Math.max(0, Math.min(100, prog.percent)) / 100})` }}
+              />
             </div>
           </>
         )}
@@ -4407,53 +4381,207 @@ function FirstRunGate({ children }: { children: ReactNode }) {
   );
 }
 
-/// Sidebar version pill; tints amber when a newer GitHub Release exists.
+/// Sidebar status and consent surface for signed Tauri updates.
 type RtUpdate = {
   current: string;
   latest: string | null;
   update_available: boolean;
-  release_url: string | null;
+  release_url: string;
+  notes: string | null;
+  pub_date: string | null;
 };
+
+type UpdatePhase = "checking" | "up_to_date" | "available" | "downloading" | "ready" | "installing" | "error";
+type UpdateDownloadEvent =
+  | { event: "started"; data: { content_length: number | null } }
+  | { event: "progress"; data: { chunk_length: number } }
+  | { event: "finished" };
 
 function VersionPill() {
   const [info, setInfo] = useState<RtUpdate | null>(null);
-  useEffect(() => {
-    invoke<RtUpdate>("launcher_update_check").then(setInfo).catch(() => {});
-  }, []);
-  const open = () => {
-    if (info?.release_url) openUrl(info.release_url).catch(() => {});
+  const [phase, setPhase] = useState<UpdatePhase>("checking");
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState({ received: 0, total: null as number | null });
+
+  const check = () => {
+    setPhase("checking");
+    setError(null);
+    setProgress({ received: 0, total: null });
+    invoke<RtUpdate>("launcher_update_check")
+      .then((next) => {
+        setInfo(next);
+        setPhase(next.update_available ? "available" : "up_to_date");
+      })
+      .catch((e) => {
+        setError(safeUiError(e));
+        setPhase("error");
+      });
   };
-  const clickable = !!info?.release_url;
-  return (
-    <button
-      type="button"
-      className={`version-pill ${info?.update_available ? "update-available" : ""}`}
-      onClick={open}
-      disabled={!clickable}
-      title={
-        info?.update_available
-          ? `New release ${info.latest} is available — click to open the Releases page.`
-          : info
-          ? `Running ${info.current}${info.latest ? `, GitHub: ${info.latest}` : ""}`
-          : "Checking for updates…"
+
+  useEffect(() => {
+    check();
+  }, []);
+
+  const download = async () => {
+    setPhase("downloading");
+    setError(null);
+    setProgress({ received: 0, total: null });
+    const events = new Channel<UpdateDownloadEvent>();
+    events.onmessage = (event) => {
+      if (event.event === "started") {
+        setProgress({ received: 0, total: event.data.content_length });
+      } else if (event.event === "progress") {
+        setProgress((current) => ({ ...current, received: current.received + event.data.chunk_length }));
       }
-    >
-      <ShardMini />
-      <div className="version-pill-text">
-        <div className="version-pill-current">
-          ShardX Launcher v{info?.current ?? "…"} <span className="version-pill-label">{CUSTOM_BUILD_LABEL}</span>
+    };
+    try {
+      await invoke("launcher_update_download", { onEvent: events });
+      setPhase("ready");
+    } catch (e) {
+      setError(safeUiError(e));
+      setPhase("error");
+    }
+  };
+
+  const install = async () => {
+    setPhase("installing");
+    setError(null);
+    try {
+      await invoke("launcher_update_install");
+      await invoke("launcher_update_restart");
+    } catch (e) {
+      setError(safeUiError(e));
+      setPhase("error");
+    }
+  };
+
+  const busy = phase === "checking" || phase === "downloading" || phase === "installing";
+  const percent = progress.total && progress.total > 0
+    ? Math.min(100, Math.round((progress.received / progress.total) * 100))
+    : null;
+  const fmtBytes = (bytes: number) => {
+    if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+  const statusText = phase === "checking"
+    ? "checking for updates…"
+    : phase === "available"
+    ? `Update available → ${info?.latest}`
+    : phase === "downloading"
+    ? percent === null ? "downloading update…" : `downloading… ${percent}%`
+    : phase === "ready"
+    ? "ready to install"
+    : phase === "installing"
+    ? "installing update…"
+    : phase === "error"
+    ? "update check needs attention"
+    : "up to date";
+
+  return (
+    <>
+      <button
+        type="button"
+        className={`version-pill ${phase === "available" || phase === "ready" ? "update-available" : ""} ${phase === "error" ? "update-error" : ""}`}
+        onClick={() => setPanelOpen(true)}
+        aria-haspopup="dialog"
+        aria-expanded={panelOpen}
+        title={`ShardX Launcher update status: ${statusText}`}
+      >
+        <ShardMini />
+        <div className="version-pill-text">
+          <div className="version-pill-current">
+            ShardX Launcher v{info?.current ?? "…"} <span className="version-pill-label">{CUSTOM_BUILD_LABEL}</span>
+          </div>
+          <div className="version-pill-sub" aria-live="polite">{statusText}</div>
         </div>
-        <div className="version-pill-sub">
-          {info === null
-            ? "checking for updates…"
-            : info.update_available
-            ? `Update available → ${info.latest}`
-            : info.latest
-            ? "up to date"
-            : "offline"}
-        </div>
-      </div>
-    </button>
+      </button>
+      {panelOpen && createPortal(
+        <div className="dialog-bg" onClick={() => { if (!busy) setPanelOpen(false); }}>
+          <DialogPanel className="update-dialog" label="ShardX Launcher update" onClose={() => { if (!busy) setPanelOpen(false); }}>
+            <header className="dialog-head">
+              <h2><ShardMini /> Launcher update</h2>
+              <button
+                className="icon-btn"
+                onClick={() => setPanelOpen(false)}
+                aria-label="Close update dialog"
+                disabled={busy}
+              >✕</button>
+            </header>
+            <div className="dialog-body update-dialog-body" aria-busy={busy}>
+              <div className="update-summary">
+                <div>
+                  <span>Installed</span>
+                  <strong>v{info?.current ?? "unknown"}</strong>
+                </div>
+                <span className="update-arrow" aria-hidden>→</span>
+                <div>
+                  <span>{info?.update_available ? "Available" : "Release channel"}</span>
+                  <strong>{info?.latest ? `v${info.latest.replace(/^v/, "")}` : phase === "up_to_date" ? "Current" : "Unavailable"}</strong>
+                </div>
+              </div>
+
+              <div className={`update-state update-state-${phase}`} role={phase === "error" ? "alert" : "status"} aria-live={phase === "error" ? "assertive" : "polite"}>
+                <strong>{
+                  phase === "checking" ? "Checking the signed release channel"
+                  : phase === "available" ? "A signed update is available"
+                  : phase === "downloading" ? "Downloading and verifying signature"
+                  : phase === "ready" ? "Signature verified — ready to install"
+                  : phase === "installing" ? "Installing update"
+                  : phase === "error" ? "Update could not be completed"
+                  : "Launcher is up to date"
+                }</strong>
+                {error && <span>{error}</span>}
+              </div>
+
+              {phase === "downloading" && (
+                <div className="update-progress-wrap">
+                  <div className="update-progress-meta">
+                    <span>{progress.received > 0 ? fmtBytes(progress.received) : "Starting…"}</span>
+                    <span>{progress.total ? `${fmtBytes(progress.total)} total` : "Size pending"}</span>
+                  </div>
+                  <div
+                    className={`runtime-progress ${percent === null ? "update-progress-indeterminate" : ""}`}
+                    role="progressbar"
+                    aria-label="Download Launcher update"
+                    aria-valuemin={0}
+                    aria-valuemax={percent === null ? undefined : 100}
+                    aria-valuenow={percent ?? undefined}
+                  >
+                    <div className="runtime-progress-fill" style={percent === null ? undefined : { transform: `scaleX(${percent / 100})` }} />
+                  </div>
+                </div>
+              )}
+
+              {info?.notes && (
+                <details className="update-notes">
+                  <summary>Release notes</summary>
+                  <p>{info.notes}</p>
+                </details>
+              )}
+
+              <p className="settings-note update-consent-note">
+                Updates are downloaded only after you choose Download. Installation requires a second confirmation and may close or restart ShardX Launcher.
+              </p>
+            </div>
+            <footer className="dialog-foot update-dialog-actions">
+              <button
+                className="btn-ghost"
+                onClick={() => openUrl(info?.release_url ?? "https://github.com/anhtahaylove/ShardBrowser/releases/latest").catch(() => {})}
+                disabled={busy}
+              >Open release page</button>
+              {phase === "available" && <button className="btn-primary" onClick={download}>Download update</button>}
+              {phase === "ready" && <button className="btn-primary" onClick={install}>Install and restart</button>}
+              {(phase === "error" || phase === "up_to_date") && <button className="btn-primary" onClick={check}>{phase === "error" ? "Retry" : "Check again"}</button>}
+              {phase === "checking" && <button className="btn-primary" disabled>Checking…</button>}
+              {phase === "downloading" && <button className="btn-primary" disabled>Downloading…</button>}
+              {phase === "installing" && <button className="btn-primary" disabled>Installing…</button>}
+            </footer>
+          </DialogPanel>
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }
 
@@ -4710,7 +4838,7 @@ function PsResidentialCard() {
                 <div><span className="ps-stat-val">{fmtGB(data.data_spent)}</span><span className="ps-stat-lbl">Used</span></div>
                 <div><span className="ps-stat-val">{fmtGB(data.data)}</span><span className="ps-stat-lbl">Total</span></div>
               </div>
-              <div className="ps-bar"><div className="ps-bar-fill" style={{ width: `${pct}%` }} /></div>
+              <div className="ps-bar"><div className="ps-bar-fill" style={{ transform: `scaleX(${pct / 100})` }} /></div>
               <p className="muted small">{pct}% used.</p>
             </>
           )}
