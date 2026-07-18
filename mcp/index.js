@@ -798,15 +798,13 @@ server.tool(
     platform: z.enum(["Windows", "macOS", "Linux"]).optional(),
     fingerprint: z.any().optional(),
     launch: z.record(z.any()).optional(),
-    custom_fonts: z.record(z.any()).optional(),
   },
-  async ({ name, notes, folder, proxy, proxy_id, platform, fingerprint, launch, custom_fonts }) => {
+  async ({ name, notes, folder, proxy, proxy_id, platform, fingerprint, launch }) => {
     if (!fingerprint) {
       const fp = await api(platform ? `/fingerprint/new/${platform}` : "/fingerprint/new");
       fingerprint = fp.fingerprint;
     }
     if (launch) fingerprint.launch = launch;
-    if (custom_fonts) fingerprint.custom_fonts = custom_fonts;
     const path = folder ? `/folders/${encodeURIComponent(folder)}/profiles` : "/profiles";
     const body = { name, notes, proxy, proxy_id, fingerprint };
     if (folder) delete body.folder; // folder comes from the path
@@ -823,7 +821,6 @@ server.tool(
     proxy: z.string().optional(),
     noise: z.record(z.any()).optional(),
     launch: z.record(z.any()).optional(),
-    custom_fonts: z.record(z.any()).optional(),
     name: z.string().optional(),
     folder: z.string().optional(),
   },

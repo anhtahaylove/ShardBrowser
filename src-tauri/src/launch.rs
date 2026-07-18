@@ -20,14 +20,6 @@ struct LaunchOptions {
     extension_dirs: Vec<PathBuf>,
 }
 
-#[derive(Default)]
-struct CustomFonts {
-    mode: String,
-    dirs: Vec<PathBuf>,
-    names: Vec<String>,
-    random_count: u32,
-}
-
 /// Resolve the ShardX executable from settings, runtime cache, or dev guess.
 pub fn resolve_binary() -> Result<PathBuf> {
     if let Some(p) = settings::load()?.browser_path {
@@ -100,8 +92,9 @@ pub async fn launch_profile(
     raw.remove("_meta");
     let launch_options = parse_launch_options(raw.remove("launch"))
         .context("invalid launch options")?;
-    let custom_fonts = parse_custom_fonts(raw.remove("custom_fonts"))
-        .context("invalid custom font options")?;
+    // Preserve legacy profile data in storage, but do not hand it to the
+    // closed-source engine until the coherence gate in the design note passes.
+    remove_unavailable_custom_fonts(&mut raw);
     resolve_auto_fields(&mut raw, bound_proxy.as_ref()).await;
     let json = serde_json::to_string(&raw).context("serialize profile")?;
 
@@ -226,12 +219,6 @@ pub async fn launch_profile(
         cmd.arg("--headless=new");
     }
 
-    if custom_fonts.is_enabled() {
-        let manifest = write_custom_fonts_manifest(&udd, &custom_fonts)
-            .context("write custom fonts manifest")?;
-        cmd.arg(format!("--shardx-custom-fonts-manifest={}", manifest.display()));
-    }
-
     cmd.stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(target_os = "windows")]
     {
@@ -263,12 +250,6 @@ pub async fn launch_profile(
     Ok(LaunchOutcome { pid, cdp })
 }
 
-impl CustomFonts {
-    fn is_enabled(&self) -> bool {
-        self.mode != "off" && (!self.dirs.is_empty() || !self.names.is_empty())
-    }
-}
-
 fn parse_launch_options(value: Option<Value>) -> Result<LaunchOptions> {
     let Some(value) = value else {
         return Ok(LaunchOptions::default());
@@ -282,32 +263,8 @@ fn parse_launch_options(value: Option<Value>) -> Result<LaunchOptions> {
     })
 }
 
-fn parse_custom_fonts(value: Option<Value>) -> Result<CustomFonts> {
-    let Some(value) = value else {
-        return Ok(CustomFonts {
-            mode: "off".into(),
-            ..CustomFonts::default()
-        });
-    };
-    let obj = value
-        .as_object()
-        .context("`custom_fonts` must be an object")?;
-    let mode_value = obj.get("mode").and_then(|v| v.as_str()).unwrap_or("off");
-    let mode = match mode_value {
-        "off" | "append" | "replace" => mode_value.to_string(),
-        other => anyhow::bail!("custom_fonts.mode `{other}` is not allowed"),
-    };
-    let random_count = obj
-        .get("random_count")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0)
-        .min(100) as u32;
-    Ok(CustomFonts {
-        mode,
-        dirs: parse_dirs(obj.get("dirs"), "custom_fonts.dirs")?,
-        names: parse_string_list(obj.get("names"), "custom_fonts.names", 128)?,
-        random_count,
-    })
+fn remove_unavailable_custom_fonts(raw: &mut serde_json::Map<String, Value>) -> bool {
+    raw.remove("custom_fonts").is_some()
 }
 
 fn parse_launch_args(value: Option<&Value>) -> Result<Vec<String>> {
@@ -417,27 +374,9 @@ fn join_comma_paths(paths: &[PathBuf]) -> String {
         .join(",")
 }
 
-fn write_custom_fonts_manifest(udd: &Path, custom_fonts: &CustomFonts) -> Result<PathBuf> {
-    let path = udd.join("custom-fonts.json");
-    let dirs: Vec<String> = custom_fonts
-        .dirs
-        .iter()
-        .map(|p| p.display().to_string())
-        .collect();
-    let manifest = serde_json::json!({
-        "mode": custom_fonts.mode.as_str(),
-        "dirs": dirs,
-        "names": &custom_fonts.names,
-        "random_count": custom_fonts.random_count,
-    });
-    std::fs::write(&path, serde_json::to_vec_pretty(&manifest)?)
-        .with_context(|| format!("write {}", path.display()))?;
-    Ok(path)
-}
-
 #[cfg(test)]
 mod launch_option_tests {
-    use super::{parse_custom_fonts, parse_launch_options};
+    use super::{parse_launch_options, remove_unavailable_custom_fonts};
     use serde_json::json;
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
@@ -476,21 +415,18 @@ mod launch_option_tests {
     }
 
     #[test]
-    fn custom_fonts_accepts_manifest_options() {
-        let fonts = temp_dir("fonts");
-        let value = json!({
-            "mode": "append",
-            "dirs": [fonts.to_string_lossy()],
-            "names": ["Inter", "Roboto"],
-            "random_count": 3
-        });
+    fn legacy_custom_fonts_are_not_handed_to_the_engine() {
+        let mut raw = json!({
+            "custom_fonts": { "mode": "append", "dirs": ["C:\\fonts"] },
+            "navigator": { "platform": "Win32" }
+        })
+        .as_object()
+        .unwrap()
+        .clone();
 
-        let opts = parse_custom_fonts(Some(value)).unwrap();
-
-        assert!(opts.is_enabled());
-        assert_eq!(opts.mode, "append");
-        assert_eq!(opts.names.len(), 2);
-        assert_eq!(opts.random_count, 3);
+        assert!(remove_unavailable_custom_fonts(&mut raw));
+        assert!(!raw.contains_key("custom_fonts"));
+        assert_eq!(raw["navigator"]["platform"], "Win32");
     }
 }
 

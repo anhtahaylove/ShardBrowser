@@ -134,8 +134,7 @@ MCP_HTTP_PORT=40326 SHARDX_API=http://127.0.0.1:40325 SHARDX_TOKEN=… node inde
 - `list_profiles`, `get_profile`, `create_profile`, `create_temporary_profile`,
   `edit_profile`, `delete_profile`
   - `create_profile` / `create_temporary_profile` accept optional `launch`
-    (`args`, `extension_dirs`) and `custom_fonts` (`mode`, `dirs`, `names`,
-    `random_count`) objects; Launcher validates paths and safe switches at
+    (`args`, `extension_dirs`); Launcher validates paths and safe switches at
     browser launch time.
 - `new_fingerprint(platform?)`
 - `start_profile(id, headless?)` → returns the CDP endpoint,

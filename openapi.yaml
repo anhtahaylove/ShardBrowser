@@ -708,7 +708,8 @@ components:
       description: |
         Native FingerprintConfig. Documented sub-objects are the common
         ones; the object is open and stored verbatim by the create
-        endpoints, so any field present here is round-tripped.
+        endpoints, except `custom_fonts`, which is rejected until the bundled
+        browser engine can prove coherent font rendering and profile isolation.
       additionalProperties: true
       properties:
         name: { type: string }
@@ -764,8 +765,6 @@ components:
           $ref: "#/components/schemas/NoisePrefs"
         launch:
           $ref: "#/components/schemas/LaunchOptions"
-        custom_fonts:
-          $ref: "#/components/schemas/CustomFonts"
         network:
           type: object
           properties:
@@ -828,30 +827,6 @@ components:
           items: { type: string }
           description: Absolute unpacked extension directories.
 
-    CustomFonts:
-      type: object
-      description: |
-        Per-profile custom-font manifest options. The Launcher validates
-        directories and writes a `custom-fonts.json` manifest before launch.
-      properties:
-        mode:
-          type: string
-          enum: [off, append, replace]
-          description: Whether custom fonts are disabled, appended, or replace the profile font set.
-        dirs:
-          type: array
-          items: { type: string }
-          description: Absolute directories containing font files.
-        names:
-          type: array
-          items: { type: string }
-          description: Font family names or ids to select from the folders.
-        random_count:
-          type: integer
-          minimum: 0
-          maximum: 100
-          description: Number of additional random fonts to select.
-
     CreateProfileRequest:
       type: object
       required: [fingerprint]
@@ -880,8 +855,6 @@ components:
           description: Stored verbatim. Get one from /fingerprint/new and edit as needed.
         launch:
           $ref: "#/components/schemas/LaunchOptions"
-        custom_fonts:
-          $ref: "#/components/schemas/CustomFonts"
 
     EditProfileRequest:
       type: object
@@ -918,8 +891,6 @@ components:
             derived from the temporary profile id.
         launch:
           $ref: "#/components/schemas/LaunchOptions"
-        custom_fonts:
-          $ref: "#/components/schemas/CustomFonts"
         name: { type: string }
         folder: { type: string }
 

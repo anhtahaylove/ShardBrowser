@@ -237,17 +237,40 @@ struct CreateReq {
     folder: Option<String>,
     fingerprint: Value,
     launch: Option<Value>,
+    /// Reserved for backward-compatible error reporting; not implemented.
     custom_fonts: Option<Value>,
+}
+
+fn reject_unavailable_custom_fonts(
+    cfg: &Map<String, Value>,
+    custom_fonts: &Option<Value>,
+) -> Result<(), String> {
+    if custom_fonts.is_some() || cfg.contains_key("custom_fonts") {
+        return Err(
+            "custom fonts are not available: browser-engine coherence has not been verified"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn validated_api_fingerprint(
+    fingerprint: &Value,
+    custom_fonts: &Option<Value>,
+) -> Result<Map<String, Value>, String> {
+    let mut cfg = fingerprint
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "`fingerprint` must be an object".to_string())?;
+    cfg.remove("_meta");
+    reject_unavailable_custom_fonts(&cfg, custom_fonts)?;
+    Ok(cfg)
 }
 
 /// Persist verbatim (enrich=false); proxy_id binds, proxy string upserts+tests.
 async fn persist_created(folder_override: Option<String>, body: CreateReq) -> ApiResult {
-    let mut cfg = body
-        .fingerprint
-        .as_object()
-        .cloned()
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "`fingerprint` must be an object"))?;
-    cfg.remove("_meta");
+    let mut cfg = validated_api_fingerprint(&body.fingerprint, &body.custom_fonts)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     if let Some(n) = body.name.as_ref() {
         cfg.insert("name".into(), json!(n));
     }
@@ -255,8 +278,6 @@ async fn persist_created(folder_override: Option<String>, body: CreateReq) -> Ap
         cfg.insert("notes".into(), json!(n));
     }
     apply_temp_object_override(&mut cfg, "launch", body.launch)
-        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
-    apply_temp_object_override(&mut cfg, "custom_fonts", body.custom_fonts)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
 
     let folder = folder_override.or(body.folder).unwrap_or_default();
@@ -304,7 +325,7 @@ struct TempReq {
     /// Optional safe launch customizations, e.g.
     /// `{ "args": ["--mute-audio"], "extension_dirs": ["C:\\ext"] }`.
     launch: Option<Value>,
-    /// Optional custom-font manifest options.
+    /// Reserved for backward-compatible error reporting; not implemented.
     custom_fonts: Option<Value>,
     name: Option<String>,
     folder: Option<String>,
@@ -358,20 +379,39 @@ mod temp_profile_tests {
     }
 
     #[test]
-    fn temporary_profile_accepts_launch_and_custom_fonts_objects() {
+    fn temporary_profile_accepts_launch_object() {
         let mut cfg = Map::<String, Value>::new();
 
         apply_temp_object_override(&mut cfg, "launch", Some(json!({ "args": ["--mute-audio"] })))
             .unwrap();
-        apply_temp_object_override(
-            &mut cfg,
-            "custom_fonts",
-            Some(json!({ "mode": "append", "names": ["Inter"] })),
-        )
-        .unwrap();
 
         assert_eq!(cfg["launch"]["args"][0].as_str(), Some("--mute-audio"));
-        assert_eq!(cfg["custom_fonts"]["mode"].as_str(), Some("append"));
+    }
+
+    #[test]
+    fn profile_creation_rejects_unverified_custom_fonts() {
+        let mut cfg = Map::<String, Value>::new();
+        cfg.insert("custom_fonts".into(), json!({ "mode": "append" }));
+
+        assert!(super::reject_unavailable_custom_fonts(&cfg, &None).is_err());
+        assert!(super::reject_unavailable_custom_fonts(
+            &Map::new(),
+            &Some(json!({ "mode": "append" })),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn api_fingerprint_validation_rejects_custom_fonts_on_edit() {
+        let fingerprint = json!({
+            "_meta": { "id": "fixture" },
+            "custom_fonts": { "mode": "append" }
+        });
+
+        assert!(super::validated_api_fingerprint(&fingerprint, &None).is_err());
+        let accepted = super::validated_api_fingerprint(&json!({ "name": "fixture" }), &None)
+            .unwrap();
+        assert!(!accepted.contains_key("_meta"));
     }
 }
 
@@ -384,14 +424,14 @@ async fn create_temporary(Json(body): Json<TempReq>) -> ApiResult {
     let mut cfg = crate::build_fingerprint_config(crate::main_window().as_ref(), &fid)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     cfg.remove("_meta");
+    reject_unavailable_custom_fonts(&cfg, &body.custom_fonts)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     if let Some(n) = body.name.as_ref() {
         cfg.insert("name".into(), json!(n));
     }
     apply_temp_noise_override(&mut cfg, body.noise)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     apply_temp_object_override(&mut cfg, "launch", body.launch)
-        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
-    apply_temp_object_override(&mut cfg, "custom_fonts", body.custom_fonts)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     let mut meta = json!({ "id": "", "folder": body.folder.unwrap_or_default(), "temporary": true });
     if let Some(pstr) = body.proxy.as_ref() {
@@ -438,11 +478,8 @@ async fn edit_profile(Path(id): Path<String>, Json(body): Json<EditReq>) -> ApiR
         .map_err(|e| err(StatusCode::NOT_FOUND, e.to_string()))?;
 
     if let Some(fp) = body.fingerprint {
-        let mut cfg = fp
-            .as_object()
-            .cloned()
-            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "`fingerprint` must be an object"))?;
-        cfg.remove("_meta");
+        let cfg = validated_api_fingerprint(&fp, &None)
+            .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
         stored.config = cfg;
     }
     if let Some(n) = body.name.as_ref() {
