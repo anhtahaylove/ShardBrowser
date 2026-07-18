@@ -50,6 +50,16 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Install Linux dependencies for updater key verification
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            patchelf
+
       - name: Verify updater signing key matches the shipped public key
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -61,7 +71,7 @@ jobs:
           fi
           fixture="$RUNNER_TEMP/shardx-updater-key-check.bin"
           printf 'ShardX updater signing key check\n' > "$fixture"
-          npx tauri signer sign "$fixture"
+          npx tauri signer sign "$fixture" >/dev/null
           test -s "$fixture.sig"
           SHARDX_UPDATER_TEST_ARTIFACT="$fixture" \
           SHARDX_UPDATER_TEST_SIGNATURE="$fixture.sig" \
