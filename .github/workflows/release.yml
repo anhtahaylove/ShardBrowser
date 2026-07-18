@@ -249,6 +249,25 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Normalize GitHub release asset names
+        shell: bash
+        run: |
+          while IFS= read -r -d '' source; do
+            name="$(basename "$source")"
+            normalized="${name// /.}"
+            target="dist/$normalized"
+            if [ -e "$target" ]; then
+              echo "Release asset normalization collision: $name -> $normalized" >&2
+              exit 1
+            fi
+            mv -v "$source" "$target"
+          done < <(find dist -maxdepth 1 -type f -name '* *' -print0)
+
+          if find dist -maxdepth 1 -type f -name '* *' -print -quit | grep -q .; then
+            echo "GitHub release asset names must not contain spaces." >&2
+            exit 1
+          fi
+
       - name: Validate and package ShardX MCP
         run: |
           test -f mcp/package-lock.json
@@ -258,11 +277,20 @@ jobs:
           done
           package_root="$RUNNER_TEMP/ShardX-MCP"
           mkdir -p "$package_root"
-          cp mcp/index.js mcp/challenge.js mcp/verification-checkpoint.js mcp/package.json mcp/package-lock.json mcp/README.md "$package_root/"
+          cp \
+            mcp/index.js \
+            mcp/challenge.js \
+            mcp/challenge.test.js \
+            mcp/verification-checkpoint.js \
+            mcp/verification-checkpoint.test.js \
+            mcp/package.json \
+            mcp/package-lock.json \
+            mcp/README.md \
+            "$package_root/"
           tar -czf dist/ShardX-MCP.tar.gz -C "$RUNNER_TEMP" ShardX-MCP
           archive_entries="$(tar -tzf dist/ShardX-MCP.tar.gz)"
           printf '%s\n' "$archive_entries"
-          for required in index.js challenge.js verification-checkpoint.js package.json package-lock.json README.md; do
+          for required in index.js challenge.js challenge.test.js verification-checkpoint.js verification-checkpoint.test.js package.json package-lock.json README.md; do
             printf '%s\n' "$archive_entries" | grep -qx "ShardX-MCP/$required"
           done
           if printf '%s\n' "$archive_entries" | grep -q '/node_modules/'; then

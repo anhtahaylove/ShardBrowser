@@ -17,6 +17,12 @@ if (!tag || !repo) {
 }
 
 const files = readdirSync(dist).sort((left, right) => left.localeCompare(right));
+const unsafeAsset = files.find((name) => !/^[A-Za-z0-9._-]+$/.test(name));
+if (unsafeAsset) {
+  throw new Error(
+    `Release asset name must already be GitHub-safe before manifest generation: ${unsafeAsset}`,
+  );
+}
 const baseUrl = `https://github.com/${repo}/releases/download/${tag}`;
 const version = tag.replace(/^v/, "");
 
