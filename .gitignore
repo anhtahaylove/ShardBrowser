@@ -16,6 +16,8 @@ dist-ssr
 .cache/
 .parcel-cache/
 coverage/
+test-results/
+playwright-report/
 
 # ===== Python build / cache =====
 __pycache__/

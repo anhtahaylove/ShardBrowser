@@ -1,0 +1,350 @@
+import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import type { InvokeArgs } from "@tauri-apps/api/core";
+
+type Profile = {
+  id: string;
+  name: string;
+  notes: string;
+  proxy_id: string | null;
+  last_launched_at: string | null;
+  created_at: string | null;
+  pinned: boolean;
+  folder: string;
+  total_runtime_ms: number;
+};
+
+type Proxy = {
+  id: string;
+  name: string;
+  kind: "socks5" | "http" | "https";
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  country: string;
+  notes: string;
+};
+
+const params = new URLSearchParams(location.search);
+const scenario = params.get("e2e") ?? "default";
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const fixtureProfiles: Profile[] = [
+  {
+    id: "profile-alpha",
+    name: "VN Automation 001 - No Proxy",
+    notes: "sanitized fixture",
+    proxy_id: "proxy-us",
+    last_launched_at: "2026-07-01T00:00:00Z",
+    created_at: "2026-06-01T00:00:00Z",
+    pinned: true,
+    folder: "QA",
+    total_runtime_ms: 120_000,
+  },
+  {
+    id: "profile-beta",
+    name: "Beta Research",
+    notes: "keyboard regression target",
+    proxy_id: null,
+    last_launched_at: null,
+    created_at: "2026-06-02T00:00:00Z",
+    pinned: false,
+    folder: "",
+    total_runtime_ms: 0,
+  },
+];
+const profiles = scenario === "profiles-empty" ? [] : fixtureProfiles;
+
+const proxies: Proxy[] = scenario === "proxies-empty" ? [] : [
+  {
+    id: "proxy-us",
+    name: "US Sanitize 1",
+    kind: "socks5",
+    host: "203.0.113.10",
+    port: 1080,
+    username: "",
+    password: "",
+    country: "US",
+    notes: "RFC 5737 test-net address",
+  },
+];
+
+const settings = {
+  browser_path: null,
+  theme: "dark",
+  geo_checker: "ip-api.com",
+  screen_resolution_mode: "fingerprint",
+  api_enabled: true,
+  api_port: 40325,
+  mcp_path: "C:\\Users\\Example\\ShardX-MCP",
+};
+
+// The E2E suite runs the production build, so each one-shot fixture fails once.
+let runtimeFailures = scenario === "runtime-error-once" ? 1 : 0;
+let runtimeInstallFailures = scenario === "runtime-install-error-once" ? 1 : 0;
+let runtimeNeedsInstall = scenario === "runtime-install-error-once";
+let profileFailures = scenario === "profile-error-once" ? 1 : 0;
+let profileListsInFlight = 0;
+let maxProfileListsInFlight = 0;
+let proxyListCalls = 0;
+let proxyListsInFlight = 0;
+let maxProxyListsInFlight = 0;
+
+type E2EWindow = Window & { __resolveUpdateCheck?: () => void };
+
+function updateInfo() {
+  const available = params.get("update") !== "none";
+  return {
+    current: "0.1.21",
+    latest: available ? "v0.1.22" : null,
+    update_available: available,
+    release_url: "https://github.com/anhtahaylove/ShardBrowser/releases/tag/v0.1.22",
+    notes: "Sanitized update fixture.",
+    pub_date: "2026-07-18T00:00:00Z",
+  };
+}
+
+type MockUpdateChannel = {
+  onmessage?: (event: unknown) => void;
+};
+
+function updateChannel(payload?: InvokeArgs) {
+  return (payload as { onEvent?: MockUpdateChannel } | undefined)?.onEvent;
+}
+
+function count(name: string) {
+  const key = `e2e${name}`;
+  const current = Number(document.documentElement.dataset[key] ?? 0) + 1;
+  document.documentElement.dataset[key] = String(current);
+}
+
+function mcpStatus() {
+  return {
+    path: settings.mcp_path,
+    installed: true,
+    files_downloaded: true,
+    lockfile_present: true,
+    version: "0.1.21",
+    version_current: true,
+    required_version: "0.1.21",
+    dependencies_installed: true,
+    api_reachable: true,
+    ready: true,
+    state: "ready",
+    message: "MCP fixture ready.",
+  };
+}
+
+mockWindows("main");
+localStorage.setItem("shardx-star-prompt", "done");
+if (scenario === "folder-empty") {
+  localStorage.setItem("shardx-folders", JSON.stringify(["Empty QA"]));
+}
+
+mockIPC(async (cmd: string, payload?: InvokeArgs) => {
+  if (cmd.startsWith("plugin:") || cmd.startsWith("tauri:")) return null;
+  switch (cmd) {
+    case "host_platform":
+      return "windows";
+    case "runtime_status":
+      count("RuntimeChecks");
+      if (runtimeFailures-- > 0) throw new Error("fixture runtime check failed");
+      return {
+        installed: !runtimeNeedsInstall,
+        binary_path: "C:\\Program Files\\ShardX\\browser.exe",
+        installed_browser_etag: "fixture",
+        remote_browser_etag: "fixture",
+        update_available: false,
+        fingerprints_installed: !runtimeNeedsInstall,
+        spec: { browser: { key: "chromium", label: "Chromium" }, widevine: null },
+      };
+    case "runtime_install":
+      if (runtimeInstallFailures-- > 0) throw new Error("fixture runtime install failed");
+      runtimeNeedsInstall = false;
+      return null;
+    case "profile_list": {
+      count("ProfileLists");
+      profileListsInFlight += 1;
+      maxProfileListsInFlight = Math.max(maxProfileListsInFlight, profileListsInFlight);
+      document.documentElement.dataset.e2eMaxProfileListsInFlight = String(maxProfileListsInFlight);
+      try {
+        if (Number(params.get("profilesDelay") ?? 0) > 0) await wait(Number(params.get("profilesDelay")));
+        if (profileFailures-- > 0) throw new Error("fixture profile list failed");
+        return profiles;
+      } finally {
+        profileListsInFlight -= 1;
+      }
+    }
+    case "proxy_list": {
+      proxyListCalls += 1;
+      proxyListsInFlight += 1;
+      maxProxyListsInFlight = Math.max(maxProxyListsInFlight, proxyListsInFlight);
+      document.documentElement.dataset.e2eMaxProxyListsInFlight = String(maxProxyListsInFlight);
+      try {
+        if (Number(params.get("proxiesDelay") ?? 0) > 0) await wait(Number(params.get("proxiesDelay")));
+        if (scenario === "proxy-error-once" && proxyListCalls === 2) {
+          throw new Error("fixture proxy list failed");
+        }
+        return proxies;
+      } finally {
+        proxyListsInFlight -= 1;
+      }
+    }
+    case "process_list":
+      return profiles.some((profile) => profile.id === "profile-beta")
+        ? [{
+            profile_id: "profile-beta",
+            pid: 4242,
+            cdp: {
+              port: 9222,
+              http_url: "http://127.0.0.1:9222",
+              web_socket_debugger_url: "ws://127.0.0.1:9222/devtools/browser/fixture",
+            },
+            uptime_ms: 5_000,
+          }]
+        : [];
+    case "fingerprint_list":
+      return [];
+    case "profile_get": {
+      const id = (payload as { id?: string } | undefined)?.id;
+      const profile = profiles.find((entry) => entry.id === id) ?? fixtureProfiles[0];
+      return {
+        _meta: {
+          id: profile.id,
+          proxy_id: profile.proxy_id,
+          gpu_preset_id: "",
+        },
+        name: profile.name,
+        notes: profile.notes,
+        navigator: {
+          user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/148.0.0.0 Safari/537.36",
+          hardware_concurrency: 8,
+          device_memory: 16,
+          language: "auto",
+        },
+        custom_fonts: {
+          mode: "append",
+          dirs: ["C:\\Fixture\\Fonts"],
+          names: ["Fixture Sans"],
+          random_count: 1,
+        },
+      };
+    }
+    case "profile_save": {
+      const stored = (payload as { payload?: Record<string, unknown> } | undefined)?.payload ?? {};
+      document.documentElement.dataset.e2eSavedCustomFonts = JSON.stringify(stored.custom_fonts ?? null);
+      const meta = (stored._meta ?? {}) as { id?: string; proxy_id?: string | null };
+      return {
+        ...fixtureProfiles[0],
+        id: meta.id || "profile-created",
+        name: typeof stored.name === "string" ? stored.name : "untitled",
+        notes: typeof stored.notes === "string" ? stored.notes : "",
+        proxy_id: meta.proxy_id ?? null,
+      };
+    }
+    case "profile_bind_proxy":
+      return null;
+    case "proxy_last_test":
+      return null;
+    case "settings_get":
+      return settings;
+    case "settings_save":
+      Object.assign(settings, (payload as { value?: typeof settings } | undefined)?.value);
+      return null;
+    case "api_info":
+      return {
+        enabled: true,
+        port: settings.api_port,
+        base_url: "http://127.0.0.1:40325",
+        token: "fixture-token-redacted",
+        running: true,
+        runtime_enabled: true,
+        runtime_port: 40325,
+        runtime_base_url: "http://127.0.0.1:40325",
+        error: null,
+        restart_required: false,
+      };
+    case "mcp_status":
+      return mcpStatus();
+    case "codex_mcp_status":
+      if (scenario === "codex-needs-repair") {
+        return {
+          available: true,
+          registered: true,
+          enabled: false,
+          transport_type: "stdio",
+          command: "node",
+          index_path: "C:\\Users\\Example\\Old-ShardX-MCP\\index.js",
+          expected_index_path: "C:\\Users\\Example\\ShardX-MCP\\index.js",
+          path_matches: false,
+          api: "http://127.0.0.1:40326",
+          expected_api: "http://127.0.0.1:40325",
+          api_matches: false,
+          token_in_config: false,
+          ready: false,
+          state: "needs_repair",
+          message: "Codex MCP fixture needs repair.",
+          issues: ["Path and API do not match the selected Launcher settings."],
+        };
+      }
+      return {
+        available: true,
+        registered: true,
+        enabled: true,
+        transport_type: "stdio",
+        command: "node",
+        index_path: "C:\\Users\\Example\\ShardX-MCP\\index.js",
+        expected_index_path: "C:\\Users\\Example\\ShardX-MCP\\index.js",
+        path_matches: true,
+        api: "http://127.0.0.1:40325",
+        expected_api: "http://127.0.0.1:40325",
+        api_matches: true,
+        token_in_config: false,
+        ready: true,
+        state: "registered",
+        message: "Codex MCP fixture ready.",
+        issues: [],
+      };
+    case "launcher_update_check":
+      if (params.get("updateHold") === "1") {
+        document.documentElement.dataset.e2eUpdateCheckPending = "true";
+        await new Promise<void>((resolve) => {
+          (window as E2EWindow).__resolveUpdateCheck = resolve;
+        });
+        delete (window as E2EWindow).__resolveUpdateCheck;
+        document.documentElement.dataset.e2eUpdateCheckPending = "false";
+      }
+      if (Number(params.get("updateDelay") ?? 0) > 0) await wait(Number(params.get("updateDelay")));
+      if (params.get("update") === "check-error") throw new Error("fixture update check failed");
+      return updateInfo();
+    case "launcher_update_download": {
+      count("UpdateDownloads");
+      const stepDelay = Number(params.get("updateDownloadStepDelay") ?? 120);
+      updateChannel(payload)?.onmessage?.({ event: "started", data: { content_length: 1_000 } });
+      await wait(stepDelay);
+      updateChannel(payload)?.onmessage?.({ event: "progress", data: { chunk_length: 400 } });
+      await wait(stepDelay);
+      updateChannel(payload)?.onmessage?.({ event: "progress", data: { chunk_length: 600 } });
+      if (params.get("update") === "invalid-signature") {
+        throw new Error("Updater signature verification failed");
+      }
+      updateChannel(payload)?.onmessage?.({ event: "finished" });
+      return null;
+    }
+    case "launcher_update_install":
+      count("UpdateInstalls");
+      return null;
+    case "launcher_update_restart":
+      count("RestartRequests");
+      return null;
+    case "launch":
+      throw new Error("fixture browser launch failed");
+    case "ps_get_key":
+      return "";
+    case "clipboard_write":
+    case "clipboard_read":
+      return "";
+    default:
+      throw new Error(`Unhandled E2E command: ${cmd}`);
+  }
+}, { shouldMockEvents: true });
