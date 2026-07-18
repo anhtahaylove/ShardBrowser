@@ -378,10 +378,11 @@ jobs:
               throw "No Authenticode timestamp found on $($file.Name)."
             }
             & $signtool verify /pa /all /v $file.FullName
-            if ($LASTEXITCODE -ne 0 -and $env:INTERNAL_SELF_SIGNED -ne "true") {
+            $signtoolExit = $LASTEXITCODE
+            if ($signtoolExit -ne 0 -and $env:INTERNAL_SELF_SIGNED -ne "true") {
               throw "signtool verification failed for $($file.Name)."
             }
-            if ($LASTEXITCODE -ne 0) {
+            if ($signtoolExit -ne 0) {
               Write-Host "signtool reported the expected untrusted chain for internal self-signed $($file.Name)."
             }
             if ($env:INTERNAL_SELF_SIGNED -eq "true") {
@@ -400,6 +401,10 @@ jobs:
             }
             Write-Host "Valid Authenticode signature: $($file.Name)"
           }
+          # An internal self-signed chain makes signtool return 1 by design.
+          # All acceptable failures were classified above; avoid leaking that
+          # handled native exit code into the PowerShell step result.
+          $global:LASTEXITCODE = 0
 
       - name: Remove imported signing material
         if: always() && runner.os == 'Windows'
