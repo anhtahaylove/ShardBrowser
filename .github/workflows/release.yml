@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag/version for the build (for example v0.1.22).'
+        description: 'Tag/version for the build (for example v0.1.23).'
         required: true
       publish_release:
         description: 'Publish a public GitHub Release after all updater-signed builds pass.'
@@ -327,6 +327,8 @@ jobs:
 
           ## Highlights
 
+          * Windows NSIS upgrades now wait for the running Launcher to release its executable, replace the exact installed target, and verify the installed file version before reporting success.
+          * A real NSIS regression fixture blocks publication if replacement, locked-file failure, or version-mismatch handling regresses.
           * Signed Tauri in-app updater with explicit download/install consent, progress, retry, and invalid-signature rejection.
           * Static updater manifest (`latest.json`) and per-platform updater signatures for Windows, macOS, and Linux.
           * Playwright regression coverage for startup, responsive profile actions, Settings/MCP, keyboard accessibility, and updater states.

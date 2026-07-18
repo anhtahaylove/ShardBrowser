@@ -95,10 +95,10 @@ type E2EWindow = Window & { __resolveUpdateCheck?: () => void };
 function updateInfo() {
   const available = params.get("update") !== "none";
   return {
-    current: "0.1.22",
-    latest: available ? "v0.1.23" : null,
+    current: "0.1.23",
+    latest: available ? "v0.1.24" : null,
     update_available: available,
-    release_url: "https://github.com/anhtahaylove/ShardBrowser/releases/tag/v0.1.23",
+    release_url: "https://github.com/anhtahaylove/ShardBrowser/releases/tag/v0.1.24",
     notes: "Sanitized update fixture.",
     pub_date: "2026-07-18T00:00:00Z",
   };
@@ -124,9 +124,9 @@ function mcpStatus() {
     installed: true,
     files_downloaded: true,
     lockfile_present: true,
-    version: "0.1.22",
+    version: "0.1.23",
     version_current: true,
-    required_version: "0.1.22",
+    required_version: "0.1.23",
     dependencies_installed: true,
     api_reachable: true,
     ready: true,
