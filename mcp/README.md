@@ -104,6 +104,8 @@ MCP_HTTP_PORT=40326 SHARDX_API=http://127.0.0.1:40325 SHARDX_TOKEN=… node inde
 **API**
 
 - `health_check` → confirms the launcher is reachable and auth works
+- `startup_status` → reports launch-at-login registration plus embedded-API and client-spawned MCP modes
+- `configure_startup(enabled, start_minimized?)` → updates the current user's Launcher startup entry; the API starts with the Launcher while the MCP process is still spawned on demand by its client
 - `find_profile_by_name(query, exact?, limit?)` → safe profile summaries only
 - `ensure_profile_started(profile_id? | profile_query?, exact?, headless?)`
   → idempotently starts one resolved profile and returns its CDP endpoint

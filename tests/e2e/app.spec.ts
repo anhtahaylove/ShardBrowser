@@ -150,6 +150,9 @@ test("settings dirty state and MCP readiness render from fixture", async ({ page
   await gotoMocked(page);
 
   await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByText("Startup entry not registered")).toBeVisible();
+  await page.getByLabel("Start ShardX Launcher when I sign in").check();
+  await expect(page.getByLabel("Start in the system tray")).toBeEnabled();
   await expect(page.getByText("MCP ready", { exact: true })).toBeVisible();
   await expect(page.getByLabel("MCP setup readiness")).toContainText("API reachable");
   await expect(page.getByRole("button", { name: "Check Codex registration" })).toBeVisible();
@@ -164,6 +167,18 @@ test("settings dirty state and MCP readiness render from fixture", async ({ page
   await expect(page.getByText("Restart required")).toBeVisible();
   await expect(page.getByRole("region", { name: "Settings save status" })).toHaveCSS("position", "sticky");
   await expect(page.getByRole("button", { name: /Save settings/ })).toBeEnabled();
+});
+
+test("startup setting registers the Launcher while MCP stays client-spawned", async ({ page }) => {
+  await gotoMocked(page);
+  await page.getByRole("button", { name: "Settings" }).click();
+
+  await page.getByLabel("Start ShardX Launcher when I sign in").check();
+  await page.getByRole("button", { name: /Save settings/ }).click();
+
+  await expect(page.getByText("Startup entry registered")).toBeVisible();
+  await expect(page.getByText(/MCP server remains a lightweight stdio process/)).toBeVisible();
+  await expect(page.getByText("All changes saved")).toBeVisible();
 });
 
 test("Settings exposes one honest Codex repair action", async ({ page }) => {
@@ -229,8 +244,8 @@ test("CSSelect supports Arrow, Enter, Space, and Escape without saving", async (
 test("updater requires consent, reports progress, and requests restart", async ({ page }) => {
   await gotoMocked(page, "/?updateDownloadStepDelay=500");
 
-  await expect(page.getByText("Update available → v0.1.24")).toBeVisible();
-  const trigger = page.getByRole("button", { name: /ShardX Launcher v0.1.23/ });
+  await expect(page.getByText("Update available → v0.1.25")).toBeVisible();
+  const trigger = page.getByRole("button", { name: /ShardX Launcher v0.1.24/ });
   await trigger.focus();
   await trigger.click();
   await expect(page.getByRole("dialog", { name: "ShardX Launcher update" })).toBeVisible();
@@ -251,7 +266,7 @@ test("updater requires consent, reports progress, and requests restart", async (
 test("updater surfaces invalid signatures inline", async ({ page }) => {
   await gotoMocked(page, "/?update=invalid-signature");
 
-  await page.getByRole("button", { name: /ShardX Launcher v0.1.23/ }).click();
+  await page.getByRole("button", { name: /ShardX Launcher v0.1.24/ }).click();
   await page.getByRole("button", { name: "Download update" }).click();
   await expect(page.getByRole("alert").filter({ hasText: "Update could not be completed" })).toBeVisible();
   await expect(page.getByRole("alert")).toContainText("signature verification failed");
@@ -272,7 +287,7 @@ test("updater distinguishes checking and up-to-date states", async ({ page }) =>
   await expect(page.getByText("checking for updates…")).toBeVisible();
   await page.evaluate(() => (window as Window & { __resolveUpdateCheck?: () => void }).__resolveUpdateCheck?.());
   await expect(page.getByText("up to date", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: /ShardX Launcher v0.1.23/ }).click();
+  await page.getByRole("button", { name: /ShardX Launcher v0.1.24/ }).click();
   await expect(page.getByText("Launcher is up to date")).toBeVisible();
   await expect(page.getByRole("button", { name: "Check again" })).toBeVisible();
 });

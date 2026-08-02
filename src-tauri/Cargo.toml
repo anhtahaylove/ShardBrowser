@@ -1,6 +1,6 @@
 [package]
 name = "shardx-launcher"
-version = "0.1.23"
+version = "0.1.24"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -65,6 +65,7 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2.10.1"
 
 [dev-dependencies]

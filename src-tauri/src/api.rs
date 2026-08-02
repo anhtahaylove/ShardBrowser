@@ -164,6 +164,44 @@ async fn health() -> Json<Value> {
     }))
 }
 
+#[derive(Debug, Deserialize)]
+struct StartupConfigReq {
+    enabled: bool,
+    start_minimized: Option<bool>,
+}
+
+fn startup_app() -> Result<&'static tauri::AppHandle, ApiError> {
+    crate::app_handle().ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "launcher startup manager is not initialized",
+        )
+    })
+}
+
+async fn get_startup() -> ApiResult {
+    let status = crate::startup::status(startup_app()?)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(serde_json::to_value(status).unwrap_or(Value::Null)))
+}
+
+async fn configure_startup(Json(body): Json<StartupConfigReq>) -> ApiResult {
+    let app = startup_app()?;
+    let mut configured = crate::settings::load()
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    configured.launch_at_login = body.enabled;
+    if let Some(start_minimized) = body.start_minimized {
+        configured.start_minimized = start_minimized;
+    }
+    crate::startup::configure(app, &configured)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    crate::notify_store_changed("settings");
+
+    let status = crate::startup::status(app)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(serde_json::to_value(status).unwrap_or(Value::Null)))
+}
+
 async fn list_profiles() -> ApiResult {
     let metas = crate::profile::list_all().map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let running = crate::process::Tracker::shared().running();
@@ -879,6 +917,7 @@ pub async fn serve(secret: String, port: u16) {
         .route("/fingerprint/new/:platform", get(new_fingerprint_for))
         .route("/fingerprints", get(list_fingerprints))
         .route("/running", get(list_running))
+        .route("/startup", get(get_startup).put(configure_startup))
         .route("/proxies", get(list_proxies).post(add_proxy))
         .route("/proxies/:id", delete(delete_proxy))
         .route_layer(middleware::from_fn(auth));

@@ -21,6 +21,12 @@ pub struct Settings {
     /// Hide the launcher to the system tray on close instead of quitting.
     #[serde(default = "default_minimize_to_tray")]
     pub minimize_to_tray: bool,
+    /// Register the Launcher for the current user's desktop login.
+    #[serde(default)]
+    pub launch_at_login: bool,
+    /// Keep the main window hidden when it was launched by the startup entry.
+    #[serde(default = "default_start_minimized")]
+    pub start_minimized: bool,
 
     // ---- Local automation HTTP API (axum + JWT bearer) ----
     /// Whether the local API server listens on 127.0.0.1:`api_port`.
@@ -46,6 +52,10 @@ fn default_minimize_to_tray() -> bool {
     true
 }
 
+fn default_start_minimized() -> bool {
+    true
+}
+
 fn default_api_enabled() -> bool {
     true
 }
@@ -63,6 +73,8 @@ pub fn load() -> Result<Settings> {
             geo_checker: Some("ip-api.com".into()),
             screen_resolution_mode: Some("fingerprint".into()),
             minimize_to_tray: default_minimize_to_tray(),
+            launch_at_login: false,
+            start_minimized: default_start_minimized(),
             api_enabled: default_api_enabled(),
             api_port: default_api_port(),
             api_secret: String::new(),
@@ -92,4 +104,27 @@ pub fn save(s: &Settings) -> Result<()> {
     let body = serde_json::to_string_pretty(s)?;
     fs::write(store::settings_path()?, body)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn existing_settings_gain_safe_startup_defaults() {
+        let parsed: Settings = serde_json::from_str(
+            r#"{
+                "browser_path": null,
+                "theme": "dark",
+                "minimize_to_tray": true,
+                "api_enabled": true,
+                "api_port": 40325
+            }"#,
+        )
+        .expect("parse legacy settings");
+
+        assert!(!parsed.launch_at_login);
+        assert!(parsed.start_minimized);
+        assert!(parsed.api_enabled);
+    }
 }

@@ -12,6 +12,7 @@ mod proxy;
 mod psapi;
 mod runtime;
 mod settings;
+mod startup;
 mod store;
 mod updater;
 
@@ -1233,10 +1234,15 @@ fn settings_get() -> Result<settings::Settings, String> {
 }
 
 #[tauri::command]
-fn settings_save(value: settings::Settings) -> Result<(), String> {
-    settings::save(&value).map_err(|e| e.to_string())?;
+fn settings_save(app: tauri::AppHandle, value: settings::Settings) -> Result<(), String> {
+    startup::save(&app, &value)?;
     notify_store_changed("settings");
     Ok(())
+}
+
+#[tauri::command]
+fn startup_status(app: tauri::AppHandle) -> Result<startup::StartupStatus, String> {
+    startup::status(&app)
 }
 
 // ---- Automation API ----
@@ -1523,9 +1529,15 @@ fn show_main_window(app: &tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         // Must be the first plugin: a second launch focuses the running window.
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            show_main_window(app);
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if !startup::args_request_autostart(&argv) {
+                show_main_window(app);
+            }
         }))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![startup::AUTOSTART_ARG]),
+        ))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -1582,6 +1594,7 @@ pub fn run() {
             launch,
             settings_get,
             settings_save,
+            startup_status,
             api_info,
             api_regenerate_token,
             ps_get_key,
@@ -1619,6 +1632,25 @@ pub fn run() {
         ])
         .setup(|app| {
             let _ = APP_HANDLE.set(app.handle().clone());
+
+            // The window is created hidden to avoid a login-time flash. Normal
+            // launches show it immediately; a configured startup launch keeps
+            // it in the tray while the embedded Automation API comes online.
+            let autostart_launch = startup::launched_for_autostart();
+            match settings::load() {
+                Ok(configured) => {
+                    if let Err(error) = startup::refresh_registration_path(app.handle(), &configured) {
+                        eprintln!("[launcher] startup registration refresh failed: {error}");
+                    }
+                    if !startup::should_start_hidden(&configured, autostart_launch) {
+                        show_main_window(app.handle());
+                    }
+                }
+                Err(error) => {
+                    eprintln!("[launcher] startup settings load failed: {error}");
+                    show_main_window(app.handle());
+                }
+            }
 
             {
                 use tauri::menu::{Menu, MenuItem};

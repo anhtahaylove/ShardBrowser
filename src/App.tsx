@@ -402,10 +402,24 @@ type Settings = {
   theme: string;
   geo_checker?: string | null;
   screen_resolution_mode?: string | null;
+  minimize_to_tray?: boolean;
+  launch_at_login?: boolean;
+  start_minimized?: boolean;
   api_enabled?: boolean;
   api_port?: number;
   api_secret?: string;
   mcp_path?: string | null;
+};
+type StartupStatus = {
+  supported: boolean;
+  configured: boolean;
+  registered: boolean;
+  matches_configuration: boolean;
+  start_minimized: boolean;
+  launched_for_autostart: boolean;
+  api_enabled: boolean;
+  api_mode: "launcher_embedded";
+  mcp_mode: "client_spawned";
 };
 type ApiInfo = {
   enabled: boolean;
@@ -5615,6 +5629,9 @@ function SettingsView() {
     theme: "dark",
     geo_checker: "ip-api.com",
     screen_resolution_mode: "fingerprint",
+    minimize_to_tray: true,
+    launch_at_login: false,
+    start_minimized: true,
     api_enabled: true,
     api_port: 40325,
   });
@@ -5623,8 +5640,13 @@ function SettingsView() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [api, setApi] = useState<ApiInfo | null>(null);
+  const [startup, setStartup] = useState<StartupStatus | null>(null);
+  const [startupError, setStartupError] = useState<string | null>(null);
   const [tokenBusy, setTokenBusy] = useState(false);
   const refreshApi = () => invoke<ApiInfo>("api_info").then(setApi).catch(() => {});
+  const refreshStartup = () => invoke<StartupStatus>("startup_status")
+    .then((status) => { setStartup(status); setStartupError(null); })
+    .catch((e) => setStartupError(safeUiError(e)));
   const loadSettings = async () => {
     setSettingsLoadError(null);
     try {
@@ -5637,7 +5659,7 @@ function SettingsView() {
       toast.err(message);
     }
   };
-  useEffect(() => { void loadSettings(); void refreshApi(); }, []);
+  useEffect(() => { void loadSettings(); void refreshApi(); void refreshStartup(); }, []);
   const regenToken = async () => {
     const ok = await confirmModal({
       title: "Regenerate Automation API token",
@@ -5685,7 +5707,7 @@ function SettingsView() {
     const timer = setInterval(refreshMcp, 5000);
     return () => clearInterval(timer);
   }, []);
-  useStoreChanged(() => { refreshApi(); refreshMcp(); });
+  useStoreChanged(() => { refreshApi(); refreshStartup(); refreshMcp(); });
   // Download MCP server source; user manages install + client setup.
   const downloadMcp = async () => {
     const dir = await open({
@@ -5799,7 +5821,7 @@ function SettingsView() {
     try {
       await invoke("settings_save", { value: s });
       setSettingsBaseline({ ...s });
-      await refreshApi();
+      await Promise.all([refreshApi(), refreshStartup()]);
       toast.ok("Settings saved");
     } catch (e) {
       const message = safeUiError(e);
@@ -5893,6 +5915,48 @@ function SettingsView() {
       </div>
 
       <div className="card" style={{ marginBottom: 14 }}>
+        <h3>Startup &amp; background services</h3>
+        <p className="muted small">
+          Start ShardX Launcher when you sign in so its embedded Automation API is ready without opening the window.
+          The MCP server remains a lightweight stdio process started on demand by Codex or another MCP client; it does not need a separate always-on daemon.
+        </p>
+        <label className="row-inline">
+          <input
+            type="checkbox"
+            checked={s.launch_at_login ?? false}
+            onChange={(e) => setS({ ...s, launch_at_login: e.target.checked })}
+          />
+          <span className="lbl">Start ShardX Launcher when I sign in</span>
+        </label>
+        <label className="row-inline">
+          <input
+            type="checkbox"
+            checked={s.start_minimized ?? true}
+            disabled={!(s.launch_at_login ?? false)}
+            onChange={(e) => setS({ ...s, start_minimized: e.target.checked })}
+          />
+          <span className="lbl">Start in the system tray</span>
+        </label>
+        <div
+          className={`api-state ${startup?.registered ? "api-state-on" : startupError ? "api-state-error" : "api-state-off"}`}
+          role={startupError ? "alert" : "status"}
+        >
+          <strong>{startup?.registered ? "Startup entry registered" : startupError ? "Startup status unavailable" : "Startup entry not registered"}</strong>
+          <span>
+            {startupError
+              ?? (startup?.registered
+                ? "Launcher and Automation API will start at desktop sign-in."
+                : "Enable this option and save settings to register it for the current user.")}
+          </span>
+        </div>
+        {startup && !startup.matches_configuration && (
+          <div className="settings-note settings-note-warn">
+            The saved setting and operating-system startup state differ. Toggle the option and save to reconcile them.
+          </div>
+        )}
+      </div>
+
+      <div className="card" style={{ marginBottom: 14 }}>
         <h3>Automation API</h3>
         <p className="muted small">
           Local HTTP API (axum) for scripting — create/launch/close profiles
@@ -5973,8 +6037,9 @@ function SettingsView() {
         <h3>MCP server</h3>
         <p className="muted small">
           Download the <strong>MCP</strong> server source (lets an AI client drive
-          profiles and a CDP browser) into a folder you choose. The app does not run
-          it — install deps, set SHARDX_TOKEN in your user environment, restart your MCP client, then register it. Requires Node.js.
+          profiles and a CDP browser) into a folder you choose. The Launcher startup entry keeps
+          the required API ready; your MCP client starts this stdio server only when needed.
+          Install deps, set SHARDX_TOKEN in your user environment, restart your MCP client, then register it. Requires Node.js.
         </p>
         <div className={`mcp-status mcp-status-${mcpStatus?.state ?? "unknown"}`} role={mcpStatusError ? "alert" : "status"} aria-live={mcpStatusError ? "assertive" : "polite"}>
           <strong>

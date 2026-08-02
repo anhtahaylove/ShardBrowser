@@ -438,7 +438,11 @@ server.tool(
       });
     }
     try {
-      const [profiles, running] = await Promise.all([api("/profiles"), api("/running")]);
+      const [profiles, running, startup] = await Promise.all([
+        api("/profiles"),
+        api("/running"),
+        api("/startup").catch((error) => ({ available: false, error: String(error?.message || error) })),
+      ]);
       return text({
         ok: true,
         api: API,
@@ -447,6 +451,7 @@ server.tool(
         authenticated: true,
         profiles_count: profiles.length,
         running_count: running.length,
+        startup,
       });
     } catch (error) {
       return text({
@@ -459,6 +464,30 @@ server.tool(
       });
     }
   },
+);
+
+server.tool(
+  "startup_status",
+  "Read whether ShardX Launcher is configured and registered to start at desktop sign-in. Also reports that the API is embedded and MCP is client-spawned.",
+  {},
+  async () => text(await api("/startup")),
+);
+
+server.tool(
+  "configure_startup",
+  "Enable or disable ShardX Launcher at desktop sign-in for the current user. The embedded API starts with the Launcher; MCP remains client-spawned. Optionally choose whether the window stays in the system tray.",
+  {
+    enabled: z.boolean(),
+    start_minimized: z.boolean().optional(),
+  },
+  async ({ enabled, start_minimized }) =>
+    text(await api("/startup", {
+      method: "PUT",
+      body: {
+        enabled,
+        ...(start_minimized !== undefined ? { start_minimized } : {}),
+      },
+    })),
 );
 
 server.tool(

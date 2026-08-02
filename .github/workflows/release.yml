@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag/version for the build (for example v0.1.23).'
+        description: 'Tag/version for the build (for example v0.1.24).'
         required: true
       publish_release:
         description: 'Publish a public GitHub Release after all updater-signed builds pass.'
@@ -248,6 +248,14 @@ jobs:
         with:
           node-version: 20
 
+      - name: Test ShardX MCP
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+          PATCHRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: |
+          npm ci --prefix mcp
+          npm test --prefix mcp
+
       - name: Download every per-platform artifact
         uses: actions/download-artifact@v8
         with:
@@ -277,7 +285,7 @@ jobs:
         run: |
           test -f mcp/package-lock.json
           node --check mcp/index.js
-          for helper in health_check find_profile_by_name ensure_profile_started safe_open_url devtools_context cleanup_stale_profile_processes challenge_status verification_checkpoint wait_for_human_verification; do
+          for helper in health_check startup_status configure_startup find_profile_by_name ensure_profile_started safe_open_url devtools_context cleanup_stale_profile_processes challenge_status verification_checkpoint wait_for_human_verification; do
             grep -q "\"$helper\"" mcp/index.js
           done
           package_root="$RUNNER_TEMP/ShardX-MCP"
@@ -327,11 +335,14 @@ jobs:
 
           ## Highlights
 
+          * Optional launch-at-sign-in keeps ShardX Launcher and its embedded Automation API ready in the system tray without flashing the main window.
+          * Startup state can be inspected or configured through Launcher Settings, `GET/PUT /startup`, and the matching MCP `startup_status` / `configure_startup` tools.
+          * MCP remains client-spawned over stdio rather than installing a redundant always-on daemon.
           * Windows NSIS upgrades now wait for the running Launcher to release its executable, replace the exact installed target, and verify the installed file version before reporting success.
           * A real NSIS regression fixture blocks publication if replacement, locked-file failure, or version-mismatch handling regresses.
           * Signed Tauri in-app updater with explicit download/install consent, progress, retry, and invalid-signature rejection.
           * Static updater manifest (`latest.json`) and per-platform updater signatures for Windows, macOS, and Linux.
-          * Playwright regression coverage for startup, responsive profile actions, Settings/MCP, keyboard accessibility, and updater states.
+          * Playwright regression coverage for sign-in startup, responsive profile actions, Settings/MCP, keyboard accessibility, and updater states.
           * The Windows updater bundle uses the same Tauri updater-signing model as Youwee; the installer and portable executable intentionally omit Authenticode signing.
           * Custom font folders remain gated because the bundled browser engine has not proven coherent font enumeration, rendering, metrics, canvas, and profile isolation.
 

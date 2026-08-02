@@ -71,7 +71,7 @@ jobs:
       - name: MCP syntax and helper contract
         run: |
           node --check mcp/index.js
-          for helper in health_check find_profile_by_name ensure_profile_started safe_open_url devtools_context cleanup_stale_profile_processes; do
+          for helper in health_check startup_status configure_startup find_profile_by_name ensure_profile_started safe_open_url devtools_context cleanup_stale_profile_processes; do
             grep -q "\"$helper\"" mcp/index.js
           done
 
