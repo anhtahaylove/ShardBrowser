@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag/version for the build (for example v0.1.24).'
+        description: 'Tag/version for the build (for example v0.1.25).'
         required: true
       publish_release:
         description: 'Publish a public GitHub Release after all updater-signed builds pass.'
@@ -294,6 +294,7 @@ jobs:
             mcp/index.js \
             mcp/challenge.js \
             mcp/challenge.test.js \
+            mcp/contract.test.js \
             mcp/verification-checkpoint.js \
             mcp/verification-checkpoint.test.js \
             mcp/package.json \
@@ -303,7 +304,7 @@ jobs:
           tar -czf dist/ShardX-MCP.tar.gz -C "$RUNNER_TEMP" ShardX-MCP
           archive_entries="$(tar -tzf dist/ShardX-MCP.tar.gz)"
           printf '%s\n' "$archive_entries"
-          for required in index.js challenge.js challenge.test.js verification-checkpoint.js verification-checkpoint.test.js package.json package-lock.json README.md; do
+          for required in index.js challenge.js challenge.test.js contract.test.js verification-checkpoint.js verification-checkpoint.test.js package.json package-lock.json README.md; do
             printf '%s\n' "$archive_entries" | grep -qx "ShardX-MCP/$required"
           done
           if printf '%s\n' "$archive_entries" | grep -q '/node_modules/'; then
