@@ -6,6 +6,11 @@ use crate::settings::{self, Settings};
 
 pub const AUTOSTART_ARG: &str = "--shardx-autostart";
 
+#[cfg(target_os = "windows")]
+const RESTART_FLAGS: u32 = windows_sys::Win32::System::Recovery::RESTART_NO_CRASH
+    | windows_sys::Win32::System::Recovery::RESTART_NO_HANG
+    | windows_sys::Win32::System::Recovery::RESTART_NO_PATCH;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StartupStatus {
     pub supported: bool,
@@ -61,6 +66,37 @@ fn set_registration(app: &AppHandle, enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+fn sync_restart_registration(enabled: bool) -> Result<(), String> {
+    use windows_sys::Win32::System::Recovery::{
+        RegisterApplicationRestart, UnregisterApplicationRestart,
+    };
+
+    let result = if enabled {
+        let args = AUTOSTART_ARG
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        unsafe { RegisterApplicationRestart(args.as_ptr(), RESTART_FLAGS) }
+    } else {
+        unsafe { UnregisterApplicationRestart() }
+    };
+
+    if result < 0 {
+        Err(format!(
+            "Windows application restart registration failed (HRESULT 0x{:08X})",
+            result as u32
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn sync_restart_registration(_enabled: bool) -> Result<(), String> {
+    Ok(())
+}
+
 pub fn status(app: &AppHandle) -> Result<StartupStatus, String> {
     let configured = settings::load().map_err(|e| e.to_string())?;
     let registered = registration_enabled(app)?;
@@ -83,20 +119,27 @@ pub fn status(app: &AppHandle) -> Result<StartupStatus, String> {
 pub fn save(app: &AppHandle, next: &Settings) -> Result<(), String> {
     let previous = settings::load().map_err(|e| e.to_string())?;
     let registration_changed = previous.launch_at_login != next.launch_at_login;
-    let previous_registered = if registration_changed {
-        Some(registration_enabled(app)?)
-    } else {
-        None
-    };
+    let previous_registered = registration_enabled(app)?;
 
     if registration_changed {
         set_registration(app, next.launch_at_login)?;
     }
 
-    if let Err(error) = settings::save(next) {
-        if let Some(was_registered) = previous_registered {
-            let _ = set_registration(app, was_registered);
+    let effective_registered =
+        next.launch_at_login && (registration_changed || previous_registered);
+    if let Err(error) = sync_restart_registration(effective_registered) {
+        if registration_changed {
+            let _ = set_registration(app, previous_registered);
         }
+        let _ = sync_restart_registration(previous.launch_at_login && previous_registered);
+        return Err(error);
+    }
+
+    if let Err(error) = settings::save(next) {
+        if registration_changed {
+            let _ = set_registration(app, previous_registered);
+        }
+        let _ = sync_restart_registration(previous.launch_at_login && previous_registered);
         return Err(error.to_string());
     }
 
@@ -106,11 +149,19 @@ pub fn save(app: &AppHandle, next: &Settings) -> Result<(), String> {
 /// Apply an explicit startup configuration request even when the saved value
 /// already matches. This reconciles an entry changed in the OS startup UI.
 pub fn configure(app: &AppHandle, next: &Settings) -> Result<(), String> {
+    let previous = settings::load().map_err(|e| e.to_string())?;
     let previous_registered = registration_enabled(app)?;
     set_registration(app, next.launch_at_login)?;
 
+    if let Err(error) = sync_restart_registration(next.launch_at_login) {
+        let _ = set_registration(app, previous_registered);
+        let _ = sync_restart_registration(previous_registered);
+        return Err(error);
+    }
+
     if let Err(error) = settings::save(next) {
         let _ = set_registration(app, previous_registered);
+        let _ = sync_restart_registration(previous.launch_at_login && previous_registered);
         return Err(error.to_string());
     }
 
@@ -121,10 +172,11 @@ pub fn configure(app: &AppHandle, next: &Settings) -> Result<(), String> {
 /// OS reports the entry disabled (for example via Task Manager), respect that
 /// external choice rather than silently re-enabling it.
 pub fn refresh_registration_path(app: &AppHandle, configured: &Settings) -> Result<(), String> {
-    if configured.launch_at_login && registration_enabled(app)? {
+    let registered = registration_enabled(app)?;
+    if configured.launch_at_login && registered {
         set_registration(app, true)?;
     }
-    Ok(())
+    sync_restart_registration(configured.launch_at_login && registered)
 }
 
 pub fn should_start_hidden(configured: &Settings, autostart_launch: bool) -> bool {
@@ -158,5 +210,36 @@ mod tests {
         configured.launch_at_login = false;
         assert!(!should_start_hidden(&configured, true));
         assert!(!should_start_hidden(&configured, false));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_resume_uses_the_autostart_argument() {
+        use windows_sys::Win32::System::Recovery::GetApplicationRestartSettings;
+
+        sync_restart_registration(true).unwrap();
+        let mut command_line = [0u16; 256];
+        let mut size = command_line.len() as u32;
+        let mut flags = 0u32;
+        let result = unsafe {
+            GetApplicationRestartSettings(
+                -1isize as _,
+                command_line.as_mut_ptr(),
+                &mut size,
+                &mut flags,
+            )
+        };
+        sync_restart_registration(false).unwrap();
+
+        assert!(result >= 0);
+        let end = command_line
+            .iter()
+            .position(|value| *value == 0)
+            .unwrap_or(command_line.len());
+        assert_eq!(
+            String::from_utf16_lossy(&command_line[..end]),
+            AUTOSTART_ARG
+        );
+        assert_eq!(flags, RESTART_FLAGS);
     }
 }
