@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag/version for the build (for example v0.1.25).'
+        description: 'Tag/version for the build (for example v0.1.26).'
         required: true
       publish_release:
         description: 'Publish a public GitHub Release after all updater-signed builds pass.'
@@ -336,6 +336,8 @@ jobs:
 
           ## Highlights
 
+          * Windows session restore now relaunches the Launcher with the same tray-only startup contract, preventing the main window from appearing after reboot.
+          * npm dependency advisories are resolved in both the Launcher and matching MCP package.
           * Optional launch-at-sign-in keeps ShardX Launcher and its embedded Automation API ready in the system tray without flashing the main window.
           * Startup state can be inspected or configured through Launcher Settings, `GET/PUT /startup`, and the matching MCP `startup_status` / `configure_startup` tools.
           * MCP remains client-spawned over stdio rather than installing a redundant always-on daemon.
