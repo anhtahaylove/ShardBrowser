@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: read
-  checks: write
 
 jobs:
   rust-sdk:
@@ -35,10 +34,9 @@ jobs:
           cargo +stable clippy --manifest-path sdks/rust/Cargo.toml --all-targets --no-default-features -- -D warnings
 
       - name: Rust SDK RustSec audit
-        uses: rustsec/audit-check@v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          working-directory: sdks/rust
+        run: |
+          cargo +stable install cargo-audit --locked --version 0.22.2
+          cargo +stable audit --file sdks/rust/Cargo.lock
 
       - name: Rust SDK MSRV checks
         env:

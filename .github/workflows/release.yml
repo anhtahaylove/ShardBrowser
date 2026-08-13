@@ -24,7 +24,6 @@ on:
 
 permissions:
   contents: write
-  checks: write
   id-token: write
   attestations: write
 
@@ -73,10 +72,9 @@ jobs:
           cargo +stable test --manifest-path sdks/rust/Cargo.toml --no-default-features
 
       - name: Verify Rust SDK RustSec gate
-        uses: rustsec/audit-check@v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          working-directory: sdks/rust
+        run: |
+          cargo +stable install cargo-audit --locked --version 0.22.2
+          cargo +stable audit --file sdks/rust/Cargo.lock
 
       - name: Verify Rust SDK MSRV gates
         env:
