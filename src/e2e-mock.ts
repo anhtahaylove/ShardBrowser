@@ -234,6 +234,7 @@ mockIPC(async (cmd: string, payload?: InvokeArgs) => {
       };
     }
     case "profile_save": {
+      count("ProfileSaves");
       const stored = (payload as { payload?: Record<string, unknown> } | undefined)?.payload ?? {};
       document.documentElement.dataset.e2eSavedCustomFonts = JSON.stringify(stored.custom_fonts ?? null);
       const meta = (stored._meta ?? {}) as { id?: string; proxy_id?: string | null };
@@ -244,6 +245,15 @@ mockIPC(async (cmd: string, payload?: InvokeArgs) => {
         notes: typeof stored.notes === "string" ? stored.notes : "",
         proxy_id: meta.proxy_id ?? null,
       };
+    }
+    case "profile_validate_name": {
+      count("ProfileNameValidations");
+      const name = (payload as { name?: string } | undefined)?.name ?? "";
+      const normalized = name.trimStart();
+      if (!normalized || /[\x00-\x1f\x7f/\\<>:"|?*]/.test(normalized) || /[.\s]$/.test(normalized)) {
+        throw new Error("Invalid profile name");
+      }
+      return normalized;
     }
     case "profile_bind_proxy":
       return null;

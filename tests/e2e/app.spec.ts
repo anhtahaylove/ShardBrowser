@@ -102,6 +102,18 @@ test("legacy custom-font metadata survives an ordinary profile edit but stays hi
   });
 });
 
+test("invalid profile names are rejected before profile persistence", async ({ page }) => {
+  await gotoMocked(page);
+
+  await page.getByRole("button", { name: "+ New profile" }).click();
+  await page.getByLabel("Profile name").fill("bad/name");
+  await page.getByRole("button", { name: "Create profile" }).click();
+
+  await expect(page.getByRole("alert").filter({ hasText: "Invalid profile name" })).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-e2e-profile-name-validations", "1");
+  await expect(page.locator("html")).not.toHaveAttribute("data-e2e-profile-saves", /.+/);
+});
+
 test("empty profiles are distinct from search results", async ({ page }) => {
   await gotoMocked(page, "/?e2e=profiles-empty");
 

@@ -324,11 +324,19 @@ fn profile_get(id: String) -> Result<Value, String> {
     // Backfill gpu_preset_id for legacy profiles by matching webgl.renderer.
     if stored.meta.gpu_preset_id.is_none() {
         if let Some(gid) = infer_gpu_preset_id(&stored.config) {
-            stored.meta.gpu_preset_id = Some(gid);
-            let _ = profile::save_raw(&mut stored);
+            if let Ok(_claim) = profile::begin_user_mutation([&id], "backfill profile metadata") {
+                stored.meta.gpu_preset_id = Some(gid);
+                let _ = profile::save_raw(&mut stored);
+            }
         }
     }
     serde_json::to_value(stored).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn profile_validate_name(name: String, id: Option<String>) -> Result<String, String> {
+    profile::validate_profile_name_for_mutation(&name, id.as_deref())
+        .map_err(|error| error.to_string())
 }
 
 /// Recover library fingerprint id by matching webgl.renderer (+ screen if ambiguous).
@@ -656,14 +664,51 @@ pub fn save_profile_core(
     payload: Value,
     enrich: bool,
 ) -> Result<profile::ProfileMeta, String> {
-    let mut payload = payload;
+    persist_profile_core(window, payload, enrich).map_err(|error| error.to_string())
+}
 
+pub fn persist_profile_core(
+    window: Option<&tauri::WebviewWindow>,
+    payload: Value,
+    enrich: bool,
+) -> anyhow::Result<profile::ProfileMeta> {
     let is_new = payload
         .get("_meta")
         .and_then(|m| m.get("id"))
         .and_then(|v| v.as_str())
         .map(|s| s.is_empty())
         .unwrap_or(true);
+    let _claim = if is_new {
+        profile::begin_profile_creation("create a profile")
+    } else {
+        let id = payload
+            .get("_meta")
+            .and_then(|meta| meta.get("id"))
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        profile::begin_user_mutation([id], "modify this profile")
+    }
+    ?;
+
+    persist_profile_core_claimed(window, payload, enrich)
+}
+
+/// Persist after the caller has acquired the appropriate lifecycle claim.
+/// API create flows use this to keep validation, proxy setup, and profile write
+/// inside one claim without trying to acquire the same claim twice.
+pub(crate) fn persist_profile_core_claimed(
+    window: Option<&tauri::WebviewWindow>,
+    payload: Value,
+    enrich: bool,
+) -> anyhow::Result<profile::ProfileMeta> {
+    let mut payload = payload;
+    let is_new = payload
+        .get("_meta")
+        .and_then(|m| m.get("id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.is_empty())
+        .unwrap_or(true);
+
     if is_new && enrich {
         if let Some(obj) = payload.as_object_mut() {
             enrich_new_config(window, obj);
@@ -671,8 +716,9 @@ pub fn save_profile_core(
     }
 
     let mut stored: profile::StoredProfile =
-        serde_json::from_value(payload).map_err(|e| e.to_string())?;
-    profile::save_raw(&mut stored).map_err(|e| e.to_string())?;
+        serde_json::from_value(payload)?;
+    profile::prepare_profile_name_for_save(&mut stored)?;
+    profile::save_raw(&mut stored)?;
     let name = stored
         .config
         .get("name")
@@ -700,11 +746,15 @@ pub fn save_profile_core(
 
 #[tauri::command]
 fn profile_delete(id: String) -> Result<(), String> {
+    let _claim = profile::begin_user_mutation([&id], "delete this profile")
+        .map_err(|error| error.to_string())?;
     profile::delete(&id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn profile_bind_proxy(profile_id: String, proxy_id: Option<String>) -> Result<(), String> {
+    let _claim = profile::begin_user_mutation([&profile_id], "change this profile's proxy")
+        .map_err(|error| error.to_string())?;
     let mut p = profile::load_raw(&profile_id).map_err(|e| e.to_string())?;
     p.meta.proxy_id = proxy_id;
     profile::save_raw(&mut p).map_err(|e| e.to_string())
@@ -712,28 +762,24 @@ fn profile_bind_proxy(profile_id: String, proxy_id: Option<String>) -> Result<()
 
 #[tauri::command]
 fn profile_clone(id: String) -> Result<profile::ProfileMeta, String> {
+    let _claim = profile::begin_clone_mutation(&id).map_err(|error| error.to_string())?;
     profile::clone_profile(&id).map_err(|e| e.to_string())
 }
 
 /// Import profiles verbatim under fresh ids; returns the count.
 #[tauri::command]
 fn profile_import(payloads: Vec<Value>) -> Result<usize, String> {
-    let mut n = 0;
-    for mut payload in payloads {
-        if let Some(obj) = payload.as_object_mut() {
-            match obj.get_mut("_meta").and_then(|m| m.as_object_mut()) {
-                Some(meta) => {
-                    meta.insert("id".into(), Value::String(String::new()));
-                }
-                None => {
-                    obj.insert("_meta".into(), serde_json::json!({ "id": "" }));
-                }
-            }
-        }
-        save_profile_core(None, payload, false)?;
-        n += 1;
+    let _claim = profile::begin_profile_creation("import profiles")
+        .map_err(|error| error.to_string())?;
+    let mut stored_profiles: Vec<profile::StoredProfile> = payloads
+        .into_iter()
+        .map(|payload| serde_json::from_value(payload).map_err(|error| error.to_string()))
+        .collect::<Result<_, _>>()?;
+    profile::prepare_import_batch(&mut stored_profiles).map_err(|error| error.to_string())?;
+    for stored in &mut stored_profiles {
+        profile::save_raw(stored).map_err(|error| error.to_string())?;
     }
-    Ok(n)
+    Ok(stored_profiles.len())
 }
 
 // ---- Clipboard (via tauri-plugin-clipboard-manager; webview navigator.clipboard throws) ----
@@ -752,11 +798,15 @@ fn clipboard_read(app: tauri::AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 fn profile_set_pin(id: String, pinned: bool) -> Result<(), String> {
+    let _claim = profile::begin_user_mutation([&id], "change this profile's pin")
+        .map_err(|error| error.to_string())?;
     profile::set_pin(&id, pinned).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn profile_set_folder(id: String, folder: String) -> Result<(), String> {
+    let _claim = profile::begin_user_mutation([&id], "move this profile")
+        .map_err(|error| error.to_string())?;
     profile::set_folder(&id, &folder).map_err(|e| e.to_string())
 }
 
@@ -1219,10 +1269,8 @@ fn cookies_export_to_file(profile_id: String, path: String) -> Result<usize, Str
 
 #[tauri::command]
 fn cookies_import(profile_id: String, cookies: Vec<cookies::Cookie>) -> Result<usize, String> {
-    // Running browser would clobber the import on exit.
-    if is_profile_running(&profile_id) {
-        return Err("stop the profile before importing cookies".into());
-    }
+    let _claim = profile::begin_user_mutation([&profile_id], "import cookies")
+        .map_err(|error| error.to_string())?;
     cookies::import(&profile_id, &cookies).map_err(|e| e.to_string())
 }
 
@@ -1526,6 +1574,46 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+#[cfg(test)]
+mod profile_mutation_boundary_tests {
+    use super::*;
+
+    fn assert_running_blocked<T>(result: Result<T, String>) {
+        let error = result.err().expect("running profile mutation must fail");
+        assert!(
+            error.contains("Stop the running browser"),
+            "expected actionable running-profile error, got: {error}"
+        );
+    }
+
+    #[test]
+    fn every_tauri_profile_mutation_entry_point_checks_running_state_first() {
+        let profile_id = "tauri-running-mutation-boundary-test";
+        let tracker = process::Tracker::shared();
+        tracker.set_running_for_test(profile_id, true);
+
+        assert_running_blocked(save_profile_core(
+            None,
+            serde_json::json!({
+                "name": "Running profile",
+                "_meta": { "id": profile_id }
+            }),
+            false,
+        ));
+        assert_running_blocked(profile_delete(profile_id.to_string()));
+        assert_running_blocked(profile_bind_proxy(profile_id.to_string(), None));
+        assert_running_blocked(profile_clone(profile_id.to_string()));
+        assert_running_blocked(profile_set_pin(profile_id.to_string(), true));
+        assert_running_blocked(profile_set_folder(
+            profile_id.to_string(),
+            "folder".to_string(),
+        ));
+        assert_running_blocked(cookies_import(profile_id.to_string(), Vec::new()));
+
+        tracker.set_running_for_test(profile_id, false);
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         // Must be the first plugin: a second launch focuses the running window.
@@ -1555,6 +1643,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             profile_list,
             profile_get,
+            profile_validate_name,
             profile_save,
             profile_delete,
             profile_bind_proxy,

@@ -51,6 +51,7 @@ pub async fn launch_profile(
     enable_cdp: bool,
     headless: bool,
 ) -> Result<LaunchOutcome> {
+    let launch_claim = profile::begin_profile_launch(profile_id)?;
     let bin = resolve_binary()?;
     let stored = profile::load_raw(profile_id)?;
     let udd = profile::user_data_dir(profile_id)?;
@@ -228,6 +229,7 @@ pub async fn launch_profile(
     }
     let child = cmd.spawn().context("spawn ShardX")?;
     let pid = Tracker::shared().track(profile_id.to_string(), child, stored.meta.temporary);
+    drop(launch_claim);
 
     profile::touch_launched(profile_id, None)?;
 

@@ -131,6 +131,20 @@ fn err(code: StatusCode, msg: impl Into<String>) -> ApiError {
     ApiError(code, msg.into())
 }
 
+fn profile_api_error(error: anyhow::Error, fallback: StatusCode) -> ApiError {
+    let status = match crate::profile::profile_error_kind(&error) {
+        Some(crate::profile::ProfileErrorKind::Running | crate::profile::ProfileErrorKind::Busy) => {
+            StatusCode::CONFLICT
+        }
+        Some(
+            crate::profile::ProfileErrorKind::InvalidName
+            | crate::profile::ProfileErrorKind::NameConflict,
+        ) => StatusCode::BAD_REQUEST,
+        None => fallback,
+    };
+    err(status, error.to_string())
+}
+
 type ApiResult = Result<Json<Value>, ApiError>;
 
 // ---- auth middleware ----
@@ -307,6 +321,8 @@ fn validated_api_fingerprint(
 
 /// Persist verbatim (enrich=false); proxy_id binds, proxy string upserts+tests.
 async fn persist_created(folder_override: Option<String>, body: CreateReq) -> ApiResult {
+    let _claim = crate::profile::begin_profile_creation("create a profile")
+        .map_err(|error| profile_api_error(error, StatusCode::INTERNAL_SERVER_ERROR))?;
     let mut cfg = validated_api_fingerprint(&body.fingerprint, &body.custom_fonts)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     if let Some(n) = body.name.as_ref() {
@@ -315,6 +331,12 @@ async fn persist_created(folder_override: Option<String>, body: CreateReq) -> Ap
     if let Some(n) = body.notes.as_ref() {
         cfg.insert("notes".into(), json!(n));
     }
+    let normalized_name = crate::profile::validate_profile_name_for_mutation(
+        cfg.get("name").and_then(Value::as_str).unwrap_or_default(),
+        None,
+    )
+    .map_err(|error| profile_api_error(error, StatusCode::BAD_REQUEST))?;
+    cfg.insert("name".into(), json!(normalized_name));
     apply_temp_object_override(&mut cfg, "launch", body.launch)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
 
@@ -335,8 +357,12 @@ async fn persist_created(folder_override: Option<String>, body: CreateReq) -> Ap
     crate::ensure_default_noise(&mut cfg);
     cfg.insert("_meta".into(), meta);
 
-    let pm = crate::save_profile_core(crate::main_window().as_ref(), Value::Object(cfg), false)
-        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    let pm = crate::persist_profile_core_claimed(
+        crate::main_window().as_ref(),
+        Value::Object(cfg),
+        false,
+    )
+    .map_err(|error| profile_api_error(error, StatusCode::BAD_REQUEST))?;
     crate::notify_store_changed("profiles");
     Ok(Json(serde_json::to_value(pm).unwrap_or(Value::Null)))
 }
@@ -451,10 +477,37 @@ mod temp_profile_tests {
             .unwrap();
         assert!(!accepted.contains_key("_meta"));
     }
+
+    #[test]
+    fn profile_validation_errors_map_to_actionable_http_statuses() {
+        let invalid = crate::profile::normalize_profile_name("bad/name").unwrap_err();
+        assert_eq!(
+            super::profile_api_error(invalid, axum::http::StatusCode::INTERNAL_SERVER_ERROR).0,
+            axum::http::StatusCode::BAD_REQUEST
+        );
+
+        let claim = crate::profile::begin_user_mutation(
+            ["api-profile-busy-status-test"],
+            "edit this profile",
+        )
+        .unwrap();
+        let busy = crate::profile::begin_user_mutation(
+            ["api-profile-busy-status-test"],
+            "edit this profile",
+        )
+        .unwrap_err();
+        assert_eq!(
+            super::profile_api_error(busy, axum::http::StatusCode::INTERNAL_SERVER_ERROR).0,
+            axum::http::StatusCode::CONFLICT
+        );
+        drop(claim);
+    }
 }
 
 /// Temporary profile (hidden, auto-deleted on close); pair with /start.
 async fn create_temporary(Json(body): Json<TempReq>) -> ApiResult {
+    let _claim = crate::profile::begin_profile_creation("create a temporary profile")
+        .map_err(|error| profile_api_error(error, StatusCode::INTERNAL_SERVER_ERROR))?;
     let fid = match body.fingerprint_id {
         Some(f) => f,
         None => random_fingerprint_for(body.platform.as_deref())?,
@@ -467,6 +520,12 @@ async fn create_temporary(Json(body): Json<TempReq>) -> ApiResult {
     if let Some(n) = body.name.as_ref() {
         cfg.insert("name".into(), json!(n));
     }
+    let normalized_name = crate::profile::validate_profile_name_for_mutation(
+        cfg.get("name").and_then(Value::as_str).unwrap_or_default(),
+        None,
+    )
+    .map_err(|error| profile_api_error(error, StatusCode::BAD_REQUEST))?;
+    cfg.insert("name".into(), json!(normalized_name));
     apply_temp_noise_override(&mut cfg, body.noise)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     apply_temp_object_override(&mut cfg, "launch", body.launch)
@@ -479,8 +538,12 @@ async fn create_temporary(Json(body): Json<TempReq>) -> ApiResult {
     }
     cfg.insert("_meta".into(), meta);
 
-    let pm = crate::save_profile_core(crate::main_window().as_ref(), Value::Object(cfg), false)
-        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    let pm = crate::persist_profile_core_claimed(
+        crate::main_window().as_ref(),
+        Value::Object(cfg),
+        false,
+    )
+    .map_err(|error| profile_api_error(error, StatusCode::BAD_REQUEST))?;
     Ok(Json(json!({
         "id": pm.id,
         "name": pm.name,
@@ -491,7 +554,10 @@ async fn create_temporary(Json(body): Json<TempReq>) -> ApiResult {
 }
 
 async fn delete_profile(Path(id): Path<String>) -> ApiResult {
-    crate::profile::delete(&id).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let _claim = crate::profile::begin_user_mutation([&id], "delete this profile")
+        .map_err(|error| profile_api_error(error, StatusCode::INTERNAL_SERVER_ERROR))?;
+    crate::profile::delete(&id)
+        .map_err(|error| profile_api_error(error, StatusCode::INTERNAL_SERVER_ERROR))?;
     crate::notify_store_changed("profiles");
     Ok(Json(json!({ "deleted": true, "id": id })))
 }
@@ -512,6 +578,8 @@ struct EditReq {
 
 /// Edit profile; only provided fields change. Returns the updated profile.
 async fn edit_profile(Path(id): Path<String>, Json(body): Json<EditReq>) -> ApiResult {
+    let _claim = crate::profile::begin_user_mutation([&id], "modify this profile")
+        .map_err(|error| profile_api_error(error, StatusCode::INTERNAL_SERVER_ERROR))?;
     let mut stored = crate::profile::load_raw(&id)
         .map_err(|e| err(StatusCode::NOT_FOUND, e.to_string()))?;
 
@@ -526,6 +594,8 @@ async fn edit_profile(Path(id): Path<String>, Json(body): Json<EditReq>) -> ApiR
     if let Some(n) = body.notes.as_ref() {
         stored.config.insert("notes".into(), json!(n));
     }
+    crate::profile::prepare_profile_name_for_save(&mut stored)
+        .map_err(|error| profile_api_error(error, StatusCode::INTERNAL_SERVER_ERROR))?;
     if let Some(pid) = body.proxy_id.as_ref() {
         stored.meta.proxy_id = if pid.is_empty() { None } else { Some(pid.clone()) };
         stored.meta.inline_proxy = None;
@@ -541,7 +611,7 @@ async fn edit_profile(Path(id): Path<String>, Json(body): Json<EditReq>) -> ApiR
     }
 
     crate::profile::save_raw(&mut stored)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|error| profile_api_error(error, StatusCode::INTERNAL_SERVER_ERROR))?;
     // set_folder handles unfile; save_raw keeps the existing folder when empty.
     if let Some(f) = body.folder.as_ref() {
         crate::profile::set_folder(&id, f)
@@ -561,7 +631,7 @@ struct RenameFolderReq {
 
 async fn rename_folder_ep(Path(folder): Path<String>, Json(body): Json<RenameFolderReq>) -> ApiResult {
     let n = crate::profile::rename_folder(&folder, &body.name)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|error| profile_api_error(error, StatusCode::INTERNAL_SERVER_ERROR))?;
     crate::notify_store_changed("profiles");
     Ok(Json(json!({ "renamed_to": body.name, "profiles": n })))
 }
@@ -575,7 +645,7 @@ struct DeleteFolderQuery {
 
 async fn delete_folder_ep(Path(folder): Path<String>, Query(q): Query<DeleteFolderQuery>) -> ApiResult {
     let n = crate::profile::delete_folder(&folder, q.delete_profiles)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|error| profile_api_error(error, StatusCode::INTERNAL_SERVER_ERROR))?;
     crate::notify_store_changed("profiles");
     Ok(Json(json!({
         "deleted_folder": folder,
@@ -705,13 +775,8 @@ struct ImportCookiesReq {
 }
 
 async fn import_cookies(Path(id): Path<String>, Json(body): Json<ImportCookiesReq>) -> ApiResult {
-    // Running browser would clobber imports on exit.
-    if crate::is_profile_running(&id) {
-        return Err(err(
-            StatusCode::CONFLICT,
-            "stop the profile before importing cookies",
-        ));
-    }
+    let _claim = crate::profile::begin_user_mutation([&id], "import cookies")
+        .map_err(|error| profile_api_error(error, StatusCode::INTERNAL_SERVER_ERROR))?;
     let n = crate::cookies::import(&id, &body.cookies)
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(json!({ "imported": n })))

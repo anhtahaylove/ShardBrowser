@@ -64,7 +64,7 @@ impl Tracker {
     }
 
     /// Take a spawned child + monitor it; entry removed on exit/kill.
-    pub fn track(self: &'static Self, profile_id: String, mut child: Child, temporary: bool) -> u32 {
+    pub fn track(&'static self, profile_id: String, mut child: Child, temporary: bool) -> u32 {
         let pid = child.id().unwrap_or(0);
         let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
 
@@ -119,9 +119,6 @@ impl Tracker {
                     }
                 }
             }
-            if let Ok(mut g) = Self::shared().inner.lock() {
-                g.remove(&profile_id);
-            }
             // Bump the persisted total runtime; non-temporary only (temp
             // profiles get deleted next line so their counter is moot).
             if !temporary {
@@ -136,6 +133,11 @@ impl Tracker {
                     Ok(()) => eprintln!("[launcher] temporary profile {profile_id} deleted on close"),
                     Err(e) => eprintln!("[launcher] temporary profile {profile_id} cleanup failed: {e}"),
                 }
+            }
+            // Keep the entry visible until every final profile write/delete is
+            // complete so a user mutation cannot race shutdown cleanup.
+            if let Ok(mut g) = Self::shared().inner.lock() {
+                g.remove(&profile_id);
             }
         });
 
@@ -154,6 +156,33 @@ impl Tracker {
     /// CDP endpoint when the profile was launched with remote debugging.
     pub fn cdp(&self, profile_id: &str) -> Option<CdpInfo> {
         self.inner.lock().ok()?.get(profile_id)?.cdp.clone()
+    }
+
+    pub fn is_running(&self, profile_id: &str) -> bool {
+        self.inner
+            .lock()
+            .map(|entries| entries.contains_key(profile_id))
+            .unwrap_or(true)
+    }
+
+    #[cfg(test)]
+    pub fn set_running_for_test(&self, profile_id: &str, running: bool) {
+        let mut entries = self.inner.lock().expect("tracker lock");
+        if running {
+            let (killer, _receiver) = tokio::sync::mpsc::channel(1);
+            entries.insert(
+                profile_id.to_string(),
+                ChildEntry {
+                    pid: 0,
+                    killer,
+                    cdp: None,
+                    verification: None,
+                    started_at: Instant::now(),
+                },
+            );
+        } else {
+            entries.remove(profile_id);
+        }
     }
 
     /// Update the in-memory verification handoff for a running profile.

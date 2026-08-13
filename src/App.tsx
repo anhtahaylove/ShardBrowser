@@ -1505,8 +1505,12 @@ function BrowsersView() {
 
   const remove = async (id: string) => {
     if ((await confirmModal({ title: "Delete profile", message: "Delete this profile? Its user-data dir is wiped too.", danger: true })) !== true) return;
-    await invoke("profile_delete", { id });
-    reload();
+    try {
+      await invoke("profile_delete", { id });
+      reload();
+    } catch (e) {
+      toast.err(safeUiError(e));
+    }
   };
 
   const cloneProfile = async (id: string) => {
@@ -1763,6 +1767,11 @@ function BrowsersView() {
     setProfileSaveBusy(true);
     setInlineProxyError(null);
     try {
+      const normalizedName = await invoke<string>("profile_validate_name", {
+        name: draft.name,
+        id: draft.id || null,
+      });
+      const validatedDraft = { ...draft, name: normalizedName };
       let proxyId = draft.proxy_id;
       if (hasInlineProxy) {
         const parsed = await invoke<ProxyEntry[]>("proxy_bulk_parse", {
@@ -1779,7 +1788,7 @@ function BrowsersView() {
       }
       const fp = fingerprints.find((g) => g.id === draft.gpu_preset_id) ?? null;
       const saved = await invoke<ProfileMeta>("profile_save", {
-        payload: toStored({ ...draft, proxy_id: proxyId }, fp),
+        payload: toStored({ ...validatedDraft, proxy_id: proxyId }, fp),
       });
       if (creating) createdProfileId = saved.id;
       await invoke("profile_bind_proxy", { profileId: saved.id, proxyId });
