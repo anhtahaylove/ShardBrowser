@@ -2,7 +2,7 @@ openapi: 3.0.3
 
 info:
   title: ShardX Launcher — Automation API
-  version: "0.1.26"
+  version: "0.1.27"
   description: |
     Local HTTP API for automating the ShardX anti-detect browser launcher:
     generate fingerprints, create/launch/close profiles, and obtain a Chrome
@@ -121,7 +121,7 @@ paths:
                 properties:
                   ok: { type: boolean, example: true }
                   name: { type: string, example: shardx-launcher }
-                  version: { type: string, example: "0.1.26" }
+                  version: { type: string, example: "0.1.27" }
 
   /startup:
     get:
