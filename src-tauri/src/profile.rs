@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
@@ -69,7 +70,7 @@ fn is_false(b: &bool) -> bool {
 }
 
 pub const MAX_PROFILE_NAME_CHARS: usize = 128;
-const CREATE_PROFILE_CLAIM: &str = "\0create-profile";
+const PROFILE_NAME_CLAIM: &str = "\0profile-name-namespace";
 const GLOBAL_FOLDER_CLAIM: &str = "\0folder-mutation";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,20 +219,30 @@ fn stored_profile_name(stored: &StoredProfile) -> &str {
         .unwrap_or("")
 }
 
-fn existing_profile_names() -> Result<Vec<(String, String)>> {
-    let mut names = Vec::new();
-    for entry in fs::read_dir(store::profiles_dir()?)? {
+fn strict_profile_records_in(dir: &std::path::Path) -> Result<Vec<(PathBuf, StoredProfile)>> {
+    let mut records = Vec::new();
+    for entry in fs::read_dir(dir)? {
         let entry = entry?;
-        if entry.path().extension().and_then(|value| value.to_str()) != Some("json") {
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
             continue;
         }
-        let Ok(body) = fs::read_to_string(entry.path()) else {
-            continue;
-        };
-        let Ok(stored): std::result::Result<StoredProfile, _> = serde_json::from_str(&body)
-        else {
-            continue;
-        };
+        let body = fs::read_to_string(&path)
+            .with_context(|| format!("read profile record {}", path.display()))?;
+        let stored: StoredProfile = serde_json::from_str(&body)
+            .with_context(|| format!("parse profile record {}", path.display()))?;
+        records.push((path, stored));
+    }
+    Ok(records)
+}
+
+fn strict_profile_records() -> Result<Vec<(PathBuf, StoredProfile)>> {
+    strict_profile_records_in(&store::profiles_dir()?)
+}
+
+fn existing_profile_names() -> Result<Vec<(String, String)>> {
+    let mut names = Vec::new();
+    for (_, stored) in strict_profile_records()? {
         let name = stored_profile_name(&stored).to_string();
         names.push((stored.meta.id, name));
     }
@@ -342,22 +353,6 @@ where
             format!("Profiles are being reorganized; retry {action}"),
         ));
     }
-    let requests_name_namespace = keys.iter().any(|key| key == CREATE_PROFILE_CLAIM);
-    if matches!(kind, ProfileClaimKind::Mutation) {
-        let name_namespace_busy = if requests_name_namespace {
-            claims
-                .iter()
-                .any(|(key, claim)| key != CREATE_PROFILE_CLAIM && matches!(claim, ProfileClaimKind::Mutation))
-        } else {
-            claims.contains_key(CREATE_PROFILE_CLAIM)
-        };
-        if name_namespace_busy {
-            return Err(profile_error(
-                ProfileErrorKind::Busy,
-                format!("Profile names are being modified; retry {action}"),
-            ));
-        }
-    }
     for key in &keys {
         if claims.contains_key(key) {
             return Err(profile_error(
@@ -365,7 +360,7 @@ where
                 format!("Profile is being launched or modified; retry {action}"),
             ));
         }
-        if key != CREATE_PROFILE_CLAIM && crate::process::Tracker::shared().is_running(key) {
+        if key != PROFILE_NAME_CLAIM && crate::process::Tracker::shared().is_running(key) {
             return Err(profile_error(
                 ProfileErrorKind::Running,
                 format!("Stop the running browser before you {action}"),
@@ -384,23 +379,24 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    begin_claim(profile_ids, action, ProfileClaimKind::Mutation)
+    let mut keys: Vec<String> = profile_ids
+        .into_iter()
+        .map(|id| id.as_ref().to_string())
+        .collect();
+    keys.push(PROFILE_NAME_CLAIM.to_string());
+    begin_claim(keys, action, ProfileClaimKind::Mutation)
 }
 
 pub fn begin_profile_creation(action: &str) -> Result<ProfileClaimGuard> {
     begin_claim(
-        [CREATE_PROFILE_CLAIM],
+        [PROFILE_NAME_CLAIM],
         action,
         ProfileClaimKind::Mutation,
     )
 }
 
 pub fn begin_clone_mutation(profile_id: &str) -> Result<ProfileClaimGuard> {
-    begin_claim(
-        [profile_id, CREATE_PROFILE_CLAIM],
-        "clone this profile",
-        ProfileClaimKind::Mutation,
-    )
+    begin_user_mutation([profile_id], "clone this profile")
 }
 
 pub fn begin_profile_launch(profile_id: &str) -> Result<ProfileClaimGuard> {
@@ -473,11 +469,20 @@ pub fn list_all() -> Result<Vec<ProfileMeta>> {
                 .map(|d| format!("@{}", d.as_secs()));
             if let Some(ts) = mtime {
                 stored.meta.created_at = Some(ts);
-                if let Ok(_claim) =
-                    begin_user_mutation([&stored.meta.id], "backfill profile metadata")
-                {
-                    if let Ok(body) = serde_json::to_string_pretty(&stored) {
-                        let _ = fs::write(&path, body);
+                if !stored.meta.id.is_empty() {
+                    if let Ok(_claim) =
+                        begin_user_mutation([&stored.meta.id], "backfill profile metadata")
+                    {
+                        if let Ok(mut current) = load_raw(&stored.meta.id) {
+                            if current.meta.created_at.is_none() {
+                                current.meta.created_at = stored.meta.created_at.clone();
+                                if save_raw(&mut current).is_ok() {
+                                    stored = current;
+                                }
+                            } else {
+                                stored = current;
+                            }
+                        }
                     }
                 }
             }
@@ -549,6 +554,63 @@ pub fn load_raw(id: &str) -> Result<StoredProfile> {
     let body = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
     let stored: StoredProfile = serde_json::from_str(&body)?;
     Ok(stored)
+}
+
+fn atomic_write(path: &std::path::Path, body: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .with_context(|| format!("profile path has no parent: {}", path.display()))?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .with_context(|| format!("profile path has no UTF-8 filename: {}", path.display()))?;
+    let temporary = parent.join(format!(".{file_name}.{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| -> Result<()> {
+        let mut file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .with_context(|| format!("create temporary profile record {}", temporary.display()))?;
+        file.write_all(body)
+            .with_context(|| format!("write temporary profile record {}", temporary.display()))?;
+        file.sync_all()
+            .with_context(|| format!("flush temporary profile record {}", temporary.display()))?;
+        replace_file(&temporary, path)
+            .with_context(|| format!("replace profile record {}", path.display()))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+#[cfg(not(windows))]
+fn replace_file(source: &std::path::Path, destination: &std::path::Path) -> Result<()> {
+    fs::rename(source, destination)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn replace_file(source: &std::path::Path, destination: &std::path::Path) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let source_wide: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination_wide: Vec<u16> = destination.as_os_str().encode_wide().chain(Some(0)).collect();
+    let moved = unsafe {
+        MoveFileExW(
+            source_wide.as_ptr(),
+            destination_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if moved == 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(())
 }
 
 /// Deterministic non-zero 32-bit seed from the profile id + noise slot (FNV-1a).
@@ -642,19 +704,31 @@ pub fn save_raw(stored: &mut StoredProfile) -> Result<()> {
     fill_noise_seeds(&mut stored.config, &stored.meta.id);
     let path = path_for(&stored.meta.id)?;
     let body = serde_json::to_string_pretty(stored)?;
-    fs::write(path, body)?;
+    atomic_write(&path, body.as_bytes())?;
     Ok(())
 }
 
 pub fn delete(id: &str) -> Result<()> {
     let path = path_for(id)?;
+    let mut config_deleted = false;
     if path.exists() {
-        fs::remove_file(path)?;
+        fs::remove_file(&path)?;
+        config_deleted = true;
     }
     // Also wipe per-profile user-data-dir.
     let udd = store::user_data_root()?.join(id);
     if udd.exists() {
-        let _ = fs::remove_dir_all(udd);
+        fs::remove_dir_all(&udd).with_context(|| {
+            if config_deleted {
+                format!(
+                    "profile config {} was deleted, but user data cleanup failed for {}",
+                    path.display(),
+                    udd.display()
+                )
+            } else {
+                format!("delete profile user data {}", udd.display())
+            }
+        })?;
     }
     Ok(())
 }
@@ -749,7 +823,7 @@ pub fn set_pin(id: &str, pinned: bool) -> Result<()> {
     p.meta.pinned = pinned;
     let path = path_for(&p.meta.id)?;
     let body = serde_json::to_string_pretty(&p)?;
-    fs::write(path, body)?;
+    atomic_write(&path, body.as_bytes())?;
     Ok(())
 }
 
@@ -759,24 +833,13 @@ pub fn set_folder(id: &str, folder: &str) -> Result<()> {
     p.meta.folder = folder.trim().to_string();
     let path = path_for(&p.meta.id)?;
     let body = serde_json::to_string_pretty(&p)?;
-    fs::write(path, body)?;
+    atomic_write(&path, body.as_bytes())?;
     Ok(())
 }
 
 pub fn profile_ids_in_folder(name: &str) -> Result<Vec<String>> {
     let mut profile_ids = Vec::new();
-    for entry in fs::read_dir(store::profiles_dir()?)? {
-        let entry = entry?;
-        if entry.path().extension().and_then(|value| value.to_str()) != Some("json") {
-            continue;
-        }
-        let Ok(body) = fs::read_to_string(entry.path()) else {
-            continue;
-        };
-        let Ok(stored): std::result::Result<StoredProfile, _> = serde_json::from_str(&body)
-        else {
-            continue;
-        };
+    for (_, stored) in strict_profile_records()? {
         if stored.meta.folder == name && !stored.meta.id.is_empty() {
             profile_ids.push(stored.meta.id);
         }
@@ -787,58 +850,53 @@ pub fn profile_ids_in_folder(name: &str) -> Result<Vec<String>> {
 /// Retag profiles from folder `old` to `new`; returns count.
 pub fn rename_folder(old: &str, new: &str) -> Result<usize> {
     let _claim = begin_folder_mutation(old, "rename this folder")?;
-    let dir = store::profiles_dir()?;
     let new = new.trim();
-    let mut n = 0;
-    for entry in fs::read_dir(&dir)? {
-        let entry = entry?;
-        if entry.path().extension().and_then(|s| s.to_str()) != Some("json") {
-            continue;
-        }
-        let Ok(body) = fs::read_to_string(entry.path()) else { continue; };
-        let Ok(mut stored): std::result::Result<StoredProfile, _> = serde_json::from_str(&body)
-        else {
-            continue;
-        };
+    let mut writes = Vec::new();
+    for (path, mut stored) in strict_profile_records()? {
         if stored.meta.folder == old {
             stored.meta.folder = new.to_string();
-            if let Ok(out) = serde_json::to_string_pretty(&stored) {
-                let _ = fs::write(entry.path(), out);
-            }
-            n += 1;
+            let body = serde_json::to_vec_pretty(&stored)
+                .with_context(|| format!("serialize profile record {}", path.display()))?;
+            writes.push((path, body));
         }
     }
-    Ok(n)
+    let total = writes.len();
+    for (applied, (path, body)) in writes.into_iter().enumerate() {
+        atomic_write(&path, &body).with_context(|| {
+            format!("folder rename partially applied ({applied}/{total} profiles updated)")
+        })?;
+    }
+    Ok(total)
 }
 
 /// Delete folder; `delete_profiles` true removes, false unfiles. Returns count.
 pub fn delete_folder(name: &str, delete_profiles: bool) -> Result<usize> {
     let _claim = begin_folder_mutation(name, "delete this folder")?;
-    let dir = store::profiles_dir()?;
-    let mut n = 0;
-    for entry in fs::read_dir(&dir)? {
-        let entry = entry?;
-        if entry.path().extension().and_then(|s| s.to_str()) != Some("json") {
-            continue;
-        }
-        let Ok(body) = fs::read_to_string(entry.path()) else { continue; };
-        let Ok(mut stored): std::result::Result<StoredProfile, _> = serde_json::from_str(&body)
-        else {
-            continue;
-        };
+    let mut targets = Vec::new();
+    for (path, mut stored) in strict_profile_records()? {
         if stored.meta.folder == name {
             if delete_profiles {
-                let _ = delete(&stored.meta.id);
+                targets.push((path, stored.meta.id, None));
             } else {
                 stored.meta.folder = String::new();
-                if let Ok(out) = serde_json::to_string_pretty(&stored) {
-                    let _ = fs::write(entry.path(), out);
-                }
+                let body = serde_json::to_vec_pretty(&stored)
+                    .with_context(|| format!("serialize profile record {}", path.display()))?;
+                targets.push((path, stored.meta.id, Some(body)));
             }
-            n += 1;
         }
     }
-    Ok(n)
+    let total = targets.len();
+    for (applied, (path, id, body)) in targets.into_iter().enumerate() {
+        let result = if let Some(body) = body {
+            atomic_write(&path, &body)
+        } else {
+            delete(&id)
+        };
+        result.with_context(|| {
+            format!("folder deletion partially applied ({applied}/{total} profiles updated)")
+        })?;
+    }
+    Ok(total)
 }
 
 /// Per-profile user-data-dir; created on first call.
@@ -863,6 +921,13 @@ fn chrono_now_iso() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lifecycle_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("profile lifecycle test lock")
+    }
 
     #[test]
     fn profile_name_validation_accepts_unicode_and_trims_leading_space() {
@@ -907,6 +972,7 @@ mod tests {
 
     #[test]
     fn lifecycle_claims_serialize_launch_and_user_mutations() {
+        let _test_guard = lifecycle_test_guard();
         let mutation = begin_user_mutation(["profile-claim-a"], "edit profile").unwrap();
         let launch_error = match begin_profile_launch("profile-claim-a") {
             Ok(_) => panic!("launch must not overlap a mutation"),
@@ -928,6 +994,7 @@ mod tests {
 
     #[test]
     fn lifecycle_claims_allow_unrelated_profiles_to_run_concurrently() {
+        let _test_guard = lifecycle_test_guard();
         let first = begin_profile_launch("profile-claim-concurrent-a").unwrap();
         let second = begin_profile_launch("profile-claim-concurrent-b").unwrap();
         let edit = begin_user_mutation(["profile-claim-concurrent-c"], "edit profile").unwrap();
@@ -936,6 +1003,7 @@ mod tests {
 
     #[test]
     fn lifecycle_claims_serialize_name_changes_without_blocking_unrelated_launches() {
+        let _test_guard = lifecycle_test_guard();
         let creation = begin_profile_creation("create profile").unwrap();
         let mutation_error = match begin_user_mutation(["profile-name-edit-a"], "rename profile") {
             Ok(_) => panic!("profile edit must not overlap name allocation"),
@@ -955,7 +1023,22 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_claims_serialize_concurrent_mutations_across_profile_ids() {
+        let _test_guard = lifecycle_test_guard();
+        let first = begin_user_mutation(["profile-name-race-a"], "rename profile").unwrap();
+        let second_error = begin_user_mutation(["profile-name-race-b"], "rename profile")
+            .expect_err("concurrent name mutations must be serialized");
+        assert_eq!(
+            profile_error_kind(&second_error),
+            Some(ProfileErrorKind::Busy)
+        );
+        drop(first);
+        assert!(begin_user_mutation(["profile-name-race-b"], "rename profile").is_ok());
+    }
+
+    #[test]
     fn running_profile_mutations_fail_closed_and_stopped_profiles_remain_mutable() {
+        let _test_guard = lifecycle_test_guard();
         let profile_id = "profile-running-guard-test";
         let tracker = crate::process::Tracker::shared();
         tracker.set_running_for_test(profile_id, true);
@@ -968,5 +1051,46 @@ mod tests {
 
         tracker.set_running_for_test(profile_id, false);
         assert!(begin_user_mutation([profile_id], "edit this profile").is_ok());
+    }
+
+    #[test]
+    fn strict_profile_inventory_rejects_malformed_records() {
+        let dir = std::env::temp_dir().join(format!(
+            "shardx-strict-profile-records-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let malformed = dir.join("malformed.json");
+        fs::write(&malformed, b"{not-json").unwrap();
+
+        let error = strict_profile_records_in(&dir)
+            .expect_err("malformed records must fail the inventory closed");
+        assert!(error.to_string().contains("parse profile record"));
+        assert!(error.to_string().contains("malformed.json"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn atomic_write_replaces_content_and_removes_temporary_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "shardx-atomic-profile-write-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("profile.json");
+        fs::write(&path, b"old").unwrap();
+
+        atomic_write(&path, b"new").unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty());
+
+        fs::remove_dir_all(dir).unwrap();
     }
 }

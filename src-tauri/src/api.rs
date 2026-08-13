@@ -502,6 +502,39 @@ mod temp_profile_tests {
         );
         drop(claim);
     }
+
+    fn operation_block<'a>(spec: &'a str, start: &str, end: &str) -> &'a str {
+        let start_index = spec.find(start).expect("OpenAPI operation start");
+        let rest = &spec[start_index..];
+        let end_index = rest.find(end).expect("OpenAPI operation end");
+        &rest[..end_index]
+    }
+
+    #[test]
+    fn openapi_documents_profile_validation_and_lifecycle_conflicts() {
+        let spec = include_str!("../../openapi.yaml").replace("\r\n", "\n");
+        for (start, end) in [
+            ("  /profiles:\n", "  /profiles/temporary:\n"),
+            ("  /profiles/temporary:\n", "  /profiles/{id}:\n"),
+            ("  /profiles/{id}:\n", "  /profiles/{id}/start:\n"),
+            ("  /profiles/{id}/start:\n", "  /profiles/{id}/stop:\n"),
+            ("  /folders/{folder}:\n", "  /folders/{folder}/profiles:\n"),
+            ("  /folders/{folder}/profiles:\n", "  /fingerprints:\n"),
+        ] {
+            let operation = operation_block(&spec, start, end);
+            assert!(operation.contains("\"409\":"), "missing 409 for {start}");
+        }
+
+        for (start, end) in [
+            ("  /profiles:\n", "  /profiles/temporary:\n"),
+            ("  /profiles/temporary:\n", "  /profiles/{id}:\n"),
+            ("  /profiles/{id}:\n", "  /profiles/{id}/start:\n"),
+            ("  /folders/{folder}/profiles:\n", "  /fingerprints:\n"),
+        ] {
+            let operation = operation_block(&spec, start, end);
+            assert!(operation.contains("\"400\":"), "missing 400 for {start}");
+        }
+    }
 }
 
 /// Temporary profile (hidden, auto-deleted on close); pair with /start.
@@ -665,7 +698,7 @@ async fn start_profile(Path(id): Path<String>, body: Option<Json<StartReq>>) -> 
     let headless = body.map(|Json(b)| b.headless).unwrap_or(false);
     let outcome = crate::launch::launch_profile(&id, true, headless)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|error| profile_api_error(error, StatusCode::INTERNAL_SERVER_ERROR))?;
     Ok(Json(json!({
         "profile_id": id,
         "pid": outcome.pid,

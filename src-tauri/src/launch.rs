@@ -227,11 +227,14 @@ pub async fn launch_profile(
         // when a Tauri GUI app spawns the engine binary.
         cmd.creation_flags(0x08000000);
     }
-    let child = cmd.spawn().context("spawn ShardX")?;
+    let mut child = cmd.spawn().context("spawn ShardX")?;
+    if let Err(error) = profile::touch_launched(profile_id, None) {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        return Err(error).context("persist launch metadata before tracking ShardX");
+    }
     let pid = Tracker::shared().track(profile_id.to_string(), child, stored.meta.temporary);
     drop(launch_claim);
-
-    profile::touch_launched(profile_id, None)?;
 
     let cdp = if enable_cdp {
         match read_devtools_endpoint(&udd).await {

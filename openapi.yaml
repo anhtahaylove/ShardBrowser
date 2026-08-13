@@ -255,11 +255,16 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ProfileMeta" }
         "400":
-          description: Missing/!object `fingerprint`, or an unparseable proxy string.
+          description: Missing/!object `fingerprint`, invalid/reserved/duplicate profile name, or an unparseable proxy string.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: Another profile create/edit/import operation is in progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /profiles/temporary:
     post:
@@ -294,11 +299,16 @@ paths:
                     type: boolean
                     description: Whether an inline proxy string was attached.
         "400":
-          description: Unparseable proxy string.
+          description: Invalid/reserved/duplicate profile name or unparseable proxy string.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: Another profile create/edit/import operation is in progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "404":
           description: No matching fingerprint / empty library.
           content:
@@ -344,6 +354,11 @@ paths:
                   deleted: { type: boolean, example: true }
                   id: { type: string, format: uuid }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: The browser is running or another profile lifecycle operation is in progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "500":
           description: Deletion failed.
           content:
@@ -372,11 +387,16 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/StoredProfile" }
         "400":
-          description: Bad fingerprint (not an object) or unparseable proxy.
+          description: Bad fingerprint, invalid/reserved/duplicate profile name, or unparseable proxy.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: The browser is running or another profile lifecycle operation is in progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "404":
           description: No such profile.
           content:
@@ -424,6 +444,11 @@ paths:
                     nullable: true
                     allOf: [{ $ref: "#/components/schemas/CdpInfo" }]
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: The browser is already running or the profile is being modified.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "500":
           description: Binary not configured / spawn failed.
           content:
@@ -566,6 +591,16 @@ paths:
                   renamed_to: { type: string }
                   profiles: { type: integer, description: Profiles retagged. }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: A target browser is running or another profile lifecycle operation is in progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: Profile inventory or atomic write failed; the error reports any partial progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
     delete:
       tags: [Folders]
       summary: Delete a folder
@@ -594,6 +629,16 @@ paths:
                   delete_profiles: { type: boolean }
                   profiles: { type: integer, description: Profiles affected. }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: A target browser is running or another profile lifecycle operation is in progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: Profile inventory, delete, or atomic write failed; the error reports any partial progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /folders/{folder}/profiles:
     post:
@@ -619,11 +664,16 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ProfileMeta" }
         "400":
-          description: Missing/!object `fingerprint`, or an unparseable proxy string.
+          description: Missing/!object `fingerprint`, invalid/reserved/duplicate profile name, or an unparseable proxy string.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: Another profile create/edit/import operation is in progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /fingerprints:
     get:

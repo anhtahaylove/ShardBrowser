@@ -325,8 +325,16 @@ fn profile_get(id: String) -> Result<Value, String> {
     if stored.meta.gpu_preset_id.is_none() {
         if let Some(gid) = infer_gpu_preset_id(&stored.config) {
             if let Ok(_claim) = profile::begin_user_mutation([&id], "backfill profile metadata") {
-                stored.meta.gpu_preset_id = Some(gid);
-                let _ = profile::save_raw(&mut stored);
+                if let Ok(mut current) = profile::load_raw(&id) {
+                    if current.meta.gpu_preset_id.is_none() {
+                        current.meta.gpu_preset_id = Some(gid);
+                        if profile::save_raw(&mut current).is_ok() {
+                            stored = current;
+                        }
+                    } else {
+                        stored = current;
+                    }
+                }
             }
         }
     }
