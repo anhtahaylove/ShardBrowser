@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.28 - 2026-08-14
+
+### Rust SDK
+
+- Update the crate-level quickstart doctest to create a `Profile` before calling `ShardX::session`.
+- Gate the CDP-control doctest and `quickstart` example behind the existing `control` feature so `--no-default-features` remains buildable.
+- Upgrade `dirs` from 5 to 6 and `rand` from 0.8 to 0.9 after isolated default-feature, no-default-feature, and Rust 1.74.1 compatibility checks.
+- Keep `chromiumoxide` 0.7, `reqwest` 0.12, and `zip` 2 because their current release lines are RustSec-clean while the next majors exceed the SDK's Rust 1.74 MSRV.
+- Add stable, RustSec, and Rust 1.74.1 SDK gates to CI and release validation so vulnerable dependency graphs, doctest failures, feature-minimal regressions, and MSRV breaks cannot bypass packaging.
+
 ## 0.1.27 - 2026-08-13
 
 ### Security

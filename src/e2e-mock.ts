@@ -98,7 +98,7 @@ type E2EWindow = Window & { __resolveUpdateCheck?: () => void };
 function updateInfo() {
   const available = params.get("update") !== "none";
   return {
-    current: "0.1.27",
+    current: "0.1.28",
     latest: available ? "v0.1.28" : null,
     update_available: available,
     release_url: "https://github.com/anhtahaylove/ShardBrowser/releases/tag/v0.1.28",
@@ -127,9 +127,9 @@ function mcpStatus() {
     installed: true,
     files_downloaded: true,
     lockfile_present: true,
-    version: "0.1.27",
+    version: "0.1.28",
     version_current: true,
-    required_version: "0.1.27",
+    required_version: "0.1.28",
     dependencies_installed: true,
     api_reachable: true,
     ready: true,

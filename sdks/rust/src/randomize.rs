@@ -2,7 +2,7 @@
 //! platform_version. Mirrors `randomize_hardware` / `randomize_platform_version`
 //! in the launcher.
 
-use rand::seq::SliceRandom;
+use rand::seq::IndexedRandom;
 use serde_json::{json, Value};
 
 use crate::host::{host_logical_cores, host_ram_bucket_gb};
@@ -18,8 +18,8 @@ pub const WINDOWS_PLATFORM_VERSIONS: &[&str] = &[
 ];
 
 pub const LINUX_PLATFORM_VERSIONS: &[&str] = &[
-    "5.15.0", "6.1.0", "6.5.0", "6.6.0", "6.8.0", "6.10.0", "6.11.0", "6.12.0", "6.14.0",
-    "6.15.0", "6.16.0",
+    "5.15.0", "6.1.0", "6.5.0", "6.6.0", "6.8.0", "6.10.0", "6.11.0", "6.12.0", "6.14.0", "6.15.0",
+    "6.16.0",
 ];
 
 /// Real x86 logical-core counts (SMT + Intel hybrid). Same array as the launcher.
@@ -69,8 +69,10 @@ pub fn randomize_platform_version(cfg: &mut Value) {
         "Linux" => LINUX_PLATFORM_VERSIONS,
         _ => return,
     };
-    let mut rng = rand::thread_rng();
-    let Some(v) = pool.choose(&mut rng) else { return };
+    let mut rng = rand::rng();
+    let Some(v) = pool.choose(&mut rng) else {
+        return;
+    };
     let v = v.to_string();
     ensure_obj(cfg, "navigator").insert("platform_version".into(), json!(v));
     if let Some(ch) = cfg.get_mut("client_hints").and_then(|c| c.as_object_mut()) {
@@ -86,7 +88,7 @@ pub fn randomize_platform_version(cfg: &mut Value) {
 /// [`host_ram_bucket_gb`].
 pub fn randomize_hardware(cfg: &mut Value, profile_id: Option<&str>) {
     let plat = platform_of(cfg);
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let (cores, mem): (u64, u64) = if plat == "macOS" {
         match profile_id.and_then(mac_hw_configs) {

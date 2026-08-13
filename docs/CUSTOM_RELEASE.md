@@ -36,11 +36,11 @@ app and does not establish a trusted Windows publisher.
 
 - **Internal updater-signed build:** run the Release workflow manually and leave
   `publish_release` disabled. Select the branch or ref that contains this
-  custom workflow, pass the matching tag such as `v0.1.27`, and download the
+  custom workflow, pass the matching tag such as `v0.1.28`, and download the
   per-platform workflow artifacts. The workflow rejects manual runs when the
   requested tag does not match the package versions, and artifact names include
   the tag to avoid confusing multiple internal builds.
-- **Public release:** push a version tag such as `v0.1.27`, or manually run the
+- **Public release:** push a version tag such as `v0.1.28`, or manually run the
   workflow with `publish_release` enabled. The release receives native bundles,
   `ShardX-MCP.tar.gz`, `SHA256SUMS.txt`, and GitHub build-provenance
   attestations.
@@ -53,7 +53,7 @@ When the custom release workflow is still only on a feature branch, run it from
 that branch explicitly, for example:
 
 ```powershell
-gh workflow run Release --repo anhtahaylove/ShardBrowser --ref codex/v0.1.27-security-profile-safety -f tag=v0.1.27 -f publish_release=false
+gh workflow run Release --repo anhtahaylove/ShardBrowser --ref codex/next-dependency-patch-rust-sdk -f tag=v0.1.28 -f publish_release=false
 ```
 
 The internal workflow artifacts are enough to test updater-signed Launcher installation.

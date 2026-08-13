@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag/version for the build (for example v0.1.27).'
+        description: 'Tag/version for the build (for example v0.1.28).'
         required: true
       publish_release:
         description: 'Publish a public GitHub Release after all updater-signed builds pass.'
@@ -24,6 +24,7 @@ on:
 
 permissions:
   contents: write
+  checks: write
   id-token: write
   attestations: write
 
@@ -47,6 +48,9 @@ jobs:
       - name: Set up Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Set up Rust SDK MSRV
+        uses: dtolnay/rust-toolchain@1.74.1
+
       - name: Install frontend dependencies
         run: npm ci
 
@@ -62,6 +66,26 @@ jobs:
           npm ci --prefix sdks/node
           npm audit --prefix sdks/node --audit-level=moderate
           npm test --prefix sdks/node
+
+      - name: Verify Rust SDK stable gates
+        run: |
+          cargo +stable test --manifest-path sdks/rust/Cargo.toml --all-features
+          cargo +stable test --manifest-path sdks/rust/Cargo.toml --no-default-features
+
+      - name: Verify Rust SDK RustSec gate
+        uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: sdks/rust
+
+      - name: Verify Rust SDK MSRV gates
+        env:
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
+        run: |
+          rm -f sdks/rust/Cargo.lock
+          cargo +stable generate-lockfile --manifest-path sdks/rust/Cargo.toml
+          cargo +1.74.1 test --locked --manifest-path sdks/rust/Cargo.toml --all-features
+          cargo +1.74.1 test --locked --manifest-path sdks/rust/Cargo.toml --no-default-features
 
       - name: Install Linux dependencies for updater key verification
         run: |
@@ -349,13 +373,12 @@ jobs:
 
           ## Highlights
 
-          * Profile mutations now fail closed while the target browser is running or its launch/exit cleanup owns the profile lifecycle.
-          * Profile names use one shared validator across Launcher UI, Automation API, create, edit, clone, and batch import paths, including Windows reserved-name and case-insensitive collision checks.
-          * Concurrent profile-name allocation is serialized without blocking unrelated profile launches.
-          * npm security advisories are resolved in the Launcher, MCP, and Node SDK dependency graphs; the release gate now audits all three graphs and runs the SDK ZIP regression suite.
-          * Node SDK runtime extraction is regression-tested with nested Windows paths and Unicode fingerprint bundles after the archive dependency update.
+          * The Rust SDK quickstart doctest now creates a profile before opening a session and remains valid with the CDP `control` feature enabled.
+          * `--no-default-features` no longer attempts to compile the CDP-only doctest or quickstart example.
+          * Rust SDK dependencies advance to `dirs` 6 and `rand` 0.9.5 with the required `IndexedRandom` and `rand::rng()` migration.
+          * Rust 1.74.1 remains the SDK MSRV; stable and MSRV checks now cover all-features and no-default-features builds in CI and release validation.
+          * RustSec now gates CI and release validation without ignored advisories; major-version decisions are recorded in `docs/RUST_SDK_DEPENDENCY_AUDIT_0.1.28.md`.
           * Existing startup-in-tray, 96-tool MCP contract, signed Tauri updater, NSIS upgrade safety, and headless automation compatibility are preserved.
-          * SQLite/WAL migration is intentionally deferred to the future Team/Fleet Sync and encrypted-backup line because the current server does not enable WAL and this patch does not change database concurrency.
 
           ## Install
 
