@@ -18,10 +18,11 @@
   ],
   "scripts": {
     "build": "tsc",
+    "test": "npm run build && node --test test/runtime-zip.test.mjs",
     "prepublishOnly": "npm run build"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=18.17"
   },
   "keywords": [
     "anti-detect",
@@ -47,13 +48,12 @@
     "access": "public"
   },
   "dependencies": {
-    "adm-zip": "^0.5.16",
+    "adm-zip": "^0.6.0",
     "patchright": "^1.49.0",
     "socks-proxy-agent": "^8.0.4",
-    "undici": "^6.19.0"
+    "undici": "^6.28.0"
   },
   "devDependencies": {
-    "@types/adm-zip": "^0.5.7",
     "@types/node": "^20",
     "typescript": "^5.4"
   }
