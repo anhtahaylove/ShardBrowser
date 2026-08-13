@@ -110,7 +110,7 @@ jobs:
           test -s "$fixture.sig"
           SHARDX_UPDATER_TEST_ARTIFACT="$fixture" \
           SHARDX_UPDATER_TEST_SIGNATURE="$fixture.sig" \
-            cargo test --quiet --manifest-path src-tauri/Cargo.toml \
+            cargo +stable test --quiet --manifest-path src-tauri/Cargo.toml \
               --lib updater_private_key_matches_shipped_public_key -- --ignored
           rm -f "$fixture" "$fixture.sig"
 
