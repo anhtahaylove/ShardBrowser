@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node index.js",
-    "test": "node --test challenge.test.js verification-checkpoint.test.js contract.test.js"
+    "test": "node --test challenge.test.js verification-checkpoint.test.js safe-open-lifecycle.test.js contract.test.js"
   },
   "engines": {
     "node": ">=18"
