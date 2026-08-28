@@ -40,6 +40,9 @@ test("stdio server exposes the versioned ShardX tool contract", async () => {
     ]) {
       assert(names.has(name), `missing MCP tool: ${name}`);
     }
+
+    const safeOpen = tools.find((tool) => tool.name === "safe_open_url");
+    assert(safeOpen.inputSchema.properties.keep_running, "safe_open_url.keep_running missing");
   } finally {
     await client.close();
   }

@@ -21,6 +21,7 @@ import { z } from "zod";
 import { chromium } from "patchright";
 
 import { classifyCloudflareChallenge, waitForChallengeClear } from "./challenge.js";
+import { safeOpenLifecycle } from "./safe-open-lifecycle.js";
 import {
   clearVerificationCheckpoint,
   notifyVerificationRequired,
@@ -540,25 +541,29 @@ server.tool(
 
 server.tool(
   "safe_open_url",
-  "Resolve/start a profile, open an http(s) URL, and automatically pause a visible run for manual Cloudflare verification before resuming. Never clicks, solves, or bypasses challenge controls.",
+  "Resolve/start a profile, open an http(s) URL in the active tab, and automatically pause a visible run for manual Cloudflare verification before resuming. By default it restores a profile that was initially stopped; set keep_running=true when follow-up tab/screenshot/ARIA/network tools must use the same active tab, then call stop_profile. Never clicks, solves, or bypasses challenge controls.",
   {
     profile_id: z.string().optional(),
     profile_query: z.string().optional(),
     exact: z.boolean().optional(),
     url: z.string(),
     headless: z.boolean().optional(),
+    keep_running: z.boolean().optional(),
     verification_timeout_ms: z.number().int().min(0).max(600000).optional(),
   },
-  async ({ profile_id, profile_query, exact, url, headless, verification_timeout_ms }) => {
+  async ({ profile_id, profile_query, exact, url, headless, keep_running, verification_timeout_ms }) => {
     // Reject non-http(s) input before resolving/starting a profile so an
     // invalid navigation request has no browser-process side effect.
     const targetUrl = assertHttpUrl(url);
     const profile = await resolveProfile({ profile_id, profile_query, exact });
     const wasRunning = (await api("/running")).some((r) => r.profile_id === profile.id);
+    const lifecycle = safeOpenLifecycle({ wasRunning, keepRunning: keep_running });
     let self_healed = null;
     const open = async () => {
       const page = await pageFor(profile.id, { headless: !!headless });
       const response = await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+      await page.bringToFront().catch(() => {});
+      activePage.set(profile.id, page);
       let challenge = await updateChallengeStatus(profile.id, page, response, "safe_open_url");
       let verification = null;
       const timeoutMs = verification_timeout_ms ?? (headless ? 0 : 120000);
@@ -595,7 +600,7 @@ server.tool(
         errors_count: cleanup.errors.length,
       };
     } finally {
-      if (!wasRunning) {
+      if (lifecycle.stopped_by_helper) {
         await stopStartedProfile(profile.id);
       }
     }
@@ -606,6 +611,7 @@ server.tool(
       challenge: result.challenge,
       verification: result.verification,
       self_healed,
+      lifecycle,
     });
   },
 );
