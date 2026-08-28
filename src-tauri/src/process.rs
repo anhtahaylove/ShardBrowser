@@ -33,10 +33,17 @@ pub enum KillOutcome {
     Stopped { pid: u32 },
     NotRunning,
     PidMismatch { expected_pid: u32, actual_pid: u32 },
+    LaunchInstanceMismatch { pid: u32 },
+}
+
+pub struct TrackedProcess {
+    pub pid: u32,
+    pub launch_instance_token: String,
 }
 
 struct ChildEntry {
     pid: u32,
+    launch_instance_token: String,
     killer: tokio::sync::mpsc::Sender<()>,
     /// Set once DevToolsActivePort is read; None for UI launches.
     cdp: Option<CdpInfo>,
@@ -71,8 +78,14 @@ impl Tracker {
     }
 
     /// Take a spawned child + monitor it; entry removed on exit/kill.
-    pub fn track(&'static self, profile_id: String, mut child: Child, temporary: bool) -> u32 {
+    pub fn track(
+        &'static self,
+        profile_id: String,
+        mut child: Child,
+        temporary: bool,
+    ) -> TrackedProcess {
         let pid = child.id().unwrap_or(0);
+        let launch_instance_token = uuid::Uuid::new_v4().to_string();
         let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
 
         {
@@ -81,6 +94,7 @@ impl Tracker {
                 profile_id.clone(),
                 ChildEntry {
                     pid,
+                    launch_instance_token: launch_instance_token.clone(),
                     killer: tx,
                     cdp: None,
                     verification: None,
@@ -92,6 +106,7 @@ impl Tracker {
         // Graceful shutdown (SIGTERM / taskkill WM_CLOSE) → 5s → hard kill.
         // Graceful path flushes session state so next launch skips the restore prompt.
         let started_at = Instant::now();
+        let tracked_launch_instance_token = launch_instance_token.clone();
         tokio::spawn(async move {
             tokio::select! {
                 _ = child.wait() => {}
@@ -143,21 +158,31 @@ impl Tracker {
             }
             // Keep the entry visible until every final profile write/delete is
             // complete so a user mutation cannot race shutdown cleanup.
-            if let Ok(mut g) = Self::shared().inner.lock() {
-                g.remove(&profile_id);
-            }
+            Self::shared().remove_if_instance(&profile_id, &tracked_launch_instance_token);
         });
 
-        pid
+        TrackedProcess {
+            pid,
+            launch_instance_token,
+        }
     }
 
-    /// Attach CDP to a tracked profile; no-op if the profile already exited.
-    pub fn set_cdp(&self, profile_id: &str, cdp: CdpInfo) {
+    /// Attach CDP only to the exact launch instance that requested it.
+    pub fn set_cdp_if_instance(
+        &self,
+        profile_id: &str,
+        launch_instance_token: &str,
+        cdp: CdpInfo,
+    ) -> bool {
         if let Ok(mut g) = self.inner.lock() {
             if let Some(e) = g.get_mut(profile_id) {
-                e.cdp = Some(cdp);
+                if e.launch_instance_token == launch_instance_token {
+                    e.cdp = Some(cdp);
+                    return true;
+                }
             }
         }
+        false
     }
 
     /// CDP endpoint when the profile was launched with remote debugging.
@@ -181,6 +206,7 @@ impl Tracker {
                 profile_id.to_string(),
                 ChildEntry {
                     pid: 0,
+                    launch_instance_token: "test-instance".into(),
                     killer,
                     cdp: None,
                     verification: None,
@@ -193,10 +219,11 @@ impl Tracker {
     }
 
     #[cfg(test)]
-    fn set_running_pid_for_test(
+    fn set_running_instance_for_test(
         &self,
         profile_id: &str,
         pid: u32,
+        launch_instance_token: &str,
     ) -> tokio::sync::mpsc::Receiver<()> {
         let mut entries = self.inner.lock().expect("tracker lock");
         let (killer, receiver) = tokio::sync::mpsc::channel(1);
@@ -204,6 +231,7 @@ impl Tracker {
             profile_id.to_string(),
             ChildEntry {
                 pid,
+                launch_instance_token: launch_instance_token.into(),
                 killer,
                 cdp: None,
                 verification: None,
@@ -242,39 +270,59 @@ impl Tracker {
             .collect()
     }
 
-    pub async fn kill_if_pid(
+    pub async fn kill_if_instance(
         &self,
         profile_id: &str,
-        expected_pid: Option<u32>,
+        expected_pid: u32,
+        expected_launch_instance_token: &str,
     ) -> Result<KillOutcome> {
         let target = {
             let g = self.inner.lock().unwrap();
             let Some(entry) = g.get(profile_id) else {
                 return Ok(KillOutcome::NotRunning);
             };
-            if let Some(expected_pid) = expected_pid {
-                if entry.pid != expected_pid {
-                    return Ok(KillOutcome::PidMismatch {
-                        expected_pid,
-                        actual_pid: entry.pid,
-                    });
-                }
+            if entry.pid != expected_pid {
+                return Ok(KillOutcome::PidMismatch {
+                    expected_pid,
+                    actual_pid: entry.pid,
+                });
+            }
+            if entry.launch_instance_token != expected_launch_instance_token {
+                return Ok(KillOutcome::LaunchInstanceMismatch { pid: entry.pid });
             }
             (entry.killer.clone(), entry.pid)
         };
         let (killer, pid) = target;
-        // The tracking task owns the Child handle and performs both graceful
-        // shutdown and its hard-kill fallback. Do not add a delayed PID-only
-        // fallback here: Windows may recycle the PID after that handle closes.
         let _ = killer.send(()).await;
         Ok(KillOutcome::Stopped { pid })
     }
 
+    fn remove_if_instance(&self, profile_id: &str, launch_instance_token: &str) -> bool {
+        let Ok(mut entries) = self.inner.lock() else {
+            return false;
+        };
+        let matches = entries
+            .get(profile_id)
+            .map(|entry| entry.launch_instance_token == launch_instance_token)
+            .unwrap_or(false);
+        if matches {
+            entries.remove(profile_id);
+        }
+        matches
+    }
+
     pub async fn kill(&self, profile_id: &str) -> Result<bool> {
-        Ok(matches!(
-            self.kill_if_pid(profile_id, None).await?,
-            KillOutcome::Stopped { .. }
-        ))
+        let killer = {
+            let entries = self.inner.lock().unwrap();
+            let Some(entry) = entries.get(profile_id) else {
+                return Ok(false);
+            };
+            entry.killer.clone()
+        };
+        // The tracking task owns the Child handle and performs graceful stop
+        // plus its hard-kill fallback without reacquiring the process by PID.
+        let _ = killer.send(()).await;
+        Ok(true)
     }
 
     pub fn shared() -> &'static Tracker {
@@ -340,22 +388,20 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn expected_pid_guard_never_stops_a_replacement_process() {
+    async fn launch_instance_guard_never_stops_a_same_pid_replacement() {
         let tracker = Tracker::new();
-        let mut replacement_killer = tracker.set_running_pid_for_test("profile-pid-guard", 222);
+        let mut replacement_killer = tracker.set_running_instance_for_test(
+            "profile-instance-guard",
+            111,
+            "replacement-instance",
+        );
 
         let outcome = tracker
-            .kill_if_pid("profile-pid-guard", Some(111))
+            .kill_if_instance("profile-instance-guard", 111, "owned-instance")
             .await
-            .expect("PID mismatch should be a normal guarded outcome");
+            .expect("instance mismatch should be a normal guarded outcome");
 
-        assert_eq!(
-            outcome,
-            KillOutcome::PidMismatch {
-                expected_pid: 111,
-                actual_pid: 222,
-            }
-        );
+        assert_eq!(outcome, KillOutcome::LaunchInstanceMismatch { pid: 111 });
         assert!(matches!(
             replacement_killer.try_recv(),
             Err(tokio::sync::mpsc::error::TryRecvError::Empty)
@@ -363,16 +409,48 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn expected_pid_guard_stops_the_owned_process() {
+    async fn launch_instance_guard_stops_only_the_exact_owned_instance() {
         let tracker = Tracker::new();
-        let mut owned_killer = tracker.set_running_pid_for_test("profile-pid-owned", 111);
+        let mut owned_killer =
+            tracker.set_running_instance_for_test("profile-instance-owned", 111, "owned-instance");
 
         let outcome = tracker
-            .kill_if_pid("profile-pid-owned", Some(111))
+            .kill_if_instance("profile-instance-owned", 111, "owned-instance")
             .await
-            .expect("owned PID should be stoppable");
+            .expect("owned launch instance should be stoppable");
 
         assert_eq!(outcome, KillOutcome::Stopped { pid: 111 });
         assert_eq!(owned_killer.recv().await, Some(()));
+    }
+
+    #[test]
+    fn stale_finalizer_never_removes_a_replacement_instance() {
+        let tracker = Tracker::new();
+        let _receiver =
+            tracker.set_running_instance_for_test("profile-instance-finalizer", 111, "instance-2");
+
+        assert!(!tracker.remove_if_instance("profile-instance-finalizer", "instance-1"));
+        assert!(tracker.is_running("profile-instance-finalizer"));
+        assert!(tracker.remove_if_instance("profile-instance-finalizer", "instance-2"));
+        assert!(!tracker.is_running("profile-instance-finalizer"));
+    }
+
+    #[test]
+    fn stale_cdp_completion_never_updates_a_replacement_instance() {
+        let tracker = Tracker::new();
+        let _receiver =
+            tracker.set_running_instance_for_test("profile-instance-cdp", 111, "instance-2");
+        let stale_cdp = super::CdpInfo {
+            port: 9222,
+            http_url: "http://127.0.0.1:9222".into(),
+            web_socket_debugger_url: "ws://127.0.0.1:9222/devtools/browser/stale".into(),
+        };
+
+        assert!(!tracker.set_cdp_if_instance(
+            "profile-instance-cdp",
+            "instance-1",
+            stale_cdp
+        ));
+        assert!(tracker.cdp("profile-instance-cdp").is_none());
     }
 }

@@ -13,10 +13,30 @@ function aggregatePreservingPrimary(primaryError, secondaryError, context) {
   );
 }
 
+export const LAUNCH_INSTANCE_OWNERSHIP_CAPABILITY = "launch-instance-ownership-v1";
+
+export function requireLaunchInstanceOwnership(health) {
+  if (
+    !Array.isArray(health?.capabilities) ||
+    !health.capabilities.includes(LAUNCH_INSTANCE_OWNERSHIP_CAPABILITY)
+  ) {
+    throw new Error(
+      "ShardX Launcher does not support exact launch-instance ownership; update Launcher before starting a profile",
+    );
+  }
+}
+
+export function redactLaunchInstanceToken(started) {
+  if (!started || typeof started !== "object" || Array.isArray(started)) return started;
+  const { launch_instance_token: _launchInstanceToken, ...publicResult } = started;
+  return publicResult;
+}
+
 export async function acquireSafeOpenProfile({
   profileId,
   headless,
   listRunning,
+  getLauncherHealth,
   startProfile,
   cleanupStartedProfile,
 }) {
@@ -30,30 +50,46 @@ export async function acquireSafeOpenProfile({
       wasRunning: true,
       startedByHelper: false,
       ownedPid: null,
+      ownedLaunchInstanceToken: null,
       cdp: entry.cdp,
     };
   }
 
+  if (typeof getLauncherHealth !== "function") {
+    throw new Error(
+      "ShardX Launcher health capability check is required before starting a profile",
+    );
+  }
+  requireLaunchInstanceOwnership(await getLauncherHealth());
+
   const started = await startProfile({ headless: Boolean(headless) });
   const ownedPid = Number.isInteger(started?.pid) && started.pid > 0 ? started.pid : null;
+  const ownedLaunchInstanceToken =
+    typeof started?.launch_instance_token === "string" && started.launch_instance_token.trim()
+      ? started.launch_instance_token
+      : null;
+  if (ownedPid === null) {
+    throw new Error(`profile ${profileId} did not start with a valid PID`);
+  }
+  if (ownedLaunchInstanceToken === null) {
+    throw new Error(`profile ${profileId} did not start with a launch-instance token`);
+  }
   if (!started?.cdp?.http_url) {
     const startError = new Error(`profile ${profileId} did not start with CDP`);
-    if (ownedPid !== null && cleanupStartedProfile) {
+    if (cleanupStartedProfile) {
       try {
-        await cleanupStartedProfile(ownedPid);
+        await cleanupStartedProfile(ownedPid, ownedLaunchInstanceToken);
       } catch (cleanupError) {
         throw aggregatePreservingPrimary(startError, cleanupError, "startup cleanup failed");
       }
     }
     throw startError;
   }
-  if (ownedPid === null) {
-    throw new Error(`profile ${profileId} did not start with a valid PID`);
-  }
   return {
     wasRunning: false,
     startedByHelper: true,
     ownedPid,
+    ownedLaunchInstanceToken,
     cdp: started.cdp,
   };
 }
@@ -83,6 +119,7 @@ export async function finalizeSafeOpenLifecycle({
   wasRunning,
   startedByHelper,
   ownedPid,
+  ownedLaunchInstanceToken,
   keepRunning,
   completed,
   stopStartedProfile,
@@ -90,7 +127,7 @@ export async function finalizeSafeOpenLifecycle({
 }) {
   const restoreRequested = Boolean(startedByHelper) && (!keepRunning || !completed);
   if (restoreRequested) {
-    await stopStartedProfile(ownedPid);
+    await stopStartedProfile(ownedPid, ownedLaunchInstanceToken);
   }
   if (!completed) return null;
 
@@ -114,48 +151,17 @@ export async function finalizeSafeOpenLifecycle({
 export async function runSafeOpenLifecycle({
   acquire,
   open,
-  cleanupStaleProfileProcesses,
   stopStartedProfile,
   getRunningProfile,
-  delay,
   keepRunning,
 }) {
-  let session = await acquire();
+  const session = await acquire();
   const wasRunning = session.wasRunning;
   let result;
-  let selfHealed = null;
   let operationError = null;
 
   try {
-    try {
-      result = await open(session);
-    } catch (error) {
-      if (error instanceof SafeOpenForegroundError) throw error;
-
-      let cleanup;
-      try {
-        cleanup = await cleanupStaleProfileProcesses();
-      } catch (cleanupError) {
-        throw aggregatePreservingPrimary(error, cleanupError, "stale-process cleanup failed");
-      }
-      if (!cleanup.killed_pids.length) throw error;
-      try {
-        if (session.startedByHelper) {
-          await stopStartedProfile(session.ownedPid);
-          session = { ...session, startedByHelper: false, ownedPid: null };
-        }
-        await delay();
-        session = await acquire();
-        result = await open(session);
-      } catch (recoveryError) {
-        throw aggregatePreservingPrimary(error, recoveryError, "stale-process recovery failed");
-      }
-      selfHealed = {
-        stale_count: cleanup.stale.length,
-        killed_count: cleanup.killed_pids.length,
-        errors_count: cleanup.errors.length,
-      };
-    }
+    result = await open(session);
   } catch (error) {
     operationError = error;
   }
@@ -167,6 +173,7 @@ export async function runSafeOpenLifecycle({
       wasRunning,
       startedByHelper: session.startedByHelper,
       ownedPid: session.ownedPid,
+      ownedLaunchInstanceToken: session.ownedLaunchInstanceToken,
       keepRunning,
       completed: result !== undefined,
       stopStartedProfile,
@@ -182,5 +189,5 @@ export async function runSafeOpenLifecycle({
   if (operationError) throw operationError;
   if (restorationError) throw restorationError;
 
-  return { result, selfHealed, lifecycle };
+  return { result, selfHealed: null, lifecycle };
 }

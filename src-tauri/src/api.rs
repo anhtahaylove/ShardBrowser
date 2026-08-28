@@ -175,6 +175,7 @@ async fn health() -> Json<Value> {
         "ok": true,
         "name": "shardx-launcher",
         "version": env!("CARGO_PKG_VERSION"),
+        "capabilities": ["launch-instance-ownership-v1"],
     }))
 }
 
@@ -535,6 +536,57 @@ mod temp_profile_tests {
             assert!(operation.contains("\"400\":"), "missing 400 for {start}");
         }
     }
+
+    #[test]
+    fn openapi_documents_exact_launch_instance_ownership_without_exposing_running_tokens() {
+        let spec = include_str!("../../openapi.yaml").replace("\r\n", "\n");
+        let start = operation_block(
+            &spec,
+            "  /profiles/{id}/start:\n",
+            "  /profiles/{id}/stop:\n",
+        );
+        assert!(start.contains("launch_instance_token:"));
+
+        let health = operation_block(&spec, "  /health:\n", "  /startup:\n");
+        assert!(health.contains("capabilities:"));
+        assert!(health.contains("launch-instance-ownership-v1"));
+
+        let pid_guard = operation_block(
+            &spec,
+            "  /profiles/{id}/stop-if-pid/{expected_pid}:\n",
+            "  /profiles/{id}/stop-if-launch-instance:\n",
+        );
+        assert!(pid_guard.contains("legacy PID guard"));
+        assert!(pid_guard.contains("cannot distinguish a"));
+        assert!(pid_guard.contains("deprecated: true"));
+        assert!(pid_guard.contains("\"410\":"));
+
+        let launch_guard = operation_block(
+            &spec,
+            "  /profiles/{id}/stop-if-launch-instance:\n",
+            "  /profiles/{id}/cookies:\n",
+        );
+        assert!(launch_guard.contains("requestBody:"));
+        assert!(launch_guard.contains("required: [expected_pid, launch_instance_token]"));
+        assert!(launch_guard.contains("\"400\":"));
+        assert!(launch_guard.contains("\"409\":"));
+
+        let running = operation_block(
+            &spec,
+            "    RunningProfile:\n",
+            "    LibraryEntry:\n",
+        );
+        assert!(!running.contains("launch_instance_token"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn legacy_pid_stop_is_fail_closed() {
+        let error = super::stop_profile_if_pid(axum::extract::Path(("profile-1".into(), 111)))
+            .await
+            .expect_err("legacy PID-only ownership must be disabled");
+
+        assert_eq!(error.0, axum::http::StatusCode::GONE);
+    }
 }
 
 /// Temporary profile (hidden, auto-deleted on close); pair with /start.
@@ -702,6 +754,7 @@ async fn start_profile(Path(id): Path<String>, body: Option<Json<StartReq>>) -> 
     Ok(Json(json!({
         "profile_id": id,
         "pid": outcome.pid,
+        "launch_instance_token": outcome.launch_instance_token,
         "headless": headless,
         "cdp": outcome.cdp,
     })))
@@ -715,9 +768,35 @@ async fn stop_profile(Path(id): Path<String>) -> ApiResult {
     Ok(Json(json!({ "profile_id": id, "stopped": stopped })))
 }
 
-async fn stop_profile_if_pid(Path((id, expected_pid)): Path<(String, u32)>) -> ApiResult {
+async fn stop_profile_if_pid(Path((_id, _expected_pid)): Path<(String, u32)>) -> ApiResult {
+    Err(err(
+        StatusCode::GONE,
+        "legacy PID-only conditional stop is disabled; use stop-if-launch-instance",
+    ))
+}
+
+#[derive(Deserialize)]
+struct StopIfInstanceReq {
+    expected_pid: u32,
+    launch_instance_token: String,
+}
+
+async fn stop_profile_if_instance(
+    Path(id): Path<String>,
+    Json(body): Json<StopIfInstanceReq>,
+) -> ApiResult {
+    if body.expected_pid == 0 {
+        return Err(err(StatusCode::BAD_REQUEST, "expected_pid must be positive"));
+    }
+    if uuid::Uuid::parse_str(&body.launch_instance_token).is_err() {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "launch_instance_token must be a UUID",
+        ));
+    }
+
     let outcome = crate::process::Tracker::shared()
-        .kill_if_pid(&id, Some(expected_pid))
+        .kill_if_instance(&id, body.expected_pid, &body.launch_instance_token)
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     match outcome {
@@ -735,6 +814,10 @@ async fn stop_profile_if_pid(Path((id, expected_pid)): Path<(String, u32)>) -> A
             format!(
                 "profile {id} process changed: expected pid {expected_pid}, running pid {actual_pid}"
             ),
+        )),
+        crate::process::KillOutcome::LaunchInstanceMismatch { pid } => Err(err(
+            StatusCode::CONFLICT,
+            format!("profile {id} launch instance changed while pid {pid} was reused"),
         )),
     }
 }
@@ -1030,6 +1113,10 @@ pub async fn serve(secret: String, port: u16) {
         .route(
             "/profiles/:id/stop-if-pid/:expected_pid",
             post(stop_profile_if_pid),
+        )
+        .route(
+            "/profiles/:id/stop-if-launch-instance",
+            post(stop_profile_if_instance),
         )
         .route(
             "/profiles/:id/verification-status",

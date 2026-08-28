@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -46,4 +47,14 @@ test("stdio server exposes the versioned ShardX tool contract", async () => {
   } finally {
     await client.close();
   }
+});
+
+test("safe_open_url cleanup uses the launch-instance guard and never falls back to PID ownership", async () => {
+  const source = await readFile(path.join(dir, "index.js"), "utf8");
+
+  assert.match(source, /\/stop-if-launch-instance/);
+  assert.match(source, /launch_instance_token:\s*launchInstanceToken/);
+  assert.doesNotMatch(source, /\/stop-if-pid\//);
+  assert.doesNotMatch(source, /globalThis\.process\.kill/);
+  assert.match(source, /redactLaunchInstanceToken\(started\)/);
 });

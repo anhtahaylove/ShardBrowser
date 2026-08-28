@@ -114,10 +114,15 @@ MCP_HTTP_PORT=40326 SHARDX_API=http://127.0.0.1:40325 SHARDX_TOKEN=… node inde
   Cloudflare challenge status. A profile started by this call is restored to
   stopped by default; set `keep_running: true` to retain that same tab for
   follow-up tab, screenshot, ARIA, or network tools, then call `stop_profile`.
+  Automatic restoration is guarded by an opaque per-launch token, so a
+  replacement process is never stopped solely because Windows reused its PID.
+  A stopped profile is started only after Launcher advertises exact
+  launch-instance ownership support; mixed old-Launcher/new-MCP installs fail
+  before spawning a browser.
   Visible runs pause for manual verification for up to 120 seconds by default,
   then resume automatically when it clears; set `verification_timeout_ms: 0`
-  to return immediately. Also retries once after cleaning stale untracked
-  profile processes
+  to return immediately. Stale untracked processes are reported read-only;
+  PID-only termination is intentionally disabled.
 - `challenge_status(profile_id? | profile_query?, exact?)`
   → read-only inspection of the current page in an already-running profile;
   reports a Cloudflare interstitial or visible Turnstile widget to Launcher,
@@ -134,8 +139,9 @@ MCP_HTTP_PORT=40326 SHARDX_API=http://127.0.0.1:40325 SHARDX_TOKEN=… node inde
   → starts/resolves one profile and returns its CDP endpoint, `/json/list`
   page targets, and the current title/url for DevTools handoff
 - `cleanup_stale_profile_processes(profile_id? | profile_query?, exact?, dry_run?)`
-  → kills only untracked ShardX browser processes still holding that profile's
-  user-data-dir; use after `list_running` is empty but Chrome still locks it
+  → reports untracked ShardX browser processes still holding that profile's
+  user-data-dir; termination is disabled because a numeric PID cannot prove
+  process ownership safely
 - `list_profiles`, `get_profile`, `create_profile`, `create_temporary_profile`,
   `edit_profile`, `delete_profile`
   - `create_profile` / `create_temporary_profile` accept optional `launch`
