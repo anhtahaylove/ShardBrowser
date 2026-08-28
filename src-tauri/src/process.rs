@@ -28,6 +28,13 @@ pub struct Tracker {
     inner: Mutex<HashMap<String, ChildEntry>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KillOutcome {
+    Stopped { pid: u32 },
+    NotRunning,
+    PidMismatch { expected_pid: u32, actual_pid: u32 },
+}
+
 struct ChildEntry {
     pid: u32,
     killer: tokio::sync::mpsc::Sender<()>,
@@ -185,6 +192,27 @@ impl Tracker {
         }
     }
 
+    #[cfg(test)]
+    fn set_running_pid_for_test(
+        &self,
+        profile_id: &str,
+        pid: u32,
+    ) -> tokio::sync::mpsc::Receiver<()> {
+        let mut entries = self.inner.lock().expect("tracker lock");
+        let (killer, receiver) = tokio::sync::mpsc::channel(1);
+        entries.insert(
+            profile_id.to_string(),
+            ChildEntry {
+                pid,
+                killer,
+                cdp: None,
+                verification: None,
+                started_at: Instant::now(),
+            },
+        );
+        receiver
+    }
+
     /// Update the in-memory verification handoff for a running profile.
     pub fn set_verification(
         &self,
@@ -214,32 +242,51 @@ impl Tracker {
             .collect()
     }
 
-    pub async fn kill(&self, profile_id: &str) -> Result<bool> {
+    pub async fn kill_if_pid(
+        &self,
+        profile_id: &str,
+        expected_pid: Option<u32>,
+    ) -> Result<KillOutcome> {
         let target = {
             let g = self.inner.lock().unwrap();
-            g.get(profile_id).map(|e| (e.killer.clone(), e.pid))
-        };
-        if let Some((k, pid)) = target {
-            let _ = k.send(()).await;
-            #[cfg(windows)]
-            {
-                let profile_id = profile_id.to_string();
-                tokio::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
-                    let still_tracked = Self::shared()
-                        .inner
-                        .lock()
-                        .map(|g| g.get(&profile_id).map(|e| e.pid == pid).unwrap_or(false))
-                        .unwrap_or(false);
-                    if still_tracked {
-                        taskkill_profile_process(pid, true);
-                    }
-                });
+            let Some(entry) = g.get(profile_id) else {
+                return Ok(KillOutcome::NotRunning);
+            };
+            if let Some(expected_pid) = expected_pid {
+                if entry.pid != expected_pid {
+                    return Ok(KillOutcome::PidMismatch {
+                        expected_pid,
+                        actual_pid: entry.pid,
+                    });
+                }
             }
-            Ok(true)
-        } else {
-            Ok(false)
+            (entry.killer.clone(), entry.pid)
+        };
+        let (killer, pid) = target;
+        let _ = killer.send(()).await;
+        #[cfg(windows)]
+        {
+            let profile_id = profile_id.to_string();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+                let still_tracked = Self::shared()
+                    .inner
+                    .lock()
+                    .map(|g| g.get(&profile_id).map(|e| e.pid == pid).unwrap_or(false))
+                    .unwrap_or(false);
+                if still_tracked {
+                    taskkill_profile_process(pid, true);
+                }
+            });
         }
+        Ok(KillOutcome::Stopped { pid })
+    }
+
+    pub async fn kill(&self, profile_id: &str) -> Result<bool> {
+        Ok(matches!(
+            self.kill_if_pid(profile_id, None).await?,
+            KillOutcome::Stopped { .. }
+        ))
     }
 
     pub fn shared() -> &'static Tracker {
@@ -263,7 +310,7 @@ pub struct RunningProfile {
 
 #[cfg(test)]
 mod tests {
-    use super::Tracker;
+    use super::{KillOutcome, Tracker};
     use std::time::Duration;
     use tokio::process::Command;
 
@@ -302,5 +349,42 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn temporary_immediate_exit_is_finalized() {
         assert_immediate_exit_is_finalized(true).await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn expected_pid_guard_never_stops_a_replacement_process() {
+        let tracker = Tracker::new();
+        let mut replacement_killer = tracker.set_running_pid_for_test("profile-pid-guard", 222);
+
+        let outcome = tracker
+            .kill_if_pid("profile-pid-guard", Some(111))
+            .await
+            .expect("PID mismatch should be a normal guarded outcome");
+
+        assert_eq!(
+            outcome,
+            KillOutcome::PidMismatch {
+                expected_pid: 111,
+                actual_pid: 222,
+            }
+        );
+        assert!(matches!(
+            replacement_killer.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn expected_pid_guard_stops_the_owned_process() {
+        let tracker = Tracker::new();
+        let mut owned_killer = tracker.set_running_pid_for_test("profile-pid-owned", 111);
+
+        let outcome = tracker
+            .kill_if_pid("profile-pid-owned", Some(111))
+            .await
+            .expect("owned PID should be stoppable");
+
+        assert_eq!(outcome, KillOutcome::Stopped { pid: 111 });
+        assert_eq!(owned_killer.recv().await, Some(()));
     }
 }
