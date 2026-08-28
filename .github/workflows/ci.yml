@@ -105,6 +105,24 @@ jobs:
       - name: MCP tests
         run: npm test --prefix mcp
 
+      - name: MCP release package smoke
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+          PATCHRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: |
+          package_root="$RUNNER_TEMP/ShardX-MCP"
+          archive="$RUNNER_TEMP/ShardX-MCP.tar.gz"
+          verify_root="$RUNNER_TEMP/ShardX-MCP-verify"
+          node scripts/stage-mcp-release.mjs "$package_root"
+          tar -czf "$archive" -C "$RUNNER_TEMP" ShardX-MCP
+          mkdir -p "$verify_root"
+          tar -xzf "$archive" -C "$verify_root"
+          while IFS= read -r required; do
+            test -f "$verify_root/ShardX-MCP/$required"
+          done < <(node scripts/stage-mcp-release.mjs --list)
+          npm ci --prefix "$verify_root/ShardX-MCP"
+          npm test --prefix "$verify_root/ShardX-MCP"
+
       - name: MCP syntax and helper contract
         run: |
           node --check mcp/index.js

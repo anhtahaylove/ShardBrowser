@@ -109,12 +109,15 @@ MCP_HTTP_PORT=40326 SHARDX_API=http://127.0.0.1:40325 SHARDX_TOKEN=… node inde
 - `find_profile_by_name(query, exact?, limit?)` → safe profile summaries only
 - `ensure_profile_started(profile_id? | profile_query?, exact?, headless?)`
   → idempotently starts one resolved profile and returns its CDP endpoint
-- `safe_open_url(profile_id? | profile_query?, exact?, url, headless?, verification_timeout_ms?)`
-  → starts one resolved profile, opens an `http(s)` URL, returns title/url plus
-  Cloudflare challenge status; visible runs pause for manual verification for
-  up to 120 seconds by default, then resume automatically when it clears; set
-  `verification_timeout_ms: 0` to return immediately. Also retries once after
-  cleaning stale untracked profile processes
+- `safe_open_url(profile_id? | profile_query?, exact?, url, headless?, keep_running?, verification_timeout_ms?)`
+  → opens an `http(s)` URL in the MCP-active tab and returns title/url plus
+  Cloudflare challenge status. A profile started by this call is restored to
+  stopped by default; set `keep_running: true` to retain that same tab for
+  follow-up tab, screenshot, ARIA, or network tools, then call `stop_profile`.
+  Visible runs pause for manual verification for up to 120 seconds by default,
+  then resume automatically when it clears; set `verification_timeout_ms: 0`
+  to return immediately. Also retries once after cleaning stale untracked
+  profile processes
 - `challenge_status(profile_id? | profile_query?, exact?)`
   → read-only inspection of the current page in an already-running profile;
   reports a Cloudflare interstitial or visible Turnstile widget to Launcher,
@@ -192,7 +195,9 @@ headless) if it isn't running; actions target the profile's *active* tab:
 
 1. `health_check` — fail fast when the launcher is closed or the token is stale.
 2. `find_profile_by_name` or `create_profile` / `create_temporary_profile`.
-3. `safe_open_url` for a one-shot smoke check, or
+3. `safe_open_url` for a one-shot smoke check (default restore),
+   `safe_open_url(..., keep_running: true)` when follow-up tools must reuse its
+   active tab, or
    `browser_navigate(profile_id, "https://…")` — starts the browser with
    CDP and opens the page.
 4. `devtools_context` when handing the live ShardX page to a DevTools client.
