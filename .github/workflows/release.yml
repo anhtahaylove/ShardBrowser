@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag/version for the build (for example v0.1.28).'
+        description: 'Tag/version for the build (for example v0.1.29).'
         required: true
       publish_release:
         description: 'Publish a public GitHub Release after all updater-signed builds pass.'
@@ -365,12 +365,11 @@ jobs:
 
           ## Highlights
 
-          * The Rust SDK quickstart doctest now creates a profile before opening a session and remains valid with the CDP `control` feature enabled.
-          * `--no-default-features` no longer attempts to compile the CDP-only doctest or quickstart example.
-          * Rust SDK dependencies advance to `dirs` 6 and `rand` 0.9.5 with the required `IndexedRandom` and `rand::rng()` migration.
-          * Rust 1.74.1 remains the SDK MSRV; stable and MSRV checks now cover all-features and no-default-features builds in CI and release validation.
-          * RustSec now gates CI and release validation without ignored advisories; major-version decisions are recorded in `docs/RUST_SDK_DEPENDENCY_AUDIT_0.1.28.md`.
-          * Existing startup-in-tray, 96-tool MCP contract, signed Tauri updater, NSIS upgrade safety, and headless automation compatibility are preserved.
+          * Every API-launched browser now receives an opaque in-memory launch-instance token; conditional cleanup requires the exact profile, PID, and token so PID reuse cannot stop a replacement process.
+          * `safe_open_url` verifies Launcher ownership capability before spawning, preserves the active tab for follow-up tools, restores the prior profile state, and fails closed on mixed-version or cleanup mismatches.
+          * The legacy PID-only stop endpoint is disabled with HTTP 410, and stale-process cleanup remains inventory-only until a stable operating-system process identity is available.
+          * MCP release packaging enforces exact entry equality for the staging directory, raw tar manifest, and extracted payload, rejecting missing, extra, duplicate, nested, or non-regular entries.
+          * The 96-tool MCP contract, startup-in-tray behavior, signed Tauri updater, NSIS upgrade safety, headless automation, and Rust SDK gates remain covered by CI and release validation.
 
           ## Install
 
