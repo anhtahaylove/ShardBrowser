@@ -24,6 +24,7 @@ import { classifyCloudflareChallenge, waitForChallengeClear } from "./challenge.
 import {
   acquireSafeOpenProfile,
   navigateActivePage,
+  redactLaunchInstanceToken,
   runSafeOpenLifecycle,
 } from "./safe-open-lifecycle.js";
 import {
@@ -392,32 +393,24 @@ async function staleProfileProcesses(profileId) {
   return { running, tracked_pids: [...tracked], stale };
 }
 
-async function cleanupStaleProfileProcesses(profileId) {
-  const { running, tracked_pids, stale } = await staleProfileProcesses(profileId);
-  const killed_pids = [];
-  const errors = [];
-  browsers.delete(profileId);
-  activePage.delete(profileId);
-  for (const proc of stale) {
-    try {
-      globalThis.process.kill(proc.pid, "SIGKILL");
-      killed_pids.push(proc.pid);
-    } catch (error) {
-      errors.push({ pid: proc.pid, error: error.message });
-    }
-  }
-  return { running, tracked_pids, stale, killed_pids, errors };
-}
-
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function stopStartedProfile(profileId, expectedPid) {
+async function stopStartedProfile(profileId, expectedPid, launchInstanceToken) {
   if (!Number.isInteger(expectedPid) || expectedPid <= 0) {
     throw new Error(`cannot stop profile ${profileId} without an owned PID`);
   }
+  if (typeof launchInstanceToken !== "string" || !launchInstanceToken.trim()) {
+    throw new Error(`cannot stop profile ${profileId} without a launch-instance token`);
+  }
   let stopError = null;
   try {
-    await api(`/profiles/${profileId}/stop-if-pid/${expectedPid}`, { method: "POST" });
+    await api(`/profiles/${profileId}/stop-if-launch-instance`, {
+      method: "POST",
+      body: {
+        expected_pid: expectedPid,
+        launch_instance_token: launchInstanceToken,
+      },
+    });
   } catch (error) {
     if (error.status === 409) throw error;
     stopError = error;
@@ -586,12 +579,14 @@ server.tool(
         profileId: profile.id,
         headless: !!headless,
         listRunning: () => api("/running"),
+        getLauncherHealth: () => api("/health"),
         startProfile: ({ headless: startHeadless }) =>
           api(`/profiles/${profile.id}/start`, {
             method: "POST",
             body: { headless: startHeadless },
           }),
-        cleanupStartedProfile: (ownedPid) => stopStartedProfile(profile.id, ownedPid),
+        cleanupStartedProfile: (ownedPid, ownedLaunchInstanceToken) =>
+          stopStartedProfile(profile.id, ownedPid, ownedLaunchInstanceToken),
       });
     const open = async () => {
       const page = await pageFor(profile.id, { autostart: false, headless: !!headless });
@@ -625,11 +620,10 @@ server.tool(
     const { result, selfHealed: self_healed, lifecycle } = await runSafeOpenLifecycle({
       acquire,
       open,
-      cleanupStaleProfileProcesses: () => cleanupStaleProfileProcesses(profile.id),
-      stopStartedProfile: (ownedPid) => stopStartedProfile(profile.id, ownedPid),
+      stopStartedProfile: (ownedPid, ownedLaunchInstanceToken) =>
+        stopStartedProfile(profile.id, ownedPid, ownedLaunchInstanceToken),
       getRunningProfile: async () =>
         (await api("/running")).find((item) => item.profile_id === profile.id) || null,
-      delay: () => sleep(500),
       keepRunning: !!keep_running,
     });
     return text({
@@ -916,8 +910,13 @@ server.tool(
   "start_profile",
   "Launch a profile with CDP. Returns { pid, cdp:{ web_socket_debugger_url, http_url } }. Set headless to run without a window.",
   { id: z.string(), headless: z.boolean().optional() },
-  async ({ id, headless }) =>
-    text(await api(`/profiles/${id}/start`, { method: "POST", body: { headless: !!headless } })),
+  async ({ id, headless }) => {
+    const started = await api(`/profiles/${id}/start`, {
+      method: "POST",
+      body: { headless: !!headless },
+    });
+    return text(redactLaunchInstanceToken(started));
+  },
 );
 
 server.tool(
@@ -940,7 +939,7 @@ server.tool(
 
 server.tool(
   "cleanup_stale_profile_processes",
-  "Find and terminate stale ShardX browser processes for one profile when they still hold its user-data-dir but Launcher /running no longer tracks them.",
+  "Inspect stale ShardX browser processes for one profile. This tool is inventory-only because a numeric PID cannot prove process ownership safely.",
   {
     profile_id: z.string().optional(),
     profile_query: z.string().optional(),
@@ -949,18 +948,19 @@ server.tool(
   },
   async ({ profile_id, profile_query, exact, dry_run }) => {
     const profile = await resolveProfile({ profile_id, profile_query, exact });
-    const cleanup = dry_run
-      ? { ...(await staleProfileProcesses(profile.id)), killed_pids: [], errors: [] }
-      : await cleanupStaleProfileProcesses(profile.id);
+    const inspection = await staleProfileProcesses(profile.id);
     return text({
       profile: { id: profile.id, name: profile.name },
-      running_tracked: cleanup.running.some((r) => r.profile_id === profile.id),
-      tracked_pids: cleanup.tracked_pids,
-      dry_run: !!dry_run,
-      stale_count: cleanup.stale.length,
-      stale_pids: cleanup.stale.map((p) => p.pid),
-      killed_pids: cleanup.killed_pids,
-      errors: cleanup.errors,
+      running_tracked: inspection.running.some((r) => r.profile_id === profile.id),
+      tracked_pids: inspection.tracked_pids,
+      dry_run: true,
+      requested_dry_run: dry_run ?? true,
+      termination_supported: false,
+      stale_count: inspection.stale.length,
+      stale_pids: inspection.stale.map((p) => p.pid),
+      killed_pids: [],
+      errors: [],
+      note: "PID-only termination is disabled; stop a tracked profile through Launcher ownership APIs.",
     });
   },
 );

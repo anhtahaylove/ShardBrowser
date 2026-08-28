@@ -105,6 +105,9 @@ jobs:
       - name: MCP tests
         run: npm test --prefix mcp
 
+      - name: MCP release manifest tests
+        run: npm run test:release-package
+
       - name: MCP release package smoke
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
@@ -114,12 +117,12 @@ jobs:
           archive="$RUNNER_TEMP/ShardX-MCP.tar.gz"
           verify_root="$RUNNER_TEMP/ShardX-MCP-verify"
           node scripts/stage-mcp-release.mjs "$package_root"
+          node scripts/stage-mcp-release.mjs --verify-directory "$package_root"
           tar -czf "$archive" -C "$RUNNER_TEMP" ShardX-MCP
+          tar -tzf "$archive" | node scripts/stage-mcp-release.mjs --verify-archive-entries ShardX-MCP
           mkdir -p "$verify_root"
           tar -xzf "$archive" -C "$verify_root"
-          while IFS= read -r required; do
-            test -f "$verify_root/ShardX-MCP/$required"
-          done < <(node scripts/stage-mcp-release.mjs --list)
+          node scripts/stage-mcp-release.mjs --verify-directory "$verify_root/ShardX-MCP"
           npm ci --prefix "$verify_root/ShardX-MCP"
           npm test --prefix "$verify_root/ShardX-MCP"
 

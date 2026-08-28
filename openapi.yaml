@@ -122,6 +122,10 @@ paths:
                   ok: { type: boolean, example: true }
                   name: { type: string, example: shardx-launcher }
                   version: { type: string, example: "0.1.28" }
+                  capabilities:
+                    type: array
+                    items: { type: string }
+                    example: [launch-instance-ownership-v1]
 
   /startup:
     get:
@@ -439,6 +443,10 @@ paths:
                 properties:
                   profile_id: { type: string }
                   pid: { type: integer, format: int64, description: OS process id. }
+                  launch_instance_token:
+                    type: string
+                    format: uuid
+                    description: Opaque in-memory identity for this exact launch; use only with the conditional launch-instance stop endpoint.
                   headless: { type: boolean }
                   cdp:
                     nullable: true
@@ -480,10 +488,12 @@ paths:
   /profiles/{id}/stop-if-pid/{expected_pid}:
     post:
       tags: [Profiles]
-      summary: Stop one exact profile process instance
+      summary: Disabled legacy PID guard
+      deprecated: true
       description: |
-        Stops the profile only when its current tracked PID matches
-        `expected_pid`. Returns 409 instead of stopping a replacement process.
+        Retained only so older clients fail closed with 410. PID alone cannot distinguish a
+        recycled numeric PID, so this endpoint never stops a process. Use
+        `stop-if-launch-instance`.
       parameters:
         - $ref: "#/components/parameters/ProfileId"
         - name: expected_pid
@@ -494,6 +504,40 @@ paths:
             format: int64
             minimum: 1
       responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "410":
+          description: PID-only conditional stopping is permanently disabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /profiles/{id}/stop-if-launch-instance:
+    post:
+      tags: [Profiles]
+      summary: Stop one exact profile launch instance
+      description: |
+        Stops only the in-memory launch instance identified by both its PID and
+        opaque launch-instance token. The token is returned by the matching
+        authenticated start call, is never persisted, and must be sent in the
+        JSON body rather than a URL.
+      parameters:
+        - $ref: "#/components/parameters/ProfileId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_pid, launch_instance_token]
+              properties:
+                expected_pid:
+                  type: integer
+                  format: int64
+                  minimum: 1
+                launch_instance_token:
+                  type: string
+                  format: uuid
+      responses:
         "200":
           description: Conditional stop result.
           content:
@@ -503,10 +547,15 @@ paths:
                 properties:
                   profile_id: { type: string }
                   stopped: { type: boolean }
-                  pid: { type: integer, format: int64, description: PID that received the stop request. }
+                  pid: { type: integer, format: int64 }
+        "400":
+          description: PID or launch-instance token is malformed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "409":
-          description: The running profile PID no longer matches expected_pid.
+          description: The tracked PID or launch-instance token no longer matches.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

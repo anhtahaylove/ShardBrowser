@@ -326,21 +326,18 @@ jobs:
           for helper in health_check startup_status configure_startup find_profile_by_name ensure_profile_started safe_open_url devtools_context cleanup_stale_profile_processes challenge_status verification_checkpoint wait_for_human_verification; do
             grep -q "\"$helper\"" mcp/index.js
           done
+          npm run test:release-package
           package_root="$RUNNER_TEMP/ShardX-MCP"
           node scripts/stage-mcp-release.mjs "$package_root"
+          node scripts/stage-mcp-release.mjs --verify-directory "$package_root"
           tar -czf dist/ShardX-MCP.tar.gz -C "$RUNNER_TEMP" ShardX-MCP
-          archive_entries="$(tar -tzf dist/ShardX-MCP.tar.gz)"
-          printf '%s\n' "$archive_entries"
-          while IFS= read -r required; do
-            printf '%s\n' "$archive_entries" | grep -qx "ShardX-MCP/$required"
-          done < <(node scripts/stage-mcp-release.mjs --list)
-          if printf '%s\n' "$archive_entries" | grep -q '/node_modules/'; then
-            echo "MCP archive must not contain node_modules." >&2
-            exit 1
-          fi
+          archive_entries="$RUNNER_TEMP/ShardX-MCP-entries.txt"
+          tar -tzf dist/ShardX-MCP.tar.gz | tee "$archive_entries"
+          node scripts/stage-mcp-release.mjs --verify-archive-entries ShardX-MCP < "$archive_entries"
           verify_root="$RUNNER_TEMP/ShardX-MCP-verify"
           mkdir -p "$verify_root"
           tar -xzf dist/ShardX-MCP.tar.gz -C "$verify_root"
+          node scripts/stage-mcp-release.mjs --verify-directory "$verify_root/ShardX-MCP"
           npm ci --prefix "$verify_root/ShardX-MCP"
           npm test --prefix "$verify_root/ShardX-MCP"
 

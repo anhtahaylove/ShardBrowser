@@ -11,6 +11,7 @@ use std::process::Stdio;
 /// Launch result: OS pid plus CDP endpoint when remote-debugging is on.
 pub struct LaunchOutcome {
     pub pid: u32,
+    pub launch_instance_token: String,
     pub cdp: Option<process::CdpInfo>,
 }
 
@@ -233,15 +234,22 @@ pub async fn launch_profile(
         let _ = child.wait().await;
         return Err(error).context("persist launch metadata before tracking ShardX");
     }
-    let pid = Tracker::shared().track(profile_id.to_string(), child, stored.meta.temporary);
+    let tracked = Tracker::shared().track(profile_id.to_string(), child, stored.meta.temporary);
     drop(launch_claim);
 
     let cdp = if enable_cdp {
         match read_devtools_endpoint(&udd).await {
             Some(c) => {
                 eprintln!("[launcher] CDP ready for {profile_id}: {}", c.web_socket_debugger_url);
-                Tracker::shared().set_cdp(profile_id, c.clone());
-                Some(c)
+                if Tracker::shared().set_cdp_if_instance(
+                    profile_id,
+                    &tracked.launch_instance_token,
+                    c.clone(),
+                ) {
+                    Some(c)
+                } else {
+                    None
+                }
             }
             None => {
                 eprintln!("[launcher] CDP: DevToolsActivePort not found within timeout");
@@ -252,7 +260,11 @@ pub async fn launch_profile(
         None
     };
 
-    Ok(LaunchOutcome { pid, cdp })
+    Ok(LaunchOutcome {
+        pid: tracked.pid,
+        launch_instance_token: tracked.launch_instance_token,
+        cdp,
+    })
 }
 
 fn parse_launch_options(value: Option<Value>) -> Result<LaunchOptions> {

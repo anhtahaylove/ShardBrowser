@@ -5,8 +5,14 @@ import {
   acquireSafeOpenProfile,
   finalizeSafeOpenLifecycle,
   navigateActivePage,
+  redactLaunchInstanceToken,
   runSafeOpenLifecycle,
 } from "./safe-open-lifecycle.js";
+
+const OWNED_INSTANCE_TOKEN = "11111111-1111-4111-8111-111111111111";
+const launcherWithInstanceOwnership = async () => ({
+  capabilities: ["launch-instance-ownership-v1"],
+});
 
 test("safe_open_url reuses an already-running profile without taking ownership", async () => {
   let starts = 0;
@@ -25,6 +31,7 @@ test("safe_open_url reuses an already-running profile without taking ownership",
     wasRunning: true,
     startedByHelper: false,
     ownedPid: null,
+    ownedLaunchInstanceToken: null,
     cdp: { http_url: "http://127.0.0.1:1" },
   });
 });
@@ -35,10 +42,15 @@ test("safe_open_url records ownership only when its start call succeeds", async 
     profileId: "profile-1",
     headless: true,
     listRunning: async () => [],
+    getLauncherHealth: launcherWithInstanceOwnership,
     startProfile: async ({ headless }) => {
       starts += 1;
       assert.equal(headless, true);
-      return { pid: 111, cdp: { http_url: "http://127.0.0.1:2" } };
+      return {
+        pid: 111,
+        launch_instance_token: OWNED_INSTANCE_TOKEN,
+        cdp: { http_url: "http://127.0.0.1:2" },
+      };
     },
   });
 
@@ -47,8 +59,60 @@ test("safe_open_url records ownership only when its start call succeeds", async 
     wasRunning: false,
     startedByHelper: true,
     ownedPid: 111,
+    ownedLaunchInstanceToken: OWNED_INSTANCE_TOKEN,
     cdp: { http_url: "http://127.0.0.1:2" },
   });
+});
+
+test("safe_open_url fails closed when start omits the launch-instance token", async () => {
+  await assert.rejects(
+    acquireSafeOpenProfile({
+      profileId: "profile-1",
+      headless: true,
+      listRunning: async () => [],
+      getLauncherHealth: launcherWithInstanceOwnership,
+      startProfile: async () => ({ pid: 111, cdp: { http_url: "http://127.0.0.1:2" } }),
+    }),
+    /launch-instance token/,
+  );
+});
+
+test("safe_open_url checks launch-instance capability before starting a stopped profile", async () => {
+  let starts = 0;
+  await assert.rejects(
+    acquireSafeOpenProfile({
+      profileId: "profile-1",
+      headless: true,
+      listRunning: async () => [],
+      getLauncherHealth: async () => ({ capabilities: [] }),
+      startProfile: async () => {
+        starts += 1;
+        return {
+          pid: 111,
+          launch_instance_token: OWNED_INSTANCE_TOKEN,
+          cdp: { http_url: "http://127.0.0.1:2" },
+        };
+      },
+    }),
+    /does not support exact launch-instance ownership/,
+  );
+  assert.equal(starts, 0);
+});
+
+test("public launch results redact the ownership token", () => {
+  const result = redactLaunchInstanceToken({
+    profile_id: "profile-1",
+    pid: 111,
+    launch_instance_token: OWNED_INSTANCE_TOKEN,
+    cdp: { http_url: "http://127.0.0.1:2" },
+  });
+
+  assert.deepEqual(result, {
+    profile_id: "profile-1",
+    pid: 111,
+    cdp: { http_url: "http://127.0.0.1:2" },
+  });
+  assert.equal(JSON.stringify(result).includes(OWNED_INSTANCE_TOKEN), false);
 });
 
 test("safe_open_url refuses to relaunch a running profile without CDP", async () => {
@@ -70,9 +134,15 @@ test("safe_open_url cleans up a profile it started when CDP never becomes ready"
       profileId: "profile-1",
       headless: true,
       listRunning: async () => [],
-      startProfile: async () => ({ pid: 111, cdp: null }),
-      cleanupStartedProfile: async (ownedPid) => {
+      getLauncherHealth: launcherWithInstanceOwnership,
+      startProfile: async () => ({
+        pid: 111,
+        launch_instance_token: OWNED_INSTANCE_TOKEN,
+        cdp: null,
+      }),
+      cleanupStartedProfile: async (ownedPid, ownedLaunchInstanceToken) => {
         assert.equal(ownedPid, 111);
+        assert.equal(ownedLaunchInstanceToken, OWNED_INSTANCE_TOKEN);
         cleanups += 1;
       },
     }),
@@ -130,10 +200,12 @@ test("safe_open_url restores and verifies a profile it started by default", asyn
     wasRunning: false,
     startedByHelper: true,
     ownedPid: 111,
+    ownedLaunchInstanceToken: OWNED_INSTANCE_TOKEN,
     keepRunning: false,
     completed: true,
-    stopStartedProfile: async (ownedPid) => {
+    stopStartedProfile: async (ownedPid, ownedLaunchInstanceToken) => {
       assert.equal(ownedPid, 111);
+      assert.equal(ownedLaunchInstanceToken, OWNED_INSTANCE_TOKEN);
       stops += 1;
     },
     getRunningProfile: async () => null,
@@ -156,6 +228,7 @@ test("safe_open_url keeps an owned profile running only after a successful keep_
     wasRunning: false,
     startedByHelper: true,
     ownedPid: 111,
+    ownedLaunchInstanceToken: OWNED_INSTANCE_TOKEN,
     keepRunning: true,
     completed: true,
     stopStartedProfile: async () => {
@@ -181,6 +254,7 @@ test("safe_open_url never stops a profile it did not start", async () => {
     wasRunning: true,
     startedByHelper: false,
     ownedPid: null,
+    ownedLaunchInstanceToken: null,
     keepRunning: false,
     completed: true,
     stopStartedProfile: async () => {
@@ -202,6 +276,7 @@ test("safe_open_url cleans up an owned profile when navigation fails even with k
     wasRunning: false,
     startedByHelper: true,
     ownedPid: 111,
+    ownedLaunchInstanceToken: OWNED_INSTANCE_TOKEN,
     keepRunning: true,
     completed: false,
     stopStartedProfile: async () => {
@@ -224,6 +299,7 @@ test("safe_open_url fails closed when restoration readback still reports the pro
       wasRunning: false,
       startedByHelper: true,
       ownedPid: 111,
+      ownedLaunchInstanceToken: OWNED_INSTANCE_TOKEN,
       keepRunning: false,
       completed: true,
       stopStartedProfile: async () => {},
@@ -233,25 +309,29 @@ test("safe_open_url fails closed when restoration readback still reports the pro
   );
 });
 
-test("safe_open_url fails closed instead of stopping a replacement PID", async () => {
+test("safe_open_url fails closed instead of stopping a same-PID replacement launch instance", async () => {
   const stopRequests = [];
   await assert.rejects(
     finalizeSafeOpenLifecycle({
       wasRunning: false,
       startedByHelper: true,
       ownedPid: 111,
+      ownedLaunchInstanceToken: OWNED_INSTANCE_TOKEN,
       keepRunning: false,
       completed: true,
-      stopStartedProfile: async (ownedPid) => {
-        stopRequests.push(ownedPid);
-        throw new Error("profile process changed: expected pid 111, running pid 222");
+      stopStartedProfile: async (ownedPid, ownedLaunchInstanceToken) => {
+        stopRequests.push([ownedPid, ownedLaunchInstanceToken]);
+        throw new Error("profile launch instance changed while pid 111 was reused");
       },
-      getRunningProfile: async () => ({ profile_id: "profile-1", pid: 222 }),
+      getRunningProfile: async () => ({
+        profile_id: "profile-1",
+        pid: 111,
+      }),
     }),
-    /expected pid 111, running pid 222/,
+    /launch instance changed/,
   );
 
-  assert.deepEqual(stopRequests, [111]);
+  assert.deepEqual(stopRequests, [[111, OWNED_INSTANCE_TOKEN]]);
 });
 
 test("safe_open_url never retries a foreground failure through stale-process recovery", async () => {
@@ -270,6 +350,7 @@ test("safe_open_url never retries a foreground failure through stale-process rec
         wasRunning: false,
         startedByHelper: true,
         ownedPid: 111,
+        ownedLaunchInstanceToken: OWNED_INSTANCE_TOKEN,
         cdp: { http_url: "http://127.0.0.1:1" },
       }),
       open: async () =>
@@ -279,20 +360,22 @@ test("safe_open_url never retries a foreground failure through stale-process rec
           targetUrl: "https://example.com/",
           activePages: new Map(),
         }),
+      // A legacy callback must be ignored; safe_open_url never performs
+      // PID-only stale-process recovery.
       cleanupStaleProfileProcesses: async () => {
         staleCleanups += 1;
         return { stale: [{ pid: 111 }], killed_pids: [111], errors: [] };
       },
-      stopStartedProfile: async (ownedPid) => stoppedPids.push(ownedPid),
+      stopStartedProfile: async (ownedPid, ownedLaunchInstanceToken) =>
+        stoppedPids.push([ownedPid, ownedLaunchInstanceToken]),
       getRunningProfile: async () => null,
-      delay: async () => {},
       keepRunning: false,
     }),
     /foreground failed/,
   );
 
   assert.equal(staleCleanups, 0);
-  assert.deepEqual(stoppedPids, [111]);
+  assert.deepEqual(stoppedPids, [[111, OWNED_INSTANCE_TOKEN]]);
 });
 
 test("safe_open_url preserves both the operation error and restoration error", async () => {
@@ -302,17 +385,16 @@ test("safe_open_url preserves both the operation error and restoration error", a
         wasRunning: false,
         startedByHelper: true,
         ownedPid: 111,
+        ownedLaunchInstanceToken: OWNED_INSTANCE_TOKEN,
         cdp: { http_url: "http://127.0.0.1:1" },
       }),
       open: async () => {
         throw new Error("operation failed");
       },
-      cleanupStaleProfileProcesses: async () => ({ stale: [], killed_pids: [], errors: [] }),
       stopStartedProfile: async () => {
         throw new Error("restoration failed");
       },
       getRunningProfile: async () => ({ profile_id: "profile-1", pid: 111 }),
-      delay: async () => {},
       keepRunning: false,
     }),
     (error) => {
@@ -330,7 +412,12 @@ test("safe_open_url preserves the start failure when CDP cleanup also fails", as
       profileId: "profile-1",
       headless: true,
       listRunning: async () => [],
-      startProfile: async () => ({ pid: 111, cdp: null }),
+      getLauncherHealth: launcherWithInstanceOwnership,
+      startProfile: async () => ({
+        pid: 111,
+        launch_instance_token: OWNED_INSTANCE_TOKEN,
+        cdp: null,
+      }),
       cleanupStartedProfile: async () => {
         throw new Error("startup cleanup failed");
       },
@@ -347,73 +434,32 @@ test("safe_open_url preserves the start failure when CDP cleanup also fails", as
   );
 });
 
-test("safe_open_url preserves the open failure when stale cleanup throws", async () => {
+test("safe_open_url never invokes PID-only stale cleanup after an ordinary open failure", async () => {
+  let staleCleanups = 0;
+  const stopRequests = [];
   await assert.rejects(
     runSafeOpenLifecycle({
       acquire: async () => ({
         wasRunning: false,
         startedByHelper: true,
         ownedPid: 111,
+        ownedLaunchInstanceToken: OWNED_INSTANCE_TOKEN,
         cdp: { http_url: "http://127.0.0.1:1" },
       }),
       open: async () => {
         throw new Error("operation failed");
       },
       cleanupStaleProfileProcesses: async () => {
-        throw new Error("stale cleanup failed");
+        staleCleanups += 1;
+        return { stale: [{ pid: 111 }], killed_pids: [111], errors: [] };
       },
-      stopStartedProfile: async () => {},
+      stopStartedProfile: async (ownedPid, ownedLaunchInstanceToken) =>
+        stopRequests.push([ownedPid, ownedLaunchInstanceToken]),
       getRunningProfile: async () => null,
-      delay: async () => {},
       keepRunning: false,
     }),
-    (error) => {
-      assert.equal(error instanceof AggregateError, true);
-      assert.match(error.cause.message, /operation failed/);
-      assert.deepEqual(error.errors.map((item) => item.message), [
-        "operation failed",
-        "stale cleanup failed",
-      ]);
-      return true;
-    },
+    /operation failed/,
   );
-});
-
-test("safe_open_url preserves the open failure when owned-process recovery fails", async () => {
-  let stopAttempts = 0;
-  await assert.rejects(
-    runSafeOpenLifecycle({
-      acquire: async () => ({
-        wasRunning: false,
-        startedByHelper: true,
-        ownedPid: 111,
-        cdp: { http_url: "http://127.0.0.1:1" },
-      }),
-      open: async () => {
-        throw new Error("operation failed");
-      },
-      cleanupStaleProfileProcesses: async () => ({
-        stale: [{ pid: 111 }],
-        killed_pids: [111],
-        errors: [],
-      }),
-      stopStartedProfile: async () => {
-        stopAttempts += 1;
-        if (stopAttempts === 1) throw new Error("recovery stop failed");
-      },
-      getRunningProfile: async () => null,
-      delay: async () => {},
-      keepRunning: false,
-    }),
-    (error) => {
-      assert.equal(error instanceof AggregateError, true);
-      assert.match(error.cause.message, /operation failed/);
-      assert.deepEqual(error.errors.map((item) => item.message), [
-        "operation failed",
-        "recovery stop failed",
-      ]);
-      return true;
-    },
-  );
-  assert.equal(stopAttempts, 2);
+  assert.equal(staleCleanups, 0);
+  assert.deepEqual(stopRequests, [[111, OWNED_INSTANCE_TOKEN]]);
 });

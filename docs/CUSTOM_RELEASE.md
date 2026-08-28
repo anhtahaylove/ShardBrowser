@@ -13,6 +13,10 @@ the MCP source from its matching release instead of silently downloading a
 future incompatible helper bundle. The release workflow rejects a tag that does
 not exactly match `v<package version>`.
 
+The MCP archive is also gated by exact entry equality against
+`scripts/stage-mcp-release.mjs`: missing, duplicate, nested-extra, and other
+unexpected entries fail before checksums, provenance, or publication.
+
 ## Updater signing inputs
 
 Configure these GitHub Actions repository secrets before creating a release:
