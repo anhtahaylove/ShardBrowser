@@ -263,22 +263,10 @@ impl Tracker {
             (entry.killer.clone(), entry.pid)
         };
         let (killer, pid) = target;
+        // The tracking task owns the Child handle and performs both graceful
+        // shutdown and its hard-kill fallback. Do not add a delayed PID-only
+        // fallback here: Windows may recycle the PID after that handle closes.
         let _ = killer.send(()).await;
-        #[cfg(windows)]
-        {
-            let profile_id = profile_id.to_string();
-            tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(6)).await;
-                let still_tracked = Self::shared()
-                    .inner
-                    .lock()
-                    .map(|g| g.get(&profile_id).map(|e| e.pid == pid).unwrap_or(false))
-                    .unwrap_or(false);
-                if still_tracked {
-                    taskkill_profile_process(pid, true);
-                }
-            });
-        }
         Ok(KillOutcome::Stopped { pid })
     }
 
