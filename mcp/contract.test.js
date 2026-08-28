@@ -24,7 +24,7 @@ test("stdio server exposes the versioned ShardX tool contract", async () => {
     const { tools } = await client.listTools();
     const names = new Set(tools.map((tool) => tool.name));
 
-    assert.equal(version, "0.1.28");
+    assert.equal(version, "0.1.29");
     assert.equal(tools.length, 96);
     for (const name of [
       "health_check",

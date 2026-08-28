@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.1.29 - 2026-08-28
+
+### Process ownership
+
+- Assign an opaque in-memory UUID to every API-launched browser and require the exact profile, PID, and launch-instance token for conditional cleanup.
+- Disable the legacy PID-only conditional stop endpoint with HTTP 410 so recycled numeric PIDs cannot stop replacement processes.
+- Keep launch-instance tokens out of running-profile inventory, persistence, logs, API errors, and public MCP results.
+
+### MCP lifecycle
+
+- Preserve the page opened by `safe_open_url` as the active target for follow-up tab, screenshot, ARIA, and network tools.
+- Preflight Launcher ownership capability before spawning a stopped profile and fail closed when CDP startup, restoration, or launch-instance ownership cannot be verified.
+- Restore the profile state owned by `safe_open_url` without PID-only retries; stale-process cleanup is now inventory-only.
+
+### Release integrity
+
+- Enforce exact MCP archive-entry equality across staging, raw tar inspection, and extracted payload verification.
+- Reject missing, extra, duplicate, nested-extra, symlink, non-regular, unsafe-root, and malformed release-staging inputs before publication.
+- Preserve the 96-tool MCP contract, startup-in-tray behavior, signed updater flow, and existing headless automation compatibility.
+
 ## 0.1.28 - 2026-08-14
 
 ### Rust SDK
