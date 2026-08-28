@@ -317,6 +317,9 @@ jobs:
           fi
 
       - name: Validate and package ShardX MCP
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+          PATCHRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
         run: |
           test -f mcp/package-lock.json
           node --check mcp/index.js
@@ -324,28 +327,22 @@ jobs:
             grep -q "\"$helper\"" mcp/index.js
           done
           package_root="$RUNNER_TEMP/ShardX-MCP"
-          mkdir -p "$package_root"
-          cp \
-            mcp/index.js \
-            mcp/challenge.js \
-            mcp/challenge.test.js \
-            mcp/contract.test.js \
-            mcp/verification-checkpoint.js \
-            mcp/verification-checkpoint.test.js \
-            mcp/package.json \
-            mcp/package-lock.json \
-            mcp/README.md \
-            "$package_root/"
+          node scripts/stage-mcp-release.mjs "$package_root"
           tar -czf dist/ShardX-MCP.tar.gz -C "$RUNNER_TEMP" ShardX-MCP
           archive_entries="$(tar -tzf dist/ShardX-MCP.tar.gz)"
           printf '%s\n' "$archive_entries"
-          for required in index.js challenge.js challenge.test.js contract.test.js verification-checkpoint.js verification-checkpoint.test.js package.json package-lock.json README.md; do
+          while IFS= read -r required; do
             printf '%s\n' "$archive_entries" | grep -qx "ShardX-MCP/$required"
-          done
+          done < <(node scripts/stage-mcp-release.mjs --list)
           if printf '%s\n' "$archive_entries" | grep -q '/node_modules/'; then
             echo "MCP archive must not contain node_modules." >&2
             exit 1
           fi
+          verify_root="$RUNNER_TEMP/ShardX-MCP-verify"
+          mkdir -p "$verify_root"
+          tar -xzf dist/ShardX-MCP.tar.gz -C "$verify_root"
+          npm ci --prefix "$verify_root/ShardX-MCP"
+          npm test --prefix "$verify_root/ShardX-MCP"
 
       - name: Generate static updater manifest
         run: node scripts/generate-updater-manifest.mjs --dist dist --tag "${{ needs.validate.outputs.tag }}" --repo "${{ github.repository }}"
