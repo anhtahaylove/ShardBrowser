@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "build:e2e": "tsc && vite build --mode e2e",
     "test:e2e": "playwright test",
+    "test:release-package": "node --test scripts/stage-mcp-release.test.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },
