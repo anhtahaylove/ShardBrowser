@@ -1,3 +1,18 @@
+function aggregatePreservingPrimary(primaryError, secondaryError, context) {
+  const primaryCause =
+    primaryError instanceof AggregateError && primaryError.cause instanceof Error
+      ? primaryError.cause
+      : primaryError;
+  const primaryErrors = primaryError instanceof AggregateError ? primaryError.errors : [primaryError];
+  const secondaryErrors =
+    secondaryError instanceof AggregateError ? secondaryError.errors : [secondaryError];
+  return new AggregateError(
+    [...primaryErrors, ...secondaryErrors],
+    `${primaryCause.message}; ${context}: ${secondaryError.message}`,
+    { cause: primaryCause },
+  );
+}
+
 export async function acquireSafeOpenProfile({
   profileId,
   headless,
@@ -22,8 +37,15 @@ export async function acquireSafeOpenProfile({
   const started = await startProfile({ headless: Boolean(headless) });
   const ownedPid = Number.isInteger(started?.pid) && started.pid > 0 ? started.pid : null;
   if (!started?.cdp?.http_url) {
-    if (ownedPid !== null) await cleanupStartedProfile?.(ownedPid);
-    throw new Error(`profile ${profileId} did not start with CDP`);
+    const startError = new Error(`profile ${profileId} did not start with CDP`);
+    if (ownedPid !== null && cleanupStartedProfile) {
+      try {
+        await cleanupStartedProfile(ownedPid);
+      } catch (cleanupError) {
+        throw aggregatePreservingPrimary(startError, cleanupError, "startup cleanup failed");
+      }
+    }
+    throw startError;
   }
   if (ownedPid === null) {
     throw new Error(`profile ${profileId} did not start with a valid PID`);
@@ -110,15 +132,24 @@ export async function runSafeOpenLifecycle({
     } catch (error) {
       if (error instanceof SafeOpenForegroundError) throw error;
 
-      const cleanup = await cleanupStaleProfileProcesses();
-      if (!cleanup.killed_pids.length) throw error;
-      if (session.startedByHelper) {
-        await stopStartedProfile(session.ownedPid);
-        session = { ...session, startedByHelper: false, ownedPid: null };
+      let cleanup;
+      try {
+        cleanup = await cleanupStaleProfileProcesses();
+      } catch (cleanupError) {
+        throw aggregatePreservingPrimary(error, cleanupError, "stale-process cleanup failed");
       }
-      await delay();
-      session = await acquire();
-      result = await open(session);
+      if (!cleanup.killed_pids.length) throw error;
+      try {
+        if (session.startedByHelper) {
+          await stopStartedProfile(session.ownedPid);
+          session = { ...session, startedByHelper: false, ownedPid: null };
+        }
+        await delay();
+        session = await acquire();
+        result = await open(session);
+      } catch (recoveryError) {
+        throw aggregatePreservingPrimary(error, recoveryError, "stale-process recovery failed");
+      }
       selfHealed = {
         stale_count: cleanup.stale.length,
         killed_count: cleanup.killed_pids.length,
@@ -146,11 +177,7 @@ export async function runSafeOpenLifecycle({
   }
 
   if (operationError && restorationError) {
-    throw new AggregateError(
-      [operationError, restorationError],
-      `${operationError.message}; restoration failed: ${restorationError.message}`,
-      { cause: operationError },
-    );
+    throw aggregatePreservingPrimary(operationError, restorationError, "restoration failed");
   }
   if (operationError) throw operationError;
   if (restorationError) throw restorationError;

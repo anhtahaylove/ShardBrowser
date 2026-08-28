@@ -323,3 +323,97 @@ test("safe_open_url preserves both the operation error and restoration error", a
     },
   );
 });
+
+test("safe_open_url preserves the start failure when CDP cleanup also fails", async () => {
+  await assert.rejects(
+    acquireSafeOpenProfile({
+      profileId: "profile-1",
+      headless: true,
+      listRunning: async () => [],
+      startProfile: async () => ({ pid: 111, cdp: null }),
+      cleanupStartedProfile: async () => {
+        throw new Error("startup cleanup failed");
+      },
+    }),
+    (error) => {
+      assert.equal(error instanceof AggregateError, true);
+      assert.match(error.cause.message, /did not start with CDP/);
+      assert.deepEqual(error.errors.map((item) => item.message), [
+        "profile profile-1 did not start with CDP",
+        "startup cleanup failed",
+      ]);
+      return true;
+    },
+  );
+});
+
+test("safe_open_url preserves the open failure when stale cleanup throws", async () => {
+  await assert.rejects(
+    runSafeOpenLifecycle({
+      acquire: async () => ({
+        wasRunning: false,
+        startedByHelper: true,
+        ownedPid: 111,
+        cdp: { http_url: "http://127.0.0.1:1" },
+      }),
+      open: async () => {
+        throw new Error("operation failed");
+      },
+      cleanupStaleProfileProcesses: async () => {
+        throw new Error("stale cleanup failed");
+      },
+      stopStartedProfile: async () => {},
+      getRunningProfile: async () => null,
+      delay: async () => {},
+      keepRunning: false,
+    }),
+    (error) => {
+      assert.equal(error instanceof AggregateError, true);
+      assert.match(error.cause.message, /operation failed/);
+      assert.deepEqual(error.errors.map((item) => item.message), [
+        "operation failed",
+        "stale cleanup failed",
+      ]);
+      return true;
+    },
+  );
+});
+
+test("safe_open_url preserves the open failure when owned-process recovery fails", async () => {
+  let stopAttempts = 0;
+  await assert.rejects(
+    runSafeOpenLifecycle({
+      acquire: async () => ({
+        wasRunning: false,
+        startedByHelper: true,
+        ownedPid: 111,
+        cdp: { http_url: "http://127.0.0.1:1" },
+      }),
+      open: async () => {
+        throw new Error("operation failed");
+      },
+      cleanupStaleProfileProcesses: async () => ({
+        stale: [{ pid: 111 }],
+        killed_pids: [111],
+        errors: [],
+      }),
+      stopStartedProfile: async () => {
+        stopAttempts += 1;
+        if (stopAttempts === 1) throw new Error("recovery stop failed");
+      },
+      getRunningProfile: async () => null,
+      delay: async () => {},
+      keepRunning: false,
+    }),
+    (error) => {
+      assert.equal(error instanceof AggregateError, true);
+      assert.match(error.cause.message, /operation failed/);
+      assert.deepEqual(error.errors.map((item) => item.message), [
+        "operation failed",
+        "recovery stop failed",
+      ]);
+      return true;
+    },
+  );
+  assert.equal(stopAttempts, 2);
+});
