@@ -23,8 +23,8 @@ import { chromium } from "patchright";
 import { classifyCloudflareChallenge, waitForChallengeClear } from "./challenge.js";
 import {
   acquireSafeOpenProfile,
-  finalizeSafeOpenLifecycle,
   navigateActivePage,
+  runSafeOpenLifecycle,
 } from "./safe-open-lifecycle.js";
 import {
   clearVerificationCheckpoint,
@@ -68,7 +68,9 @@ async function api(path, { method = "GET", body } = {}) {
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
   if (!res.ok) {
     const msg = data && data.error ? data.error : `HTTP ${res.status}`;
-    throw new Error(`${method} ${path} → ${msg}`);
+    const error = new Error(`${method} ${path} → ${msg}`);
+    error.status = res.status;
+    throw error;
   }
   return data;
 }
@@ -409,40 +411,36 @@ async function cleanupStaleProfileProcesses(profileId) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function stopStartedProfile(profileId) {
-  const browser = browsers.get(profileId);
-  let closeError = null;
-  if (browser?.isConnected()) {
-    try {
-      await browser.close();
-    } catch (error) {
-      closeError = error;
-    }
+async function stopStartedProfile(profileId, expectedPid) {
+  if (!Number.isInteger(expectedPid) || expectedPid <= 0) {
+    throw new Error(`cannot stop profile ${profileId} without an owned PID`);
+  }
+  let stopError = null;
+  try {
+    await api(`/profiles/${profileId}/stop-if-pid/${expectedPid}`, { method: "POST" });
+  } catch (error) {
+    if (error.status === 409) throw error;
+    stopError = error;
   }
   browsers.delete(profileId);
   activePage.delete(profileId);
-  let stopError = null;
-  try {
-    await api(`/profiles/${profileId}/stop`, { method: "POST" });
-  } catch (error) {
-    stopError = error;
-  }
   let readError = null;
   for (let i = 0; i < 60; i++) {
     try {
       const running = await api("/running");
-      if (!running.some((r) => r.profile_id === profileId)) return;
+      const current = running.find((item) => item.profile_id === profileId);
+      if (!current || current.pid !== expectedPid) return;
       readError = null;
     } catch (error) {
       readError = error;
     }
     await sleep(250);
   }
-  const details = [closeError, stopError, readError]
+  const details = [stopError, readError]
     .filter(Boolean)
     .map((error) => error.message)
     .join("; ");
-  throw new Error(`profile ${profileId} did not stop within 15 seconds${details ? `: ${details}` : ""}`);
+  throw new Error(`owned profile process ${expectedPid} did not stop within 15 seconds${details ? `: ${details}` : ""}`);
 }
 
 const MCP_VERSION = createRequire(import.meta.url)("./package.json").version;
@@ -593,14 +591,8 @@ server.tool(
             method: "POST",
             body: { headless: startHeadless },
           }),
-        cleanupStartedProfile: () => stopStartedProfile(profile.id),
+        cleanupStartedProfile: (ownedPid) => stopStartedProfile(profile.id, ownedPid),
       });
-    let session = await acquire();
-    const wasRunning = session.wasRunning;
-    let startedByHelper = session.startedByHelper;
-    let self_healed = null;
-    let completed = false;
-    let lifecycle = null;
     const open = async () => {
       const page = await pageFor(profile.id, { autostart: false, headless: !!headless });
       const response = await navigateActivePage({
@@ -630,36 +622,16 @@ server.tool(
         verification,
       };
     };
-    let result;
-    try {
-      result = await open();
-    } catch (error) {
-      const cleanup = await cleanupStaleProfileProcesses(profile.id);
-      if (!cleanup.killed_pids.length) throw error;
-      if (startedByHelper) {
-        await stopStartedProfile(profile.id);
-      }
-      await sleep(500);
-      session = await acquire();
-      startedByHelper = session.startedByHelper;
-      result = await open();
-      self_healed = {
-        stale_count: cleanup.stale.length,
-        killed_count: cleanup.killed_pids.length,
-        errors_count: cleanup.errors.length,
-      };
-    } finally {
-      completed = result !== undefined;
-      lifecycle = await finalizeSafeOpenLifecycle({
-        wasRunning,
-        startedByHelper,
-        keepRunning: !!keep_running,
-        completed,
-        stopStartedProfile: () => stopStartedProfile(profile.id),
-        isRunning: async () =>
-          (await api("/running")).some((item) => item.profile_id === profile.id),
-      });
-    }
+    const { result, selfHealed: self_healed, lifecycle } = await runSafeOpenLifecycle({
+      acquire,
+      open,
+      cleanupStaleProfileProcesses: () => cleanupStaleProfileProcesses(profile.id),
+      stopStartedProfile: (ownedPid) => stopStartedProfile(profile.id, ownedPid),
+      getRunningProfile: async () =>
+        (await api("/running")).find((item) => item.profile_id === profile.id) || null,
+      delay: () => sleep(500),
+      keepRunning: !!keep_running,
+    });
     return text({
       profile: profileSummary(profile),
       url: result.url,

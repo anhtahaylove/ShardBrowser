@@ -477,6 +477,40 @@ paths:
                   stopped: { type: boolean }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /profiles/{id}/stop-if-pid/{expected_pid}:
+    post:
+      tags: [Profiles]
+      summary: Stop one exact profile process instance
+      description: |
+        Stops the profile only when its current tracked PID matches
+        `expected_pid`. Returns 409 instead of stopping a replacement process.
+      parameters:
+        - $ref: "#/components/parameters/ProfileId"
+        - name: expected_pid
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      responses:
+        "200":
+          description: Conditional stop result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  profile_id: { type: string }
+                  stopped: { type: boolean }
+                  pid: { type: integer, format: int64, description: PID that received the stop request. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: The running profile PID no longer matches expected_pid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /profiles/{id}/cookies:
     get:
       tags: [Profiles]

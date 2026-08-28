@@ -715,6 +715,30 @@ async fn stop_profile(Path(id): Path<String>) -> ApiResult {
     Ok(Json(json!({ "profile_id": id, "stopped": stopped })))
 }
 
+async fn stop_profile_if_pid(Path((id, expected_pid)): Path<(String, u32)>) -> ApiResult {
+    let outcome = crate::process::Tracker::shared()
+        .kill_if_pid(&id, Some(expected_pid))
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    match outcome {
+        crate::process::KillOutcome::Stopped { pid } => {
+            Ok(Json(json!({ "profile_id": id, "stopped": true, "pid": pid })))
+        }
+        crate::process::KillOutcome::NotRunning => {
+            Ok(Json(json!({ "profile_id": id, "stopped": false })))
+        }
+        crate::process::KillOutcome::PidMismatch {
+            expected_pid,
+            actual_pid,
+        } => Err(err(
+            StatusCode::CONFLICT,
+            format!(
+                "profile {id} process changed: expected pid {expected_pid}, running pid {actual_pid}"
+            ),
+        )),
+    }
+}
+
 #[derive(Deserialize)]
 struct VerificationStatusReq {
     required: bool,
@@ -1003,6 +1027,10 @@ pub async fn serve(secret: String, port: u16) {
         .route("/profiles/:id", get(get_profile).patch(edit_profile).delete(delete_profile))
         .route("/profiles/:id/start", post(start_profile))
         .route("/profiles/:id/stop", post(stop_profile))
+        .route(
+            "/profiles/:id/stop-if-pid/:expected_pid",
+            post(stop_profile_if_pid),
+        )
         .route(
             "/profiles/:id/verification-status",
             post(report_verification_status),
