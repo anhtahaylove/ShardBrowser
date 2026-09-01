@@ -7,10 +7,15 @@
 //!   cache and normalizing the (machine-bound) cookie encryption so a snapshot
 //!   taken on one machine restores correctly on another (incl. Mac↔Windows).
 
+pub mod backup;
+pub mod canonical;
 pub mod cookies;
+pub mod envelope;
+pub mod keys;
 pub mod logins;
 pub mod oscrypt;
 pub mod portable;
+pub mod signing;
 pub mod snapshot;
 pub mod webdata;
 
