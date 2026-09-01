@@ -1,0 +1,2384 @@
+{
+  "serverInfo": {
+    "name": "shardx",
+    "version": "0.1.28"
+  },
+  "toolCount": 96,
+  "tools": [
+    {
+      "annotations": null,
+      "description": "Add a proxy to the store. Pass `proxy` as a string (scheme://user:pass@host:port) or explicit fields.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "country": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "socks5",
+              "http",
+              "https"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "port": {
+            "type": "number"
+          },
+          "proxy": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "add_proxy",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Accessibility-tree snapshot of the page (or a selector) — a compact, agent-friendly view of the UI.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_aria_snapshot",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Go back in history.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_back",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Abort matching resource types for speed (image, media, font, stylesheet, script, …). Empty list unblocks.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "profile_id",
+          "types"
+        ],
+        "type": "object"
+      },
+      "name": "browser_block_resources",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Bounding box {x,y,width,height} of an element (or null if not visible).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "selector"
+        ],
+        "type": "object"
+      },
+      "name": "browser_bounding_box",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Start logging finished network requests for the profile.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_capture_start",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Stop logging and return the captured requests.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_capture_stop",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Clear all cookies in the browser context.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_clear_cookies",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Click the first element matching a CSS selector.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "selector"
+        ],
+        "type": "object"
+      },
+      "name": "browser_click",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Close a tab by index (defaults to the active tab).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "index": {
+            "type": "number"
+          },
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_close_tab",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Return the active page's full HTML.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_content",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Count elements matching the selector.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "selector"
+        ],
+        "type": "object"
+      },
+      "name": "browser_count",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Return the active page's current URL and title.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_current_url",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Auto-handle native dialogs (alert/confirm/prompt). action: accept | dismiss | off.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "accept",
+              "dismiss",
+              "off"
+            ],
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "prompt_text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "action"
+        ],
+        "type": "object"
+      },
+      "name": "browser_dialog",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Double-click an element.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "selector"
+        ],
+        "type": "object"
+      },
+      "name": "browser_double_click",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Drag one element onto another.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "from",
+          "to"
+        ],
+        "type": "object"
+      },
+      "name": "browser_drag",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Screenshot a single element (PNG).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "selector"
+        ],
+        "type": "object"
+      },
+      "name": "browser_element_screenshot",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Element state: count, visible, enabled, checked.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "selector"
+        ],
+        "type": "object"
+      },
+      "name": "browser_element_state",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Run a JavaScript expression in the active page and return the result.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "expression": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "expression"
+        ],
+        "type": "object"
+      },
+      "name": "browser_evaluate",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Whether at least one element matches the selector.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "selector"
+        ],
+        "type": "object"
+      },
+      "name": "browser_exists",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Fill an input/textarea matching a CSS selector with text.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "selector",
+          "text"
+        ],
+        "type": "object"
+      },
+      "name": "browser_fill",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Focus the first element matching the selector.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "selector"
+        ],
+        "type": "object"
+      },
+      "name": "browser_focus",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Go forward in history.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_forward",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Evaluate JS inside a frame matched by URL substring or name.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "expression": {
+            "type": "string"
+          },
+          "frame": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "frame",
+          "expression"
+        ],
+        "type": "object"
+      },
+      "name": "browser_frame_evaluate",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "List the page's frames as { index, name, url }.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_frames",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Return an attribute of the first element matching the selector.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "selector",
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "browser_get_attribute",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Return the browser context's cookies (live, from the running browser).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_get_cookies",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Return outerHTML of a selector (or the whole document when omitted).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_get_html",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Return innerText of the first element matching the selector.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "selector"
+        ],
+        "type": "object"
+      },
+      "name": "browser_get_text",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "innerText of ALL elements matching the selector (scrape lists/tables).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "selector"
+        ],
+        "type": "object"
+      },
+      "name": "browser_get_texts",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Hover the first element matching the selector.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "selector"
+        ],
+        "type": "object"
+      },
+      "name": "browser_hover",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Current value of an input / textarea / select.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "selector"
+        ],
+        "type": "object"
+      },
+      "name": "browser_input_value",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Insert text into the focused element (fast; no per-key events).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "text"
+        ],
+        "type": "object"
+      },
+      "name": "browser_insert_text",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Modify matching requests in flight: override/add request headers, replace POST data, or abort. Remove with browser_unmock.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "abort": {
+            "type": "boolean"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "post_data": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "url_pattern": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "url_pattern"
+        ],
+        "type": "object"
+      },
+      "name": "browser_intercept",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "List anchor links on the page as { text, href }.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_links",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "List open tabs as { index, url, title, active }.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_list_tabs",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Read/write the page's localStorage. action: get | set | remove | clear.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "get",
+              "set",
+              "remove",
+              "clear"
+            ],
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "action"
+        ],
+        "type": "object"
+      },
+      "name": "browser_local_storage",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Fulfill requests matching a URL glob with a canned response (status/body/content_type).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "content_type": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "number"
+          },
+          "url_pattern": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "url_pattern"
+        ],
+        "type": "object"
+      },
+      "name": "browser_mock",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Click at absolute viewport coordinates (for canvas/maps).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "profile_id",
+          "x",
+          "y"
+        ],
+        "type": "object"
+      },
+      "name": "browser_mouse_click",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Open a URL in the profile's browser (starts it with CDP if needed). Set headless to launch without a window.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "headless": {
+            "type": "boolean"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "url"
+        ],
+        "type": "object"
+      },
+      "name": "browser_navigate",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Open a new tab (optionally navigating to a URL) and make it active.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_open_tab",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Render the active page to PDF (headless Chromium only). Returns base64.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_pdf",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Press a keyboard key on the active page (e.g. Enter, Escape, Control+A, ArrowDown).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "key"
+        ],
+        "type": "object"
+      },
+      "name": "browser_press",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Press a key while a specific element is focused (e.g. Enter in a search box).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "selector",
+          "key"
+        ],
+        "type": "object"
+      },
+      "name": "browser_press_on",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Reload the active page.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_reload",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Right-click (context-menu) an element.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "selector"
+        ],
+        "type": "object"
+      },
+      "name": "browser_right_click",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Screenshot the active page (PNG).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "full_page": {
+            "type": "boolean"
+          },
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_screenshot",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Scroll: to an element (selector) or by a pixel delta (dy / dx).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "dx": {
+            "type": "number"
+          },
+          "dy": {
+            "type": "number"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_scroll",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Scroll to the bottom of the page (triggers lazy/infinite load).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_scroll_to_bottom",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Select an option in a <select> by value (or label).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "by": {
+            "enum": [
+              "value",
+              "label"
+            ],
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "selector",
+          "value"
+        ],
+        "type": "object"
+      },
+      "name": "browser_select_option",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Check or uncheck a checkbox/radio.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "checked": {
+            "type": "boolean"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "selector",
+          "checked"
+        ],
+        "type": "object"
+      },
+      "name": "browser_set_checkbox",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Add cookies to the browser context (Playwright format: name, value, and domain+path or url).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "cookies": {
+            "type": "array"
+          },
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "cookies"
+        ],
+        "type": "object"
+      },
+      "name": "browser_set_cookies",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Set extra HTTP headers sent on every request (e.g. Authorization). Empty object clears.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "headers"
+        ],
+        "type": "object"
+      },
+      "name": "browser_set_extra_headers",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Set files on a file <input> (upload).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "selector",
+          "paths"
+        ],
+        "type": "object"
+      },
+      "name": "browser_set_files",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Emulate network via CDP: offline, latency, and throughput (kbps). Omit/false/0 to reset to unlimited.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "download_kbps": {
+            "type": "number"
+          },
+          "latency_ms": {
+            "type": "number"
+          },
+          "offline": {
+            "type": "boolean"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "upload_kbps": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_set_network_conditions",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Set the page viewport size.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "height": {
+            "type": "number"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "width": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "profile_id",
+          "width",
+          "height"
+        ],
+        "type": "object"
+      },
+      "name": "browser_set_viewport",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Make the tab at `index` (from browser_list_tabs) the active one.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "index": {
+            "type": "number"
+          },
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "index"
+        ],
+        "type": "object"
+      },
+      "name": "browser_switch_tab",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Return the page's visible text (document.body.innerText) — cheap way to read content.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_text",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Type text into an element key-by-key (good for inputs that watch keystrokes).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "delay_ms": {
+            "type": "number"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "selector",
+          "text"
+        ],
+        "type": "object"
+      },
+      "name": "browser_type",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Remove a mock for a pattern (or all mocks when omitted).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "url_pattern": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_unmock",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Wait a fixed number of milliseconds.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "ms": {
+            "type": "number"
+          },
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "ms"
+        ],
+        "type": "object"
+      },
+      "name": "browser_wait",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Wait for a download to start, save it into `dir`, and return the saved path.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "dir": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "timeout_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "profile_id",
+          "dir"
+        ],
+        "type": "object"
+      },
+      "name": "browser_wait_for_download",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Wait until a JS expression evaluates truthy in the page.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "expression": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "timeout_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "profile_id",
+          "expression"
+        ],
+        "type": "object"
+      },
+      "name": "browser_wait_for_function",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Wait for a page load state (load | domcontentloaded | networkidle).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "load",
+              "domcontentloaded",
+              "networkidle"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "type": "object"
+      },
+      "name": "browser_wait_for_load",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Wait for a response whose URL matches (glob/substring); returns { url, status }.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "timeout_ms": {
+            "type": "number"
+          },
+          "url_pattern": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "url_pattern"
+        ],
+        "type": "object"
+      },
+      "name": "browser_wait_for_response",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Wait until an element matching the selector reaches a state.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "attached",
+              "detached",
+              "visible",
+              "hidden"
+            ],
+            "type": "string"
+          },
+          "timeout_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "profile_id",
+          "selector"
+        ],
+        "type": "object"
+      },
+      "name": "browser_wait_for_selector",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Wait until the page URL matches (glob/substring).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "timeout_ms": {
+            "type": "number"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "url"
+        ],
+        "type": "object"
+      },
+      "name": "browser_wait_for_url",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Inspect the current page of a running profile for a Cloudflare interstitial or visible Turnstile widget. Read-only: never starts the profile or interacts with verification controls.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "exact": {
+            "type": "boolean"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "profile_query": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "challenge_status",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Find and terminate stale ShardX browser processes for one profile when they still hold its user-data-dir but Launcher /running no longer tracks them.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "exact": {
+            "type": "boolean"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "profile_query": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "cleanup_stale_profile_processes",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Enable or disable ShardX Launcher at desktop sign-in for the current user. The embedded API starts with the Launcher; MCP remains client-spawned. Optionally choose whether the window stays in the system tray.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "start_minimized": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "type": "object"
+      },
+      "name": "configure_startup",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Create a persistent profile. If `fingerprint` is omitted, a new one is generated for `platform` (or the host OS). `proxy` is a string added to the store; `folder` files it.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "fingerprint": {},
+          "folder": {
+            "type": "string"
+          },
+          "launch": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "name": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "platform": {
+            "enum": [
+              "Windows",
+              "macOS",
+              "Linux"
+            ],
+            "type": "string"
+          },
+          "proxy": {
+            "type": "string"
+          },
+          "proxy_id": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "create_profile",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Create a TEMPORARY profile (hidden from the list, auto-deleted on close). Random/specified fingerprint, optional inline proxy string.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "fingerprint_id": {
+            "type": "string"
+          },
+          "folder": {
+            "type": "string"
+          },
+          "launch": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "name": {
+            "type": "string"
+          },
+          "noise": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "platform": {
+            "enum": [
+              "Windows",
+              "macOS",
+              "Linux"
+            ],
+            "type": "string"
+          },
+          "proxy": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "create_temporary_profile",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Delete a folder. delete_profiles=true removes its profiles; false unfiles them.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "delete_profiles": {
+            "type": "boolean"
+          },
+          "folder": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "folder"
+        ],
+        "type": "object"
+      },
+      "name": "delete_folder",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Delete a profile (config + user-data-dir).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "delete_profile",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Delete a stored proxy by id.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "delete_proxy",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Resolve/start a profile and return its CDP endpoint plus /json/list page targets for Chrome DevTools handoff.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "exact": {
+            "type": "boolean"
+          },
+          "headless": {
+            "type": "boolean"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "profile_query": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "devtools_context",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Edit a profile. Only provided fields change; `fingerprint` replaces it verbatim; folder:'' unfiles; proxy_id:'' unbinds.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "fingerprint": {},
+          "folder": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "proxy": {
+            "type": "string"
+          },
+          "proxy_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "edit_profile",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Start a profile only if needed and return its CDP endpoint. Accepts a profile id or a unique profile name/query.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "exact": {
+            "type": "boolean"
+          },
+          "headless": {
+            "type": "boolean"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "profile_query": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "ensure_profile_started",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Export a profile's cookies (decrypted).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "export_cookies",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Find profiles by id or profile name. Returns safe profile summaries, not full fingerprint config.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "exact": {
+            "type": "boolean"
+          },
+          "limit": {
+            "exclusiveMinimum": 0,
+            "maximum": 50,
+            "type": "integer"
+          },
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "find_profile_by_name",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Get a profile's full stored config by id.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "get_profile",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Check that the ShardX Launcher API is reachable and, when SHARDX_TOKEN is set, authenticated.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {},
+        "type": "object"
+      },
+      "name": "health_check",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Import cookies into a STOPPED profile.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "cookies": {
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "cookies"
+        ],
+        "type": "object"
+      },
+      "name": "import_cookies",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "List the fingerprint library entries.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {},
+        "type": "object"
+      },
+      "name": "list_fingerprints",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "List folder tags.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {},
+        "type": "object"
+      },
+      "name": "list_folders",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "List persistent profiles with their running state and CDP endpoint.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {},
+        "type": "object"
+      },
+      "name": "list_profiles",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "List stored proxies (no credentials).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {},
+        "type": "object"
+      },
+      "name": "list_proxies",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "List running profiles with pid and CDP endpoint.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {},
+        "type": "object"
+      },
+      "name": "list_running",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Generate a fresh uniquified fingerprint (random platform_version, host-aware CPU/RAM, clamped screen). Not persisted.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "platform": {
+            "enum": [
+              "Windows",
+              "macOS",
+              "Linux"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "new_fingerprint",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Rename a folder (retags its profiles).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "folder": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "folder",
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "rename_folder",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Resolve/start a profile, open an http(s) URL in the active tab, and automatically pause a visible run for manual Cloudflare verification before resuming. By default it restores a profile that was initially stopped; set keep_running=true when follow-up tab/screenshot/ARIA/network tools must use the same active tab, then call stop_profile. Never clicks, solves, or bypasses challenge controls.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "exact": {
+            "type": "boolean"
+          },
+          "headless": {
+            "type": "boolean"
+          },
+          "keep_running": {
+            "type": "boolean"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "profile_query": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "verification_timeout_ms": {
+            "maximum": 600000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      },
+      "name": "safe_open_url",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Launch a profile with CDP. Returns { pid, cdp:{ web_socket_debugger_url, http_url } }. Set headless to run without a window.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "headless": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "start_profile",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Read whether ShardX Launcher is configured and registered to start at desktop sign-in. Also reports that the API is embedded and MCP is client-spawned.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {},
+        "type": "object"
+      },
+      "name": "startup_status",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Stop a profile's browser (graceful).",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "stop_profile",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Read a privacy-minimal persisted checkpoint for a Cloudflare verification handoff. Does not inspect, start, or change the browser profile.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "exact": {
+            "type": "boolean"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "profile_query": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "verification_checkpoint",
+      "outputSchema": null,
+      "title": null
+    },
+    {
+      "annotations": null,
+      "description": "Wait for a person to complete a detected Cloudflare verification in an already-running visible profile. Never clicks, solves, or bypasses the challenge.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "exact": {
+            "type": "boolean"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "profile_query": {
+            "type": "string"
+          },
+          "timeout_ms": {
+            "maximum": 600000,
+            "minimum": 1000,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "wait_for_human_verification",
+      "outputSchema": null,
+      "title": null
+    }
+  ]
+}
