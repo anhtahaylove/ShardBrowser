@@ -55,6 +55,9 @@ fn column_exists(conn: &Connection, table: &str, col: &str) -> bool {
     let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(1)) else {
         return false;
     };
+    // The binding is load-bearing, not redundant: it ends the borrow of `stmt`
+    // before the function returns. Inlining it fails to compile (E0597).
+    #[allow(clippy::let_and_return)]
     let found = rows.flatten().any(|c| c == col);
     found
 }

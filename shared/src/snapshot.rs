@@ -256,8 +256,7 @@ const RATIO_FLOOR_BYTES: u64 = 64 * 1024 * 1024; // ratio ignored below this
 fn expand_cap(compressed_len: usize) -> u64 {
     (compressed_len as u64)
         .saturating_mul(MAX_EXPANSION_RATIO)
-        .max(RATIO_FLOOR_BYTES)
-        .min(MAX_TOTAL_EXPANDED)
+        .clamp(RATIO_FLOOR_BYTES, MAX_TOTAL_EXPANDED)
 }
 
 /// Reader that errors once more than `remaining` bytes have been pulled from the
@@ -715,7 +714,7 @@ mod tests {
         use std::io::Read;
         // The backstop that bounds decompression regardless of tar-format tricks:
         // it errors (not silently EOFs) once more than `remaining` bytes are read.
-        let data = vec![7u8; 100];
+        let data = [7u8; 100];
         let mut lr = LimitReader {
             inner: &data[..],
             remaining: 50,

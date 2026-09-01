@@ -75,6 +75,7 @@ pub fn read(db_path: &Path, crypt: &LocalCrypt) -> Result<Vec<PortableLogin>> {
 ///   * the DB is present whenever there are passwords to write,
 ///   * the carried rowids are duplicate-free, and
 ///   * they equal the set of the DB's non-empty `password_value` rows exactly,
+///
 /// and `bail!` on any violation. Returns the number of rows updated.
 pub fn reencrypt_in_place(
     db_path: &Path,
