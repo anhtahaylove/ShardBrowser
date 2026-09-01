@@ -1,0 +1,21 @@
+import { invoke } from "@tauri-apps/api/core";
+import type { ProfileMeta } from "./types";
+
+export const profileList = () => invoke<ProfileMeta[]>("profile_list");
+export const profileGet = (id: string) => invoke<any>("profile_get", { id });
+export const profileSave = (payload: any) => invoke<ProfileMeta>("profile_save", { payload });
+export const profileDelete = (id: string) => invoke("profile_delete", { id });
+export const profileClone = (id: string) => invoke<ProfileMeta>("profile_clone", { id });
+export const profileSetPin = (id: string, pinned: boolean) => invoke("profile_set_pin", { id, pinned });
+export const profileSetFolder = (id: string, folder: string) => invoke("profile_set_folder", { id, folder });
+export const profileBindProxy = (profileId: string, proxyId: string | null) => invoke("profile_bind_proxy", { profileId, proxyId });
+export const profileImport = (payloads: any[]) => invoke<number>("profile_import", { payloads });
+export const profileCreateFromTemplate = (templateId: string) => invoke<ProfileMeta>("profile_create_from_template", { templateId });
+export const processList = () => invoke<{ profile_id: string; pid: number; uptime_ms: number }[]>("process_list");
+export const processKill = (profileId: string) => invoke<boolean>("process_kill", { profileId });
+export const launch = (profileId: string) => invoke<number>("launch", { profileId });
+export const folderDelete = (folder: string, deleteProfiles: boolean) => invoke<number>("folder_delete", { folder, deleteProfiles });
+export const cookiesExportToFile = (profileId: string, path: string) => invoke<number>("cookies_export_to_file", { profileId, path });
+export const cookiesImport = (profileId: string, cookies: any[]) => invoke<number>("cookies_import", { profileId, cookies });
+export const enrichPicksForPreset = (presetId: string) => invoke<{ hardware_concurrency?: number; device_memory?: number; platform_version?: string }>("enrich_picks_for_preset", { presetId });
+export const hostPlatform = () => invoke<string>("host_platform");

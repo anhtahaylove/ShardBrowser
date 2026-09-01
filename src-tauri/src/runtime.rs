@@ -15,7 +15,7 @@ const MANIFEST_URL: &str =
     "https://raw.githubusercontent.com/ProxyShard/ShardBrowser/main/runtime.json";
 const LAUNCHER_RELEASE_REPO: &str = "ProxyShard/ShardBrowser";
 /// Chromium version baked into the current bundle (used for Mac Framework path).
-const CHROMIUM_VERSION: &str = "149.0.7827.103";
+const CHROMIUM_VERSION: &str = "152.0.7977.65";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ArchiveSpec {
@@ -237,6 +237,14 @@ struct RemoteManifest {
     /// manifest as data — migration writes it into every profile/fingerprint.
     grease_brand: Option<String>,
     grease_version: Option<String>,
+    /// TLS ClientHello shape for this engine build — currently
+    /// `signature_algorithms` / `cipher_suites`.  Travels as data for the same
+    /// reason GREASE does: it changes with the Chromium major (152 added the
+    /// ML-DSA post-quantum signature schemes 0x0904-0x0906) and cannot be
+    /// derived from the version number.  A profile still advertising the
+    /// previous release's list under the new user agent is a JA4 mismatch a
+    /// detector reads straight out of `ja4_r`.
+    tls: Option<serde_json::Value>,
 }
 
 /// Fetch the version manifest (GitHub raw) — one request yielding every
@@ -264,6 +272,7 @@ async fn fetch_manifest() -> RemoteManifest {
             chromium_version: str_field("chromium_version"),
             grease_brand: str_field("grease_brand"),
             grease_version: str_field("grease_version"),
+            tls: v.get("tls").filter(|t| t.is_object()).cloned(),
         })
     }
     inner().await.unwrap_or_default()
@@ -281,6 +290,7 @@ fn migrate_dir_to(
     chromium_version: &str,
     grease_brand: Option<&str>,
     grease_version: Option<&str>,
+    tls: Option<&serde_json::Value>,
 ) -> Result<usize> {
     let parts: Vec<&str> = chromium_version.split('.').collect();
     if parts.len() != 4 {
@@ -342,6 +352,22 @@ fn migrate_dir_to(
             }
         }
 
+        // TLS: overwrite only the keys the manifest actually carries, so a
+        // profile's own `shuffle_extensions` (or any field we don't ship) is
+        // preserved.  A profile with no `tls` block at all is left alone —
+        // absent means "use the engine default", not "stale".
+        if let (Some(want_tls), Some(cfg_tls)) = (
+            tls.and_then(|t| t.as_object()),
+            cfg.get_mut("tls").and_then(|v| v.as_object_mut()),
+        ) {
+            for (k, want) in want_tls {
+                if cfg_tls.get(k) != Some(want) {
+                    cfg_tls.insert(k.clone(), want.clone());
+                    changed = true;
+                }
+            }
+        }
+
         if changed {
             fs::write(&p, serde_json::to_string_pretty(&cfg)?)?;
             n += 1;
@@ -358,13 +384,14 @@ fn migrate_all_to(
     chromium_version: &str,
     grease_brand: Option<&str>,
     grease_version: Option<&str>,
+    tls: Option<&serde_json::Value>,
 ) -> usize {
     let mut n = 0;
     if let Ok(d) = crate::store::profiles_dir() {
-        n += migrate_dir_to(&d, chromium_version, grease_brand, grease_version).unwrap_or(0);
+        n += migrate_dir_to(&d, chromium_version, grease_brand, grease_version, tls).unwrap_or(0);
     }
     if let Ok(d) = crate::store::fingerprints_dir() {
-        n += migrate_dir_to(&d, chromium_version, grease_brand, grease_version).unwrap_or(0);
+        n += migrate_dir_to(&d, chromium_version, grease_brand, grease_version, tls).unwrap_or(0);
     }
     n
 }
@@ -379,16 +406,25 @@ fn migrate_all_to(
 pub async fn ensure_profiles_migrated() {
     let m = fetch_manifest().await;
     let Some(target) = m.chromium_version.clone() else { return };
+    // TLS is part of the signature: without it a manifest that changes only
+    // the ClientHello shape would be a no-op for anyone already on this
+    // version, and their profiles would keep the previous release's JA4.
     let sig = format!(
-        "{target}|{}|{}",
+        "{target}|{}|{}|{}",
         m.grease_brand.as_deref().unwrap_or(""),
         m.grease_version.as_deref().unwrap_or(""),
+        m.tls.as_ref().map(|t| t.to_string()).unwrap_or_default(),
     );
     let mut local = load_manifest();
     if local.applied_signature.as_deref() == Some(sig.as_str()) {
         return;
     }
-    let n = migrate_all_to(&target, m.grease_brand.as_deref(), m.grease_version.as_deref());
+    let n = migrate_all_to(
+        &target,
+        m.grease_brand.as_deref(),
+        m.grease_version.as_deref(),
+        m.tls.as_ref(),
+    );
     if n > 0 {
         eprintln!("[runtime] migrated {n} profile/fingerprint file(s) to {sig}");
     }
@@ -507,15 +543,17 @@ pub async fn runtime_install(window: Window, force: bool) -> Result<RuntimeStatu
         .clone()
         .unwrap_or_else(|| CHROMIUM_VERSION.to_string());
     let sig = format!(
-        "{target_ver}|{}|{}",
+        "{target_ver}|{}|{}|{}",
         manifest.grease_brand.as_deref().unwrap_or(""),
         manifest.grease_version.as_deref().unwrap_or(""),
+        manifest.tls.as_ref().map(|t| t.to_string()).unwrap_or_default(),
     );
     if local.applied_signature.as_deref() != Some(sig.as_str()) {
         let n = migrate_all_to(
             &target_ver,
             manifest.grease_brand.as_deref(),
             manifest.grease_version.as_deref(),
+            manifest.tls.as_ref(),
         );
         if n > 0 {
             eprintln!("[runtime] migrated {n} profile/fingerprint file(s) to {sig}");

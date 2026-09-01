@@ -1,0 +1,41 @@
+import { useState } from "react";
+import { DialogModal } from "@proxyshard/shardx-ui-kit";
+import { NumField } from "../../../shared/ui/NumField";
+import { Field } from "../../../shared/ui/Field";
+import { toast } from "../../../shared/model/toast";
+import type { PsOrder } from "../../../entities/proxyshard";
+import { psAddBandwidth } from "../../../entities/proxyshard";
+
+export function PsTopupModal({ order, onClose, onDone }: { order: PsOrder; onClose: () => void; onDone: () => void }) {
+  const [amount, setAmount] = useState(5);
+  const [promo, setPromo] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    if (amount < 1) { toast.err("Amount must be at least 1 GB"); return; }
+    setBusy(true);
+    try {
+      await psAddBandwidth(order.order_id, amount, promo.trim() || null);
+      toast.ok(`Added ${amount} GB to order #${order.order_id}`);
+      onDone();
+    } catch (e) { toast.err(String(e)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <DialogModal
+      open
+      onClose={onClose}
+      title="Add traffic"
+      subtitle={`${order.product_name} · order #${order.order_id}`}
+      confirmLabel={busy ? "Buying…" : `Buy ${amount} GB`}
+      onConfirm={submit}
+      isLoading={busy}
+      cancelLabel="Cancel"
+      onCancel={onClose}
+    >
+      <div className="flex flex-col gap-3 py-4">
+        <NumField label="Amount (GB)" value={amount} onChange={(v) => setAmount(Math.max(1, Math.round(v)))} />
+        <Field label="Promo code (optional)" value={promo} onChange={setPromo} />
+      </div>
+    </DialogModal>
+  );
+}

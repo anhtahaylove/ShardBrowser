@@ -1,56 +1,7 @@
-# ===== Logs =====
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-
-# ===== Node / Vite =====
 node_modules
-dist
-dist-ssr
-*.local
-*.tsbuildinfo
-.cache/
-.parcel-cache/
-coverage/
 
-# ===== Python build / cache =====
-__pycache__/
-*.py[cod]
-*.egg-info/
-sdks/python/build/
-.pytest_cache/
-.mypy_cache/
-
-# ===== Rust / Tauri build artifacts =====
-src-tauri/target/
-src-tauri/Cargo.lock.bak
-src-tauri/.cargo-lock
-src-tauri/gen/
-# Per-platform release bundles — built by the release workflow,
-# uploaded to GitHub Releases, never committed.
-src-tauri/target/release/bundle/
-
-# ===== Editor / OS junk =====
-.vscode/*
-!.vscode/extensions.json
-!.vscode/settings.json
-.idea/
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-.DS_Store
-Thumbs.db
-
-# ===== Local secrets / env =====
-.env
-.env.*
-!.env.example
-
-# ===== MCP server local install (downloaded by the user post-install) =====
-mcp/node_modules/
+# build output — regenerated, keeps diffs readable
+dist/
+ui-kit/dist/
+ui-kit/node_modules/
+/src-tauri/target

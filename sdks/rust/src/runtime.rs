@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 
 pub const PUB_BASE: &str = "https://pub-e57a7c60f6934eb09a6600bf2fc59cdc.r2.dev";
-pub const CHROMIUM_VERSION: &str = "149.0.7827.103";
+pub const CHROMIUM_VERSION: &str = "152.0.7977.65";
 /// Version manifest (GitHub raw) — one tiny GET yields every archive's current
 /// etag, so we never poll R2/S3 (no per-archive HEAD).
 pub const MANIFEST_URL: &str =
