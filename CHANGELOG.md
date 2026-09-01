@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.2.0 - 2026-09-02
+
+### Encrypted profile backup (new)
+
+- Add a v2 encrypted backup container: streaming ChaCha20-Poly1305 frames over a
+  wrapped per-snapshot DEK, with an Ed25519-signed head record.
+- Add `shared/src/canonical.rs`: deterministic canonical CBOR encoding with
+  strict rejection of non-canonical input, so signed bytes cannot be re-encoded
+  into a different-but-accepted form.
+- Add `shared/src/keys.rs`: key identities (`root_key_id`, `signing_key_id`) and
+  DEK wrap/unwrap bound to a canonical slot context as AEAD associated data.
+- Add `shared/src/signing.rs`: domain-separated signing over a length-prefixed
+  transcript, with an acyclic commitment structure (the signature is not part of
+  its own signed payload).
+- Add `shared/src/envelope.rs`: DEK slots, pre-encryption intent records, STREAM
+  frame nonces/AAD, and the restore-epoch Merkle tree with inclusion proofs.
+- Add `shared/src/backup.rs`: the `seal`/`open` container API joining the above.
+
+### Format guarantees
+
+- Frames bind the exact envelope intent, frame counter, and final-frame flag, so
+  truncation, reordering, and cross-envelope splicing all fail closed.
+- The prologue is bound to the signed head, so slot/intent substitution before
+  the signature check is rejected.
+- Every single-byte mutation of a container is detected (exhaustive test).
+- Merkle leaves enforce ordering, reject duplicates, and use domain-separated
+  leaf/node hashing; unary promotion is only legal at an odd tail.
+
+### Compatibility
+
+- The v1 portable snapshot format is unchanged: `snapshot::pack`/`unpack` keep
+  their existing behaviour and byte format.
+- The v2 container wraps a v1 snapshot losslessly — sealing then opening returns
+  the exact v1 bytes, which still restore through the v1 reader.
+- The v1 reader rejects a v2 container rather than misparsing it.
+- The MCP tool contract is unchanged at 96 tools.
+
+### Notes
+
+- `open` streams plaintext as it is decrypted, so its output must be treated as
+  untrusted until the call returns `Ok`; this is a deliberate trade-off to keep
+  memory bounded on large profiles. Callers restoring to disk should write to a
+  staging path and promote only on success.
 ## 0.1.29 - 2026-08-28
 
 ### Process ownership
