@@ -62,11 +62,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Node 20
+      - name: Set up Node 22
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 22, not 20: @tailwindcss/oxide (pulled in by the vendored ui-kit)
+          # declares engines node >= 20, so 20 sits exactly on the boundary.
+          # Below it npm SILENTLY skips the platform-specific native binary and
+          # the ui-kit build dies with "Cannot find module
+          # tailwindcss-oxide.<platform>.node" — an error that reads like a
+          # broken dependency rather than a wrong Node.
+          node-version: 22
           cache: npm
+          # The ui-kit is a file: dependency built by the root `prebuild` hook,
+          # and its install pulls ~300 more packages. Without its lockfile in
+          # the cache key, changing it would not invalidate the npm cache.
+          cache-dependency-path: |
+            package-lock.json
+            ui-kit/package-lock.json
 
       - name: Set up Rust (stable, ${{ matrix.target }})
         uses: dtolnay/rust-toolchain@stable

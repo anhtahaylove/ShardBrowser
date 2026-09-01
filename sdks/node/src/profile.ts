@@ -131,12 +131,22 @@ export class FingerprintLibrary {
  * be derived — it comes from the manifest). Leaves platform_version,
  * architecture, etc. intact. Mutates `config` in place. SDK equivalent of the
  * launcher's post-update profile migration.
+ *
+ * `tls` carries the manifest's TLS block. Only the keys it actually contains
+ * are overwritten, so a profile's own `shuffle_extensions` (or any field the
+ * manifest does not ship) survives, and a profile with no `tls` block is left
+ * alone — absent means "use the engine default", not "stale". Without this the
+ * profile keeps the previous release's signature_algorithms while the engine
+ * advertises the new ones, and the JA4 hash no longer matches the Chrome
+ * version the profile claims: 152 added the ML-DSA schemes 0x0904-0x0906, so a
+ * 149-era profile is eleven entries short and reads as a mismatch.
  */
 export function applyEngineVersion(
   config: Record<string, unknown>,
   chromiumVersion: string,
   greaseBrand?: string,
   greaseVersion?: string,
+  tls?: Record<string, unknown>,
 ): void {
   const parts = chromiumVersion.split(".");
   if (parts.length !== 4) return;
@@ -167,6 +177,11 @@ export function applyEngineVersion(
       ch["grease_version"] = greaseVersion;
       ch["grease_full_version"] = `${greaseVersion}.0.0.0`;
     }
+  }
+
+  const cfgTls = config["tls"] as Record<string, unknown> | undefined;
+  if (tls && cfgTls && typeof cfgTls === "object") {
+    for (const [k, v] of Object.entries(tls)) cfgTls[k] = v;
   }
 }
 

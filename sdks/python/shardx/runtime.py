@@ -94,6 +94,7 @@ def apply_engine_version(
     chromium_version: str,
     grease_brand: Optional[str] = None,
     grease_version: Optional[str] = None,
+    tls: Optional[dict] = None,
 ) -> None:
     """Normalise a profile config's spoofed Chrome version to `chromium_version`
     (e.g. "152.0.7977.65") so it always matches the running engine — bumps
@@ -103,7 +104,16 @@ def apply_engine_version(
     grease_version / grease_full_version (GREASE rotates per release, so it
     can't be derived — it comes from the manifest). Leaves platform_version,
     architecture, etc. intact. Mutates `config` in place. SDK equivalent of the
-    launcher's post-update profile migration."""
+    launcher's post-update profile migration.
+
+    `tls` carries the manifest's TLS block. Only the keys it actually contains
+    are overwritten, so a profile's own `shuffle_extensions` (or any field the
+    manifest does not ship) survives, and a profile with no `tls` block is left
+    alone — absent means "use the engine default", not "stale". Without this the
+    profile keeps the previous release's signature_algorithms while the engine
+    advertises the new ones, and the JA4 hash no longer matches the Chrome
+    version the profile claims: 152 added the ML-DSA schemes 0x0904-0x0906, so
+    a 149-era profile is eleven entries short and reads as a mismatch."""
     parts = chromium_version.split(".")
     if len(parts) != 4:
         return
@@ -138,6 +148,10 @@ def apply_engine_version(
             ch["grease_version"] = grease_version
             ch["grease_full_version"] = f"{grease_version}.0.0.0"
 
+    cfg_tls = config.get("tls")
+    if isinstance(tls, dict) and isinstance(cfg_tls, dict):
+        cfg_tls.update(tls)
+
 
 class Runtime:
     """Owns the cache dir and the install/update lifecycle."""
@@ -164,6 +178,10 @@ class Runtime:
         # derived from the version number). Applied to profiles on launch.
         self._grease_brand: Optional[str] = None
         self._grease_version: Optional[str] = None
+        # TLS block from the manifest (signature_algorithms / cipher_suites).
+        # Applied to profiles on launch so the JA4 hash keeps matching the
+        # Chrome version the profile claims.
+        self._tls: Optional[dict] = None
         # Set to True after a successful in-process install() so subsequent
         # launches in the same process skip the R2 HEAD round-trip (~1 s
         # over a clean connection).  Cleared by `install(force=True)`.
@@ -209,6 +227,11 @@ class Runtime:
     def grease_version(self) -> Optional[str]:
         """GREASE version from the manifest (e.g. "24"); set on install()."""
         return self._grease_version
+
+    @property
+    def tls(self) -> Optional[dict]:
+        """TLS overrides from the manifest; set on install()."""
+        return self._tls
 
     def _installed_engine_version(self) -> Optional[str]:
         """Chromium version of the engine actually on disk — read from the
@@ -266,6 +289,8 @@ class Runtime:
         self._chromium_version = manifest.get("chromium_version") or CHROMIUM_VERSION
         self._grease_brand = manifest.get("grease_brand") or None
         self._grease_version = manifest.get("grease_version") or None
+        remote_tls = manifest.get("tls")
+        self._tls = remote_tls if isinstance(remote_tls, dict) else None
         # Browser. Re-download when the engine's on-disk version differs from
         # the manifest's chromium version — VERSION-based, not etag, so it fires
         # for users who updated the SDK but whose stored etag already matched.

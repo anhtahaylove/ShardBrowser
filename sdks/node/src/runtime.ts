@@ -100,6 +100,11 @@ export class Runtime {
    *  derived from the version number). Applied to profiles on launch. */
   private _greaseBrand?: string;
   private _greaseVersion?: string;
+  /** TLS block from the manifest (signature_algorithms / cipher_suites).
+   *  Applied to profiles on launch so the JA4 hash keeps matching the Chrome
+   *  version the profile claims — 152 added the ML-DSA signature schemes, and
+   *  a profile still carrying the previous list is a mismatch. */
+  private _tls?: Record<string, unknown>;
 
   constructor(opts: { cacheDir?: string; progress?: ProgressCb; profilesDir?: string } = {}) {
     this.root = opts.cacheDir ?? defaultCacheDir();
@@ -131,6 +136,8 @@ export class Runtime {
   get greaseBrand(): string | undefined { return this._greaseBrand; }
   /** GREASE version from the manifest (e.g. "24"); set on install(). */
   get greaseVersion(): string | undefined { return this._greaseVersion; }
+  /** TLS overrides from the manifest; set on install(). */
+  get tls(): Record<string, unknown> | undefined { return this._tls; }
 
   /** Chromium version of the engine actually on disk (mac Framework
    *  `Versions/<ver>/`, win `<ver>.manifest`), or undefined on Linux. */
@@ -184,6 +191,7 @@ export class Runtime {
     this._chromiumVersion = remote.chromiumVersion ?? CHROMIUM_VERSION;
     this._greaseBrand = remote.greaseBrand;
     this._greaseVersion = remote.greaseVersion;
+    this._tls = remote.tls;
 
     // Re-download the engine when its on-disk version differs from the
     // manifest's chromium version — VERSION-based, not etag, so it fires for
@@ -230,17 +238,20 @@ export class Runtime {
   /** Fetch the version manifest (GitHub raw) — one request that yields every
    *  archive's current etag + the chromium version, replacing per-archive HEADs
    *  against R2/S3. Empty archives / undefined version when unreachable. */
-  private async fetchManifest(): Promise<{ archives: Record<string, string>; chromiumVersion?: string; greaseBrand?: string; greaseVersion?: string }> {
+  private async fetchManifest(): Promise<{ archives: Record<string, string>; chromiumVersion?: string; greaseBrand?: string; greaseVersion?: string; tls?: Record<string, unknown> }> {
     try {
       const r = await fetch(MANIFEST_URL);
       if (!r.ok) return { archives: {} };
-      const data = await r.json() as { archives?: Record<string, string>; chromium_version?: string; grease_brand?: string; grease_version?: string };
+      const data = await r.json() as { archives?: Record<string, string>; chromium_version?: string; grease_brand?: string; grease_version?: string; tls?: Record<string, unknown> };
       const str = (v: unknown) => (typeof v === "string" ? v : undefined);
       return {
         archives: (data && typeof data.archives === "object" && data.archives) || {},
         chromiumVersion: str(data?.chromium_version),
         greaseBrand: str(data?.grease_brand),
         greaseVersion: str(data?.grease_version),
+        tls: (data?.tls && typeof data.tls === "object" && !Array.isArray(data.tls))
+          ? data.tls as Record<string, unknown>
+          : undefined,
       };
     } catch { return { archives: {} }; }
   }

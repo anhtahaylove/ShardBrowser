@@ -143,6 +143,10 @@ pub struct Runtime {
     /// GREASE brand/version from the manifest (rotates per release; can't be
     /// derived from the version). `(brand, version)`, set on install().
     grease: std::sync::Mutex<(Option<String>, Option<String>)>,
+    /// TLS block from the manifest (signature_algorithms / cipher_suites),
+    /// applied to profiles on launch so the JA4 hash keeps matching the Chrome
+    /// version the profile claims. Set on install().
+    tls: std::sync::Mutex<Option<serde_json::Value>>,
 }
 
 impl Runtime {
@@ -161,12 +165,18 @@ impl Runtime {
             checked: AtomicBool::new(false),
             engine_version: std::sync::Mutex::new(CHROMIUM_VERSION.to_string()),
             grease: std::sync::Mutex::new((None, None)),
+            tls: std::sync::Mutex::new(None),
         })
     }
 
     /// GREASE `(brand, version)` from the manifest (set on install()).
     pub fn grease(&self) -> (Option<String>, Option<String>) {
         self.grease.lock().unwrap().clone()
+    }
+
+    /// TLS overrides from the manifest (set on install()).
+    pub fn tls(&self) -> Option<serde_json::Value> {
+        self.tls.lock().unwrap().clone()
     }
 
     /// Engine chromium version (manifest-driven; set on install()).
@@ -290,6 +300,7 @@ impl Runtime {
             .unwrap_or_else(|| CHROMIUM_VERSION.to_string());
         *self.grease.lock().unwrap() =
             (remote.grease_brand.clone(), remote.grease_version.clone());
+        *self.tls.lock().unwrap() = remote.tls.clone();
 
         // Re-download when the engine's on-disk version differs from the
         // manifest's chromium version — VERSION-based, not etag, so it fires for
@@ -452,6 +463,8 @@ struct RemoteManifest {
     /// data since it can't be derived from the version number).
     grease_brand: Option<String>,
     grease_version: Option<String>,
+    /// TLS overrides; only the keys present here are applied to a profile.
+    tls: Option<serde_json::Value>,
 }
 
 /// Fetch the version manifest (GitHub raw) — one request that yields every
@@ -479,6 +492,7 @@ async fn fetch_manifest() -> RemoteManifest {
             chromium_version: str_field("chromium_version"),
             grease_brand: str_field("grease_brand"),
             grease_version: str_field("grease_version"),
+            tls: v.get("tls").filter(|t| t.is_object()).cloned(),
         })
     }
     inner().await.unwrap_or_default()

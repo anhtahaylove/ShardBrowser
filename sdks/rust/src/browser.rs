@@ -187,6 +187,7 @@ impl Browser {
             &self.runtime.chromium_version(),
             grease_brand.as_deref(),
             grease_version.as_deref(),
+            self.runtime.tls().as_ref(),
         );
         apply_noise_seeds(&mut profile.config, &profile.id);
         let fp_file = udd.join("fingerprint.json");

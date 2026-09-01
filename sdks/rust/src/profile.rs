@@ -203,11 +203,21 @@ impl FingerprintLibrary {
 /// be derived — it comes from the manifest). Leaves platform_version,
 /// architecture, etc. intact. SDK equivalent of the launcher's post-update
 /// profile migration.
+///
+/// `tls` carries the manifest's TLS block. Only the keys it actually contains
+/// are overwritten, so a profile's own `shuffle_extensions` (or any field the
+/// manifest does not ship) survives, and a profile with no `tls` block is left
+/// alone — absent means "use the engine default", not "stale". Without this the
+/// profile keeps the previous release's signature_algorithms while the engine
+/// advertises the new ones, and the JA4 hash no longer matches the Chrome
+/// version the profile claims: 152 added the ML-DSA schemes 0x0904-0x0906, so a
+/// 149-era profile is eleven entries short and reads as a mismatch.
 pub fn apply_engine_version(
     config: &mut Value,
     chromium_version: &str,
     grease_brand: Option<&str>,
     grease_version: Option<&str>,
+    tls: Option<&Value>,
 ) {
     let parts: Vec<&str> = chromium_version.split('.').collect();
     if parts.len() != 4 {
@@ -246,6 +256,15 @@ pub fn apply_engine_version(
         if let Some(gv) = grease_version {
             ch.insert("grease_version".into(), serde_json::json!(gv));
             ch.insert("grease_full_version".into(), serde_json::json!(format!("{gv}.0.0.0")));
+        }
+    }
+
+    if let (Some(want), Some(cfg_tls)) = (
+        tls.and_then(|t| t.as_object()),
+        config.get_mut("tls").and_then(|v| v.as_object_mut()),
+    ) {
+        for (k, v) in want {
+            cfg_tls.insert(k.clone(), v.clone());
         }
     }
 }

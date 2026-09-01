@@ -138,7 +138,8 @@ export class Browser {
     console.log(`[shardx] profile '${profile.id}' → ${udd}`);
     // Keep the spoofed Chrome version coherent with the installed engine,
     // regardless of where the profile config came from (library / file / dict).
-    applyEngineVersion(profile.config, this.runtime.chromiumVersion, this.runtime.greaseBrand, this.runtime.greaseVersion);
+    applyEngineVersion(profile.config, this.runtime.chromiumVersion, this.runtime.greaseBrand,
+                       this.runtime.greaseVersion, this.runtime.tls);
     applyNoiseSeeds(profile.config, profile.id);
     const fpFile = join(udd, "fingerprint.json");
     writeFileSync(fpFile, JSON.stringify(profile.config));
