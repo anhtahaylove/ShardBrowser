@@ -267,12 +267,12 @@ class Runtime:
 
     def _load_manifest(self) -> dict:
         try:
-            return json.loads(self.manifest_path.read_text())
+            return json.loads(self.manifest_path.read_text(encoding="utf-8"))
         except Exception:
             return {}
 
     def _save_manifest(self, m: dict) -> None:
-        self.manifest_path.write_text(json.dumps(m, indent=2))
+        self.manifest_path.write_text(json.dumps(m, indent=2), encoding="utf-8")
 
     # ---- install ----
 
