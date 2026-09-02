@@ -29,6 +29,11 @@ pub fn router(state: AppState) -> Router {
         .route("/audit", get(crate::audit::list))
         // v2 team/fleet control plane
         .route("/v2/server-identity", get(v2::server_identity))
+        .route(
+            "/v2/devices/enrollment-challenges",
+            post(v2::create_enrollment_challenge),
+        )
+        .route("/v2/devices/enrollment-proofs", post(v2::enroll_device))
         .route("/v2/device-approvals", post(v2::present_device_approval))
         .route("/v2/capability-grants", post(v2::present_capability_grant))
         .route(

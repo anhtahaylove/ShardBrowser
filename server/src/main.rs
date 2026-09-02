@@ -4,6 +4,7 @@ mod authz;
 mod blob;
 mod config;
 mod db;
+mod enrollment;
 mod error;
 mod extract;
 mod fleet;

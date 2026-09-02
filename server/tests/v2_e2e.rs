@@ -884,3 +884,164 @@ async fn a_member_outside_the_tenant_cannot_lease_its_profiles() {
         "a caller with no account in the tenant leased one of its profiles"
     );
 }
+
+/// Enrollment registers a device key only when the caller proves it holds the
+/// matching private key.
+///
+/// A registration endpoint that skipped the proof would let anyone bind a
+/// public key they do not control, and every later manifest signed by the
+/// real holder would be attributed to whoever registered it first.
+#[tokio::test]
+async fn device_enrollment_requires_proof_of_possession() {
+    let port = 38118u16;
+    let data = std::env::temp_dir().join(format!("shardx-e2e-enroll-{}", std::process::id()));
+    let _guard = spawn_server(&data, port);
+    let cl = client();
+    wait_health(&cl, port).await;
+
+    let admin = token(&cl, port, "admin", "secret").await;
+    let user_id = admin_user_id(&cl, port, &admin).await;
+    let sk_a = Ed25519SigningKey::from_bytes(&[11u8; 32]);
+    let sk_b = Ed25519SigningKey::from_bytes(&[22u8; 32]);
+    seed(&data, &user_id, &sk_a, &sk_b).await;
+
+    let tenant_hex = hex(&TENANT_A);
+
+    // The device key pair being enrolled. The challenge commits to it, so the
+    // keys are named before the nonce is issued.
+    let device_sk = Ed25519SigningKey::from_bytes(&[0x44u8; 32]);
+    let device_vk = device_sk.verifying_key().to_bytes();
+    let hpke_pk = [0x55u8; 32];
+
+    // Round trip one: ask for a challenge.
+    let ch: Value = cl
+        .post(format!("{}/v2/devices/enrollment-challenges", base(port)))
+        .bearer_auth(&admin)
+        .json(&json!({
+            "tenant_id": tenant_hex,
+            "signing_public_key": hex(&device_vk),
+            "hpke_public_key": hex(&hpke_pk),
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let challenge_id = ch["challenge_id"].as_str().unwrap().to_string();
+    let nonce = decode_hex_str(ch["nonce"].as_str().unwrap());
+    let account_id = decode_hex_str(ch["account_id"].as_str().unwrap());
+
+    let proof_bytes = enrollment_proof_bytes(
+        &decode_hex_str(&challenge_id),
+        &nonce,
+        &TENANT_A,
+        &account_id,
+        &device_vk,
+        &hpke_pk,
+    );
+
+    // A signature from the wrong key must not enroll the device.
+    let wrong = shared::signing::sign_tbs(&sk_b, &proof_bytes);
+    let refused = cl
+        .post(format!("{}/v2/devices/enrollment-proofs", base(port)))
+        .bearer_auth(&admin)
+        .json(&json!({
+            "tenant_id": tenant_hex,
+            "challenge_id": challenge_id,
+            "nonce": hex(&nonce),
+            "signing_public_key": hex(&device_vk),
+            "hpke_public_key": hex(&hpke_pk),
+            "proof_signature": hex(&wrong),
+            "label_ciphertext": hex(b"opaque"),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        refused.status().as_u16(),
+        400,
+        "a proof signed by another key must not enroll the device"
+    );
+
+    // The real holder succeeds.
+    let sig = shared::signing::sign_tbs(&device_sk, &proof_bytes);
+    let ok = cl
+        .post(format!("{}/v2/devices/enrollment-proofs", base(port)))
+        .bearer_auth(&admin)
+        .json(&json!({
+            "tenant_id": tenant_hex,
+            "challenge_id": challenge_id,
+            "nonce": hex(&nonce),
+            "signing_public_key": hex(&device_vk),
+            "hpke_public_key": hex(&hpke_pk),
+            "proof_signature": hex(&sig),
+            "label_ciphertext": hex(b"opaque"),
+        }))
+        .send()
+        .await
+        .unwrap();
+    let ok_status = ok.status().as_u16();
+    let ok_body = ok.text().await.unwrap();
+    assert_eq!(ok_status, 201, "valid proof should enroll, got: {ok_body}");
+    let enrolled: Value = serde_json::from_str(&ok_body).unwrap();
+    let device_id = enrolled["device_id"].as_str().unwrap().to_string();
+    assert_eq!(device_id.len(), 32, "device id should be a 16-byte hex id");
+
+    // The challenge is single-use: replaying the same valid proof must fail,
+    // or an intercepted proof could enroll a second device.
+    let replay = cl
+        .post(format!("{}/v2/devices/enrollment-proofs", base(port)))
+        .bearer_auth(&admin)
+        .json(&json!({
+            "tenant_id": tenant_hex,
+            "challenge_id": challenge_id,
+            "nonce": hex(&nonce),
+            "signing_public_key": hex(&device_vk),
+            "hpke_public_key": hex(&hpke_pk),
+            "proof_signature": hex(&sig),
+            "label_ciphertext": hex(b"opaque"),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        replay.status().as_u16(),
+        400,
+        "a consumed challenge must not enroll a second device"
+    );
+}
+
+fn decode_hex_str(s: &str) -> Vec<u8> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+/// Mirror of the server's canonical proof bytes. Written independently here on
+/// purpose: if the server changes its preimage, this test fails rather than
+/// following it silently.
+fn enrollment_proof_bytes(
+    challenge_id: &[u8],
+    nonce: &[u8],
+    tenant_id: &[u8; 16],
+    account_id: &[u8],
+    signing_public_key: &[u8; 32],
+    hpke_public_key: &[u8; 32],
+) -> Vec<u8> {
+    c::encode(&c::Value::Map(vec![
+        (
+            "container_domain".into(),
+            c::t("shardx.authorization.device-enrollment-proof.v2"),
+        ),
+        ("container_version".into(), c::u(1)),
+        ("challenge_id".into(), c::b(challenge_id)),
+        ("nonce".into(), c::b(nonce)),
+        ("tenant_id".into(), c::b(tenant_id)),
+        ("account_id".into(), c::b(account_id)),
+        ("signing_public_key".into(), c::b(signing_public_key)),
+        ("hpke_public_key".into(), c::b(hpke_public_key)),
+    ]))
+}

@@ -5761,6 +5761,14 @@ function PsBuyCard({ onPurchased }: { onPurchased: () => void }) {
   );
 }
 
+type TeamStatus = {
+  server_url: string;
+  tenant_id: string;
+  device_id: string;
+  has_token: boolean;
+  is_enrolled: boolean;
+};
+
 function SettingsView() {
   const [s, setS] = useState<Settings>({
     browser_path: null,
@@ -5797,7 +5805,68 @@ function SettingsView() {
       toast.err(message);
     }
   };
-  useEffect(() => { void loadSettings(); void refreshApi(); void refreshStartup(); }, []);
+  // Team server (v2 fleet)
+  const [team, setTeam] = useState<TeamStatus | null>(null);
+  const [teamUrl, setTeamUrl] = useState("");
+  const [teamToken, setTeamToken] = useState("");
+  const [teamTenant, setTeamTenant] = useState("");
+  const [teamLabel, setTeamLabel] = useState("");
+  const [teamBusy, setTeamBusy] = useState(false);
+  const [teamServerId, setTeamServerId] = useState<string | null>(null);
+  const refreshTeam = () => invoke<TeamStatus>("team_status")
+    .then((t) => {
+      setTeam(t);
+      setTeamUrl(t.server_url);
+      setTeamTenant(t.tenant_id);
+    })
+    .catch(() => {});
+  const saveTeamConnection = async () => {
+    setTeamBusy(true);
+    setTeamServerId(null);
+    try {
+      const next = await invoke<TeamStatus>("team_set_connection", {
+        serverUrl: teamUrl,
+        token: teamToken,
+        tenantId: teamTenant,
+      });
+      setTeam(next);
+      // The token is write-only from here: it is saved, and the field clears
+      // so a shoulder-surfer or a screenshot cannot read it back.
+      setTeamToken("");
+      toast.ok("Team connection saved");
+    } catch (e) {
+      toast.err(safeUiError(e));
+    } finally {
+      setTeamBusy(false);
+    }
+  };
+  const testTeamConnection = async () => {
+    setTeamBusy(true);
+    try {
+      const id = await invoke<string>("team_test_connection");
+      setTeamServerId(id);
+      toast.ok("Server reachable");
+    } catch (e) {
+      setTeamServerId(null);
+      toast.err(safeUiError(e));
+    } finally {
+      setTeamBusy(false);
+    }
+  };
+  const enrollDevice = async () => {
+    setTeamBusy(true);
+    try {
+      const next = await invoke<TeamStatus>("team_enroll_device", { label: teamLabel });
+      setTeam(next);
+      setTeamLabel("");
+      toast.ok("Device enrolled");
+    } catch (e) {
+      toast.err(safeUiError(e));
+    } finally {
+      setTeamBusy(false);
+    }
+  };
+  useEffect(() => { void loadSettings(); void refreshApi(); void refreshStartup(); void refreshTeam(); }, []);
   const regenToken = async () => {
     const ok = await confirmModal({
       title: "Regenerate Automation API token",
@@ -6091,6 +6160,90 @@ function SettingsView() {
           <div className="settings-note settings-note-warn">
             The saved setting and operating-system startup state differ. Toggle the option and save to reconcile them.
           </div>
+        )}
+      </div>
+
+      <div className="card" style={{ marginBottom: 14 }}>
+        <h3>Team server</h3>
+        <p className="muted small">
+          Connect this device to a ShardX team server to share profiles across a
+          fleet. The token is stored locally and never shown again after saving.
+        </p>
+        <label>
+          <span className="lbl">Server URL</span>
+          <input
+            type="text"
+            placeholder="https://team.example.com"
+            value={teamUrl}
+            onChange={(e) => setTeamUrl(e.target.value)}
+          />
+        </label>
+        <label>
+          <span className="lbl">Tenant ID</span>
+          <input
+            type="text"
+            placeholder="32 hex characters"
+            value={teamTenant}
+            onChange={(e) => setTeamTenant(e.target.value)}
+          />
+        </label>
+        <label>
+          <span className="lbl">Token</span>
+          <input
+            type="password"
+            autoComplete="off"
+            placeholder={team?.has_token ? "•••••••• (saved)" : "paste session token"}
+            value={teamToken}
+            onChange={(e) => setTeamToken(e.target.value)}
+          />
+        </label>
+        <div className="row-inline" style={{ gap: 8 }}>
+          <button className="btn" disabled={teamBusy} onClick={() => void saveTeamConnection()}>
+            Save connection
+          </button>
+          <button
+            className="btn"
+            disabled={teamBusy || !team?.has_token}
+            onClick={() => void testTeamConnection()}
+          >
+            Test connection
+          </button>
+        </div>
+        {teamServerId && (
+          <div className="settings-note">
+            Reached server instance <code>{teamServerId}</code>.
+          </div>
+        )}
+
+        <div className="ie-section-title" style={{ marginTop: 10 }}>Device enrollment</div>
+        {team?.is_enrolled ? (
+          <div className="settings-note">
+            This device is enrolled as <code>{team.device_id}</code>. Changing the
+            server URL or tenant clears the enrollment.
+          </div>
+        ) : (
+          <>
+            <p className="muted small">
+              Enrolling generates a signing key on this device and registers its
+              public half. The private key never leaves this machine.
+            </p>
+            <label>
+              <span className="lbl">Device label</span>
+              <input
+                type="text"
+                placeholder="e.g. workstation-01"
+                value={teamLabel}
+                onChange={(e) => setTeamLabel(e.target.value)}
+              />
+            </label>
+            <button
+              className="btn"
+              disabled={teamBusy || !team?.has_token || !teamTenant.trim()}
+              onClick={() => void enrollDevice()}
+            >
+              Enroll this device
+            </button>
+          </>
         )}
       </div>
 

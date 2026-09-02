@@ -54,6 +54,13 @@ pub fn settings_path() -> Result<PathBuf> {
 /// ProxyShard billing-API config (Bearer key). Kept in its own file so the
 /// Settings page (which round-trips the whole Settings struct) can never
 /// clobber the saved key.
+/// Team server connection + this device's enrollment. Its own file for the
+/// same reason as psapi.json: a Settings round-trip must not be able to drop
+/// the device identity.
+pub fn team_config_path() -> Result<PathBuf> {
+    Ok(config_root()?.join("team.json"))
+}
+
 pub fn psapi_path() -> Result<PathBuf> {
     Ok(config_root()?.join("psapi.json"))
 }
