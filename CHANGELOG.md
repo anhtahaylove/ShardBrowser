@@ -2,6 +2,28 @@
 
 ## 0.2.0 - 2026-09-02
 
+### Team/fleet control plane (new)
+
+- Add `shared/src/grants.rs`: RFC 9180 HPKE (DHKEM-X25519 / HKDF-SHA256 /
+  ChaCha20Poly1305) tenant root key grants. The grant scope — tenant, fleet,
+  profile, snapshot, key generation, recipient device — is bound as AEAD
+  associated data, so a grant cannot be replayed under a different scope.
+  Sealing uses the OS CSPRNG.
+- Add the v2 control-plane schema (`0004_v2_team_fleet.sql`), additive over v1.
+  Tenant-scoped rows join their parent by composite `(tenant_id, id)` foreign
+  key, so cross-tenant references are rejected by the database rather than
+  relying on every query remembering to filter. One-shot records are claimed
+  through a UNIQUE index.
+- Add signed authorization records: a request must carry a record binding the
+  action to this domain, tenant, server instance and restore epoch, signed by
+  an issuer the tenant trusts.
+- Add replay rejection and idempotent retries: a record is consumable once, and
+  a completed operation replays its exact original response bytes.
+- Add `/v2/device-approvals`, `/v2/capability-grants`,
+  `/v2/tenant-root-key-grants`, `/v2/operations/complete`. The server files
+  root key grants without being able to read them — the payload stays sealed
+  to the recipient device.
+
 ### Encrypted profile backup (new)
 
 - Add a v2 encrypted backup container: streaming ChaCha20-Poly1305 frames over a
@@ -43,6 +65,9 @@
   untrusted until the call returns `Ok`; this is a deliberate trade-off to keep
   memory bounded on large profiles. Callers restoring to disk should write to a
   staging path and promote only on success.
+- Fleet sync transfer operations are not implemented in this release: the
+  schema and authorization exist, the upload/download path does not.
+
 ## 0.1.29 - 2026-08-28
 
 ### Process ownership
