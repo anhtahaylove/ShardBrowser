@@ -438,3 +438,383 @@ async fn v2_operations_replay_the_stored_response() {
         "key reuse with a different request must conflict"
     );
 }
+
+/// A client needs the deployment identity before it can sign anything the
+/// server will accept, so the endpoint must report the same values the
+/// verifier reads — and must not hand them to an unauthenticated caller.
+#[tokio::test]
+async fn server_identity_reports_the_values_records_bind_to() {
+    let port = 38113u16;
+    let data = std::env::temp_dir().join(format!("shardx-e2e-v2id-{}", std::process::id()));
+    let _guard = spawn_server(&data, port);
+    let cl = client();
+    wait_health(&cl, port).await;
+
+    let admin = token(&cl, port, "admin", "secret").await;
+    let user_id = admin_user_id(&cl, port, &admin).await;
+    let sk_a = Ed25519SigningKey::from_bytes(&[11u8; 32]);
+    let sk_b = Ed25519SigningKey::from_bytes(&[22u8; 32]);
+    seed(&data, &user_id, &sk_a, &sk_b).await;
+
+    let url = format!("http://127.0.0.1:{port}/v2/server-identity");
+
+    // Deployment identity is not public: it is an input to authorization.
+    let anon = cl.get(&url).send().await.expect("anon request");
+    assert_eq!(anon.status(), 401, "identity must require a session");
+
+    let res = cl
+        .get(&url)
+        .bearer_auth(&admin)
+        .send()
+        .await
+        .expect("identity request");
+    assert_eq!(res.status(), 200);
+    let body: Value = res.json().await.expect("identity json");
+
+    assert_eq!(
+        body["server_instance_id"].as_str().expect("instance id"),
+        hex(&INSTANCE),
+        "must match the instance the verifier checks records against",
+    );
+    assert_eq!(
+        body["restore_epoch"].as_i64().expect("restore epoch"),
+        0,
+        "must match the seeded epoch",
+    );
+}
+
+/// The manifest the Launcher signs must be one the server accepts.
+///
+/// Client and server each used to describe this record separately, which is
+/// exactly the kind of split that fails only during a real sync. Both sides
+/// now build it from `shared::fleet_manifest`, and this test drives that
+/// builder through the real HTTP commit path to prove the two agree.
+#[tokio::test]
+async fn a_client_built_manifest_is_accepted_by_the_commit_endpoint() {
+    let port = 38114u16;
+    let data = std::env::temp_dir().join(format!("shardx-e2e-manifest-{}", std::process::id()));
+    let _guard = spawn_server(&data, port);
+    let cl = client();
+    wait_health(&cl, port).await;
+
+    let admin = token(&cl, port, "admin", "secret").await;
+    let user_id = admin_user_id(&cl, port, &admin).await;
+    let sk_a = Ed25519SigningKey::from_bytes(&[11u8; 32]);
+    let sk_b = Ed25519SigningKey::from_bytes(&[22u8; 32]);
+    seed(&data, &user_id, &sk_a, &sk_b).await;
+
+    let tenant_hex = hex(&TENANT_A);
+    let profile = [0x51u8; 16];
+    let profile_hex = hex(&profile);
+
+    // The identity endpoint is the only way a client learns these; a manifest
+    // signed against the wrong pair is refused.
+    let identity: Value = cl
+        .get(format!("{}/v2/server-identity", base(port)))
+        .bearer_auth(&admin)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let instance_hex = identity["server_instance_id"].as_str().unwrap().to_string();
+    let restore_epoch = identity["restore_epoch"].as_i64().unwrap();
+    assert_eq!(instance_hex, hex(&INSTANCE));
+
+    let fleet = [0x53u8; 16];
+    seed_profile(&data, &fleet, &profile).await;
+
+    let container = b"sealed-container-bytes-opaque-to-the-server".to_vec();
+    let container_sha = c::sha256(&container);
+    let snapshot = [0x52u8; 16];
+    let lease_id = hex(&[0x54u8; 16]);
+    let session_id = hex(&[0x55u8; 16]);
+
+    let lease_res = cl
+        .post(format!("{}/v2/fleet/leases", base(port)))
+        .bearer_auth(&admin)
+        .json(&json!({
+            "tenant_id": tenant_hex,
+            "profile_id": profile_hex,
+            "lease_id": lease_id,
+            "account_id": hex(&[1u8; 16]),
+            "device_id": hex(&[4u8; 16]),
+            "ttl_seconds": 60,
+        }))
+        .send()
+        .await
+        .unwrap();
+    let lease_status = lease_res.status();
+    let lease_body = lease_res.text().await.unwrap();
+    assert!(lease_status.is_success(), "lease ({lease_status}): {lease_body}");
+    let lease: Value = serde_json::from_str(&lease_body).unwrap();
+    let fencing = lease["fencing_token"].as_i64().unwrap();
+
+    let intent = c::sha256(&c::encode(&c::m(vec![
+        ("profile_id", c::t(&profile_hex)),
+        ("snapshot_id", c::t(&hex(&snapshot))),
+        ("container_sha256", c::b(&container_sha)),
+    ])));
+
+    let open = cl
+        .post(format!("{}/v2/fleet/uploads", base(port)))
+        .bearer_auth(&admin)
+        .json(&json!({
+            "tenant_id": tenant_hex,
+            "profile_id": profile_hex,
+            "session_id": session_id,
+            "lease_id": lease_id,
+            "fencing_token": fencing,
+            "target_version": 1,
+            "intent_hash": hex(&intent),
+            "declared_size": container.len() as i64,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(open.status().is_success(), "open upload: {}", open.text().await.unwrap());
+
+    let chunk = cl
+        .post(format!(
+            "{}/v2/fleet/uploads/{tenant_hex}/{session_id}/chunk",
+            base(port)
+        ))
+        .bearer_auth(&admin)
+        .header("x-chunk-offset", "0")
+        .header("content-type", "application/octet-stream")
+        .body(container.clone())
+        .send()
+        .await
+        .unwrap();
+    assert!(chunk.status().is_success(), "chunk: {}", chunk.text().await.unwrap());
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    // Built by the same code path the Launcher uses.
+    let manifest = shared::fleet_manifest::build_snapshot_manifest(
+        &sk_a,
+        &shared::fleet_manifest::ManifestFields {
+            tenant_id: TENANT_A,
+            server_instance_id: INSTANCE,
+            restore_epoch: restore_epoch as u64,
+            replay_id: [0x56u8; 16],
+            profile_id: profile,
+            snapshot_id: snapshot,
+            fleet_id: fleet,
+            base_version: 0,
+            key_generation: 1,
+            container_sha256: container_sha,
+            not_before_ms: now_ms.saturating_sub(60_000),
+            not_after_ms: now_ms + 300_000,
+        },
+    );
+
+    let commit = cl
+        .post(format!("{}/v2/fleet/uploads/commit", base(port)))
+        .bearer_auth(&admin)
+        .json(&json!({
+            "tenant_id": tenant_hex,
+            "profile_id": profile_hex,
+            "session_id": session_id,
+            "manifest_hex": hex(&manifest),
+            "snapshot_id": hex(&snapshot),
+            "fleet_id": hex(&fleet),
+            "base_version": 0,
+            "key_generation": 1,
+            "container_sha256": hex(&container_sha),
+            "author_account_id": hex(&[1u8; 16]),
+            "author_device_id": hex(&[4u8; 16]),
+        }))
+        .send()
+        .await
+        .unwrap();
+    let status = commit.status();
+    let body = commit.text().await.unwrap();
+    assert!(status.is_success(), "commit rejected ({status}): {body}");
+
+    let published: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(published["version"].as_i64(), Some(1));
+
+}
+
+/// A lease targets an existing profile, so create the fleet and profile rows
+/// the way tenant provisioning would.
+async fn seed_profile(data: &std::path::Path, fleet: &[u8; 16], profile: &[u8; 16]) {
+    let url = format!("sqlite://{}/shardx.db", data.display().to_string().replace('\\', "/"));
+    let pool = SqlitePoolOptions::new().connect(&url).await.unwrap();
+    pool.execute("PRAGMA foreign_keys = ON").await.unwrap();
+
+    sqlx::query(
+        "INSERT INTO v2_fleets (id, tenant_id, name, status, created_at)
+         VALUES (?, ?, 'fleet-1', 'active', '2026-01-01T00:00:00Z')",
+    )
+    .bind(fleet.as_slice())
+    .bind(TENANT_A.as_slice())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "INSERT INTO v2_profiles
+             (id, tenant_id, fleet_id, name, current_version, status, created_at, updated_at)
+         VALUES (?, ?, ?, 'profile-1', 0, 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .bind(profile.as_slice())
+    .bind(TENANT_A.as_slice())
+    .bind(fleet.as_slice())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    pool.close().await;
+}
+
+/// A valid signature must not authorize different data.
+///
+/// The commit endpoint verifies the manifest and then reads several values
+/// from the request body. If it trusts the body over the signed record, a
+/// caller can attach a genuine manifest to another payload. This drives that
+/// exact attack: same signed manifest, mismatched body.
+#[tokio::test]
+async fn a_body_that_contradicts_the_signed_manifest_is_refused() {
+    let port = 38115u16;
+    let data = std::env::temp_dir().join(format!("shardx-e2e-mismatch-{}", std::process::id()));
+    let _guard = spawn_server(&data, port);
+    let cl = client();
+    wait_health(&cl, port).await;
+
+    let admin = token(&cl, port, "admin", "secret").await;
+    let user_id = admin_user_id(&cl, port, &admin).await;
+    let sk_a = Ed25519SigningKey::from_bytes(&[11u8; 32]);
+    let sk_b = Ed25519SigningKey::from_bytes(&[22u8; 32]);
+    seed(&data, &user_id, &sk_a, &sk_b).await;
+
+    let tenant_hex = hex(&TENANT_A);
+    let profile = [0x61u8; 16];
+    let profile_hex = hex(&profile);
+    let fleet = [0x62u8; 16];
+    seed_profile(&data, &fleet, &profile).await;
+
+    let container = b"the-bytes-actually-staged".to_vec();
+    let container_sha = c::sha256(&container);
+    let snapshot = [0x63u8; 16];
+    let lease_id = hex(&[0x64u8; 16]);
+    let session_id = hex(&[0x65u8; 16]);
+
+    let lease: Value = cl
+        .post(format!("{}/v2/fleet/leases", base(port)))
+        .bearer_auth(&admin)
+        .json(&json!({
+            "tenant_id": tenant_hex,
+            "profile_id": profile_hex,
+            "lease_id": lease_id,
+            "account_id": hex(&[1u8; 16]),
+            "device_id": hex(&[4u8; 16]),
+            "ttl_seconds": 60,
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let fencing = lease["fencing_token"].as_i64().unwrap();
+
+    let intent = c::sha256(&c::encode(&c::m(vec![
+        ("profile_id", c::t(&profile_hex)),
+        ("snapshot_id", c::t(&hex(&snapshot))),
+        ("container_sha256", c::b(&container_sha)),
+    ])));
+
+    cl.post(format!("{}/v2/fleet/uploads", base(port)))
+        .bearer_auth(&admin)
+        .json(&json!({
+            "tenant_id": tenant_hex,
+            "profile_id": profile_hex,
+            "session_id": session_id,
+            "lease_id": lease_id,
+            "fencing_token": fencing,
+            "target_version": 1,
+            "intent_hash": hex(&intent),
+            "declared_size": container.len() as i64,
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    cl.post(format!(
+        "{}/v2/fleet/uploads/{tenant_hex}/{session_id}/chunk",
+        base(port)
+    ))
+    .bearer_auth(&admin)
+    .header("x-chunk-offset", "0")
+    .header("content-type", "application/octet-stream")
+    .body(container.clone())
+    .send()
+    .await
+    .unwrap();
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    // A manifest that is genuinely signed, but for a *different* snapshot:
+    // it commits to other bytes than the ones staged in this session.
+    let other_container = b"bytes-from-some-other-snapshot".to_vec();
+    let manifest = shared::fleet_manifest::build_snapshot_manifest(
+        &sk_a,
+        &shared::fleet_manifest::ManifestFields {
+            tenant_id: TENANT_A,
+            server_instance_id: INSTANCE,
+            restore_epoch: 0,
+            replay_id: [0x66u8; 16],
+            profile_id: profile,
+            snapshot_id: snapshot,
+            fleet_id: fleet,
+            base_version: 0,
+            key_generation: 1,
+            container_sha256: c::sha256(&other_container),
+            not_before_ms: now_ms.saturating_sub(60_000),
+            not_after_ms: now_ms + 300_000,
+        },
+    );
+
+    // The body describes the staged bytes, so every server-side consistency
+    // check on the staged content passes. Only comparing the body against the
+    // signed manifest catches this.
+    let forged = cl
+        .post(format!("{}/v2/fleet/uploads/commit", base(port)))
+        .bearer_auth(&admin)
+        .json(&json!({
+            "tenant_id": tenant_hex,
+            "profile_id": profile_hex,
+            "session_id": session_id,
+            "manifest_hex": hex(&manifest),
+            "snapshot_id": hex(&snapshot),
+            "fleet_id": hex(&fleet),
+            "base_version": 0,
+            "key_generation": 1,
+            "container_sha256": hex(&container_sha),
+            "author_account_id": hex(&[1u8; 16]),
+            "author_device_id": hex(&[4u8; 16]),
+        }))
+        .send()
+        .await
+        .unwrap();
+    let st = forged.status();
+    let body = forged.text().await.unwrap();
+    assert_eq!(
+        st,
+        reqwest::StatusCode::BAD_REQUEST,
+        "a manifest signed for other bytes must not publish the staged ones: {body}"
+    );
+    assert!(
+        body.contains("signed manifest"),
+        "refusal should name the manifest mismatch, got: {body}"
+    );
+}

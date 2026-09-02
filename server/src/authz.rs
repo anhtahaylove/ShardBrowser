@@ -117,6 +117,29 @@ pub struct VerifiedRecord {
     pub not_after_ms: u64,
     /// SHA-256 over the exact bytes that were verified, for the audit trail.
     pub exact_bytes_sha256: [u8; 32],
+    /// The verified field map.
+    ///
+    /// A signature authorizes *these* values. A caller that reads the same
+    /// value from an unsigned request body instead is trusting the sender,
+    /// not the signer, so callers cross-check through the accessors below.
+    pub(crate) fields: Vec<(String, c::Value)>,
+}
+
+impl VerifiedRecord {
+    /// Read a signed 16-byte id.
+    pub fn signed_id16(&self, name: &'static str) -> Option<[u8; 16]> {
+        bytes_field(&self.fields, name, 16).ok()?.try_into().ok()
+    }
+
+    /// Read a signed 32-byte hash.
+    pub fn signed_hash32(&self, name: &'static str) -> Option<[u8; 32]> {
+        bytes_field(&self.fields, name, 32).ok()?.try_into().ok()
+    }
+
+    /// Read a signed unsigned integer.
+    pub fn signed_uint(&self, name: &'static str) -> Option<u64> {
+        uint_field(&self.fields, name).ok()
+    }
 }
 
 fn field<'a>(
@@ -299,6 +322,7 @@ pub fn verify_record(
         not_before_ms,
         not_after_ms,
         exact_bytes_sha256: c::sha256(exact_container_bytes),
+        fields: map.to_vec(),
     })
 }
 

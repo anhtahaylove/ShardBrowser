@@ -5,6 +5,7 @@ mod backup_cmd;
 mod codex_mcp;
 mod cookies;
 mod fingerprints;
+mod fleet_client;
 mod launch;
 mod mcp_setup;
 mod process;
