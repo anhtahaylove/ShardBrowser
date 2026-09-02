@@ -1,5 +1,66 @@
 # Changelog
 
+## v0.2.2
+
+Enrollment and profile sync reach the shipped binary, plus the tenant-boundary
+fix from #21.
+
+### Device enrollment
+
+- Add `POST /v2/devices/enrollment-challenges` and
+  `/v2/devices/enrollment-proofs`. The server issues a nonce bound to a key
+  commitment and verifies the device holds the key it claims; registering a
+  public key without proof would let a caller enroll a key they cannot use.
+- Store the challenge nonce hashed and consume it once, so a captured proof
+  cannot be replayed.
+- Add `shared::enrollment_proof`: one canonical encoding for both sides. The
+  manifest format had already shown what happens when a wire format is defined
+  in two places.
+- Add Team settings for server URL and token, with device key material in its
+  own `team.json` so an unrelated settings save cannot destroy device identity.
+  The status command never returns the token or any key.
+
+### Profile sync
+
+- Wire the fleet client to the Launcher: `profile_sync_push`,
+  `profile_sync_pull` and `profile_sync_status`, with push and pull in the
+  profile menu on an enrolled device. The client shipped in v0.2.1 with no
+  caller, so the linker dropped it — `/v2/fleet/uploads` was absent from the
+  binary. It is present now.
+- Sync uploads the same sealed container a local backup writes; the server
+  stores ciphertext, a digest and a version, and holds no key.
+- Enrollment now returns the account id the server assigned. Fleet routes are
+  account-scoped and the client cannot infer that id, so a device enrolled
+  before this change reports `can_sync: false` and must re-enroll.
+- Both sync commands check running state before configuration, so a user with a
+  running browser is told to close it rather than sent to fix server settings.
+
+### Security fix: tenant boundary on every fleet route
+
+Eight `/v2/` fleet handlers took `tenant_id` from the request and never checked
+the caller belonged to it. Any authenticated user could lease, upload to or
+download from any tenant. All eight now call `require_tenant_member`; the
+regression test receives `201 Created` before the fix and is refused after it.
+
+`AuthUser` carries no tenant, so at each individual call site an authentication
+check looked sufficient. It was not.
+
+### Documentation
+
+- `docs/v1-authorization-audit.md` — every v1 route checked for the same flaw;
+  none has it, and the one route that resembles it is explained rather than
+  left for a future reader to re-derive.
+- `docs/key-custody.md` — how profile keys are held, why sync currently needs a
+  shared passphrase, and what is missing before per-device key wrapping works.
+  The tenant root key machinery exists in `shared/src/grants.rs` but has no
+  caller, and `POST /v2/tenant-root-key-grants` verifies a grant and then
+  discards it.
+
+### Still not production-ready
+
+The `P-OP` gate remains blocked: no independent verifier, no full product-flow
+or downgrade drill, and no two-device destructive verification.
+
 ## v0.2.1
 
 First v0.2.x release with installable artifacts. v0.2.0 was tagged but its
