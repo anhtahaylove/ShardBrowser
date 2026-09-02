@@ -481,6 +481,9 @@ mod temp_profile_tests {
 
     #[test]
     fn profile_validation_errors_map_to_actionable_http_statuses() {
+        // Takes the process-wide lifecycle claim; serialize with the other
+        // tests that do the same or the Busy assertion below races.
+        let _lifecycle = crate::profile::lifecycle_test_guard();
         let invalid = crate::profile::normalize_profile_name("bad/name").unwrap_err();
         assert_eq!(
             super::profile_api_error(invalid, axum::http::StatusCode::INTERNAL_SERVER_ERROR).0,
