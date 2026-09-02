@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased
+## v0.2.1
+
+First v0.2.x release with installable artifacts. v0.2.0 was tagged but its
+release build failed before producing any, so it stays a prerelease with no
+downloads; v0.1.29 remained the latest installable version. Nothing about the
+v0.2.0 tag is changed or moved.
+
+- Fix the release build: `npm audit --audit-level=moderate` failed the
+  validation job on a high-severity `browserslist` advisory, so no build or
+  publish step ever ran. Updated to 4.28.8; all three npm workspaces are clean.
+- Read the MCP contract version from `package.json` rather than a literal, so
+  a version bump no longer fails a test that exists to guard the tool contract.
 
 ### Fleet transfer client and a commit-path authorization fix
 
