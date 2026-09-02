@@ -11,6 +11,7 @@ pub mod backup;
 pub mod canonical;
 pub mod cookies;
 pub mod envelope;
+pub mod grants;
 pub mod keys;
 pub mod logins;
 pub mod oscrypt;

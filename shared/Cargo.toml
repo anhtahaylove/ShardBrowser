@@ -19,6 +19,8 @@ flate2 = "1"
 chacha20poly1305 = { version = "=0.11.0", features = ["alloc"] }
 ed25519-dalek = { version = "=3.0.0" }
 zeroize = { version = "=1.8.2", features = ["derive"] }
+hpke = { version = "=0.14.0", default-features = false, features = ["alloc", "x25519", "chacha", "hkdfsha2"] }
+getrandom04 = { package = "getrandom", version = "=0.4.3" }
 
 # POSIX os_crypt: AES-128-CBC with a fixed IV.
 [target.'cfg(not(windows))'.dependencies]
