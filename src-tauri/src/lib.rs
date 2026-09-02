@@ -12,6 +12,7 @@ mod process;
 mod profile;
 mod proxy;
 mod psapi;
+mod sync_cmd;
 mod team_config;
 mod runtime;
 mod settings;
@@ -1465,6 +1466,9 @@ async fn team_enroll_device(label: String) -> Result<team_config::TeamStatus, St
         .map_err(|e| e.to_string())?;
 
     c.device_id = enrolled.device_id;
+    // Fleet routes are account-scoped, and the server is the only source for
+    // this id. Storing it here is what lets sync run without a second call.
+    c.account_id = enrolled.account_id;
     c.signing_key_seed = seed.iter().map(|b| format!("{b:02x}")).collect();
     c.hpke_key_seed = hpke_seed.iter().map(|b| format!("{b:02x}")).collect();
     team_config::save(&c).map_err(|e| e.to_string())?;
@@ -1756,6 +1760,23 @@ mod profile_mutation_boundary_tests {
         ));
         assert_running_blocked(cookies_import(profile_id.to_string(), Vec::new()));
 
+        // Sync reads and writes the profile directory exactly as backup and
+        // restore do, so it must refuse a running profile for the same reason:
+        // Chromium holds SQLite handles open.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        assert_running_blocked(rt.block_on(sync_cmd::profile_sync_push(
+            profile_id.to_string(),
+            "passphrase".to_string(),
+            0,
+        )));
+        assert_running_blocked(rt.block_on(sync_cmd::profile_sync_pull(
+            profile_id.to_string(),
+            "passphrase".to_string(),
+        )));
+
         tracker.set_running_for_test(profile_id, false);
     }
 }
@@ -1797,6 +1818,9 @@ pub fn run() {
             team_test_connection,
             team_enroll_device,
             backup_cmd::profile_backup_create,
+            sync_cmd::profile_sync_push,
+            sync_cmd::profile_sync_pull,
+            sync_cmd::profile_sync_status,
             backup_cmd::profile_backup_restore,
             backup_cmd::profile_backup_inspect,
             profile_bind_proxy,

@@ -30,6 +30,13 @@ pub struct TeamConfig {
     /// Device id assigned by the server at enrollment, hex-encoded.
     #[serde(default)]
     pub device_id: String,
+    /// Account the server bound this device to, hex-encoded. Fleet routes are
+    /// scoped by account; the server discloses it at enrollment.
+    #[serde(default)]
+    pub account_id: String,
+    /// Fleet this device syncs profiles into, hex-encoded.
+    #[serde(default)]
+    pub fleet_id: String,
     /// Ed25519 signing key seed, hex-encoded. Present once enrolled.
     #[serde(default)]
     pub signing_key_seed: String,
@@ -42,6 +49,13 @@ impl TeamConfig {
     /// Whether this device has completed enrollment against `server_url`.
     pub fn is_enrolled(&self) -> bool {
         !self.device_id.is_empty() && !self.signing_key_seed.is_empty()
+    }
+
+    /// Whether this device has everything the fleet routes require. A device
+    /// enrolled before `account_id` was persisted is enrolled but cannot sync,
+    /// and must re-enroll rather than guess.
+    pub fn can_sync(&self) -> bool {
+        self.is_enrolled() && !self.account_id.is_empty() && !self.tenant_id.is_empty()
     }
 
     /// The device signing key, if enrolled.
@@ -62,6 +76,9 @@ pub struct TeamStatus {
     pub device_id: String,
     pub has_token: bool,
     pub is_enrolled: bool,
+    /// Whether profile sync can run. False for a device enrolled before sync
+    /// existed, which needs re-enrolling to learn its account id.
+    pub can_sync: bool,
 }
 
 pub fn load() -> Result<TeamConfig> {
@@ -91,6 +108,7 @@ pub fn status() -> Result<TeamStatus> {
         device_id: c.device_id.clone(),
         has_token: !c.token.is_empty(),
         is_enrolled: c.is_enrolled(),
+        can_sync: c.can_sync(),
     })
 }
 

@@ -582,6 +582,9 @@ pub async fn enroll_device(
         axum::Json(serde_json::json!({
             "device_id": hex(&device_id),
             "signing_key_id": hex(&signing_key_id),
+            // Fleet routes are scoped by account. The client cannot infer this
+            // and must not invent it, so return the one we authenticated.
+            "account_id": hex(&account_id),
         })),
     ))
 }

@@ -91,6 +91,10 @@ struct EnrollmentChallenge {
 pub struct EnrolledDevice {
     pub device_id: String,
     pub signing_key_id: String,
+    /// Account the server bound this device to. Fleet routes require it, and
+    /// the challenge is the only place it is disclosed.
+    #[serde(default)]
+    pub account_id: String,
 }
 
 pub struct FleetClient {
@@ -565,7 +569,7 @@ fn random_id_bytes() -> [u8; 16] {
     *uuid::Uuid::new_v4().as_bytes()
 }
 
-fn random_id_hex() -> String {
+pub fn random_id_hex() -> String {
     hex(&random_id_bytes())
 }
 

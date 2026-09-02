@@ -1343,6 +1343,9 @@ function BrowsersView() {
   // ticking uptime display in the Status column.
   const [running, setRunning] = useState<Record<string, number>>({});
   const [runningCdp, setRunningCdp] = useState<Record<string, CdpInfo>>({});
+  // Whether this device can sync profiles. Only ever the non-secret status;
+  // the token and device key never reach the frontend.
+  const [canSync, setCanSync] = useState(false);
   const [runningVerification, setRunningVerification] = useState<Record<string, VerificationStatus>>({});
   const [verificationFocusBusy, setVerificationFocusBusy] = useState<string | null>(null);
   const [launchErrors, setLaunchErrors] = useState<Record<string, string>>({});
@@ -1411,6 +1414,14 @@ function BrowsersView() {
     void reload();
   };
   useEffect(() => { reload(); }, []);
+  // Team sync availability, so the menu only offers push/pull on a device that
+  // is actually enrolled. A failure here is not an error: an unconfigured
+  // device simply cannot sync.
+  useEffect(() => {
+    invoke<TeamStatus>("team_status")
+      .then((t) => setCanSync(t.can_sync))
+      .catch(() => setCanSync(false));
+  }, []);
   // Pick up profiles/proxies created via the automation API or MCP live.
   useStoreChanged(reload);
   useEffect(() => {
@@ -1708,6 +1719,58 @@ function BrowsersView() {
     }
   };
 
+  // Push a profile to the team server. The passphrase is the shared secret
+  // between devices: whoever pulls this profile must type the same one.
+  const pushProfile = async (p: ProfileMeta) => {
+    if (running[p.id]) { toast.err("Stop the profile before pushing it"); return; }
+    try {
+      // Read the current remote version first. Pushing from a stale base is
+      // what the server refuses, and showing the version here is how the user
+      // sees that another device published in the meantime.
+      const remote = await invoke<{ version: number } | null>("profile_sync_status", { profileId: p.id });
+      const base = remote?.version ?? 0;
+      const passphrase = await passphraseModal({
+        title: base === 0 ? "Encrypt profile for the team" : `Push over version ${base}`,
+        message:
+          "Everyone who pulls this profile must enter the same passphrase. It is not stored anywhere and cannot be recovered.",
+        confirm: base === 0,
+      });
+      if (passphrase === null) return;
+      const res = await invoke<{ version: number; container_bytes: number; sha256: string }>(
+        "profile_sync_push",
+        { profileId: p.id, passphrase, baseVersion: base },
+      );
+      toast.ok(`Pushed version ${res.version} — ${(res.container_bytes / 1048576).toFixed(1)} MB`);
+    } catch (e) { toast.err(safeUiError(e)); }
+  };
+
+  // Pull the team's current version over the local profile.
+  const pullProfile = async (p: ProfileMeta) => {
+    if (running[p.id]) { toast.err("Stop the profile before pulling it"); return; }
+    try {
+      const remote = await invoke<{ version: number; container_bytes: number } | null>(
+        "profile_sync_status", { profileId: p.id },
+      );
+      if (!remote) { toast.err("The team server has no snapshot for this profile yet"); return; }
+      if (!(await confirmModal({
+        title: `Pull version ${remote.version}`,
+        message:
+          "This replaces the current profile data with the team's copy. Anything not in that snapshot is lost.",
+        buttons: [
+          { label: "Cancel", value: false },
+          { label: "Pull and replace", value: true, danger: true },
+        ],
+      }))) return;
+      const passphrase = await passphraseModal({
+        title: "Passphrase for this profile",
+        message: "The passphrase used when this profile was pushed.",
+      });
+      if (passphrase === null) return;
+      const bytes = await invoke<number>("profile_sync_pull", { profileId: p.id, passphrase });
+      toast.ok(`Pulled version ${remote.version} — ${(bytes / 1048576).toFixed(1)} MB restored`);
+    } catch (e) { toast.err(safeUiError(e)); }
+  };
+
   // Per-profile action menu shared by right-click and ⋮ button.
   const profileMenu = (p: ProfileMeta) => [
     { label: running[p.id] ? "Stop" : "Launch", onClick: () => startStop(p) },
@@ -1732,6 +1795,13 @@ function BrowsersView() {
     { sep: true, label: "", onClick: () => {} },
     { label: "Back up (encrypted)", onClick: () => backupProfile(p) },
     { label: "Restore from backup", onClick: () => restoreProfile(p) },
+    ...(canSync
+      ? [
+          { sep: true, label: "", onClick: () => {} },
+          { label: "Push to team", onClick: () => pushProfile(p) },
+          { label: "Pull from team", onClick: () => pullProfile(p) },
+        ]
+      : []),
     { sep: true, label: "", onClick: () => {} },
     { label: "Export cookies", onClick: () => exportCookies(p) },
     { label: "Import cookies", onClick: () => importCookies(p) },
@@ -5767,6 +5837,7 @@ type TeamStatus = {
   device_id: string;
   has_token: boolean;
   is_enrolled: boolean;
+  can_sync: boolean;
 };
 
 function SettingsView() {
