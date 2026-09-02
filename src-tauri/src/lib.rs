@@ -1,6 +1,7 @@
 // ShardX Launcher — Tauri backend.
 
 mod api;
+mod backup_cmd;
 mod codex_mcp;
 mod cookies;
 mod fingerprints;
@@ -1676,6 +1677,9 @@ pub fn run() {
             profile_validate_name,
             profile_save,
             profile_delete,
+            backup_cmd::profile_backup_create,
+            backup_cmd::profile_backup_restore,
+            backup_cmd::profile_backup_inspect,
             profile_bind_proxy,
             profile_clone,
             profile_import,

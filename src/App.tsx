@@ -98,6 +98,23 @@ type ConfirmReq = {
 };
 let confirmSub: ((req: ConfirmReq | null) => void) | null = null;
 
+// Passphrase prompt for encrypted backups. Separate from confirmModal because
+// the value is secret: it is never logged, never defaulted and never retained
+// after the promise resolves.
+type PassphraseReq = {
+  title: string;
+  message: string;
+  confirm: boolean; // require typing it twice (backup, not restore)
+  resolve: (v: string | null) => void;
+};
+let passphraseSub: ((req: PassphraseReq | null) => void) | null = null;
+
+function passphraseModal(opts: { title: string; message: string; confirm?: boolean }): Promise<string | null> {
+  return new Promise((resolve) => {
+    passphraseSub?.({ title: opts.title, message: opts.message, confirm: opts.confirm ?? false, resolve });
+  });
+}
+
 const DIALOG_FOCUSABLE = [
   "button:not([disabled])",
   "[href]",
@@ -212,6 +229,62 @@ function ConfirmHost() {
               {b.label}
             </button>
           ))}
+        </div>
+      </DialogPanel>
+    </div>
+  );
+}
+
+function PassphraseHost() {
+  const [req, setReq] = useState<PassphraseReq | null>(null);
+  const [value, setValue] = useState("");
+  const [again, setAgain] = useState("");
+  useEffect(() => {
+    passphraseSub = setReq;
+    return () => { if (passphraseSub === setReq) passphraseSub = null; };
+  }, []);
+  useEffect(() => { setValue(""); setAgain(""); }, [req]);
+  if (!req) return null;
+
+  const done = (v: string | null) => { req.resolve(v); setReq(null); setValue(""); setAgain(""); };
+  const tooShort = value.length > 0 && value.length < 8;
+  const mismatch = req.confirm && again.length > 0 && value !== again;
+  const ok = value.length >= 8 && (!req.confirm || value === again);
+
+  return (
+    <div className="dialog-bg" onClick={() => done(null)}>
+      <DialogPanel className="dialog-confirm" label={req.title} onClose={() => done(null)}>
+        <header className="dialog-head">
+          <h2>{req.title}</h2>
+          <button className="icon-btn" onClick={() => done(null)} aria-label="Close">✕</button>
+        </header>
+        <div className="dialog-body">
+          <p className="confirm-msg">{req.message}</p>
+          <input
+            type="password"
+            autoFocus
+            value={value}
+            placeholder="Passphrase"
+            aria-label="Passphrase"
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && ok) done(value); }}
+          />
+          {req.confirm && (
+            <input
+              type="password"
+              value={again}
+              placeholder="Repeat passphrase"
+              aria-label="Repeat passphrase"
+              onChange={(e) => setAgain(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && ok) done(value); }}
+            />
+          )}
+          {tooShort && <p className="confirm-msg">Use at least 8 characters.</p>}
+          {mismatch && <p className="confirm-msg">The two passphrases do not match.</p>}
+        </div>
+        <div className="confirm-actions">
+          <button className="btn-sm btn-ghost" onClick={() => done(null)}>Cancel</button>
+          <button className="btn-sm btn-primary" disabled={!ok} onClick={() => done(value)}>OK</button>
         </div>
       </DialogPanel>
     </div>
@@ -904,6 +977,7 @@ export default function App() {
           </main>
           <ToastHost />
           <ConfirmHost />
+          <PassphraseHost />
           <StarModal />
         </div>
       </FirstRunGate>
@@ -1520,6 +1594,58 @@ function BrowsersView() {
     } catch (e) { toast.err(String(e)); }
   };
 
+  const backupProfile = async (p: ProfileMeta) => {
+    if (running[p.id]) { toast.err("Stop the profile before backing it up"); return; }
+    try {
+      const path = await saveDialog({
+        defaultPath: `${(p.name || p.id).replace(/[^\w.-]+/g, "_")}.shxbak`,
+        filters: [{ name: "ShardX backup", extensions: ["shxbak"] }],
+      });
+      if (typeof path !== "string") return; // cancelled
+      const passphrase = await passphraseModal({
+        title: "Encrypt backup",
+        message:
+          "This passphrase is the only way to open the backup. It is not stored anywhere and cannot be recovered — if you lose it, the backup is unreadable.",
+        confirm: true,
+      });
+      if (passphrase === null) return;
+      const res = await invoke<{ file_bytes: number; sha256: string }>("profile_backup_create", {
+        profileId: p.id, destPath: path, passphrase,
+      });
+      toast.ok(`Backed up ${(res.file_bytes / 1048576).toFixed(1)} MB — SHA-256 ${res.sha256.slice(0, 12)}…`);
+      const dir = path.replace(/[/\\][^/\\]*$/, "");
+      try { await openPath(dir); } catch {}
+    } catch (e) { toast.err(safeUiError(e)); }
+  };
+
+  const restoreProfile = async (p: ProfileMeta) => {
+    if (running[p.id]) { toast.err("Stop the profile before restoring it"); return; }
+    try {
+      const path = await open({
+        multiple: false, directory: false, title: "Select a ShardX backup",
+        filters: [{ name: "ShardX backup", extensions: ["shxbak"] }],
+      });
+      if (typeof path !== "string") return;
+      // Validate the file before asking for a passphrase, so a wrong pick is
+      // caught without the user typing anything.
+      await invoke("profile_backup_inspect", { srcPath: path });
+      if ((await confirmModal({
+        title: "Restore profile",
+        message: "This replaces the current profile data with the backup's contents. Anything not in the backup is lost.",
+        danger: true,
+        buttons: [{ label: "Cancel", value: false }, { label: "Restore", value: true, danger: true }],
+      })) !== true) return;
+      const passphrase = await passphraseModal({
+        title: "Open backup",
+        message: "Enter the passphrase this backup was created with.",
+      });
+      if (passphrase === null) return;
+      await invoke<number>("profile_backup_restore", { profileId: p.id, srcPath: path, passphrase });
+      toast.ok("Profile restored");
+      reload();
+    } catch (e) { toast.err(safeUiError(e)); }
+  };
+
   const exportCookies = async (p: ProfileMeta) => {
     try {
       const path = await saveDialog({
@@ -1603,6 +1729,9 @@ function BrowsersView() {
     ...(p.folder
       ? [{ label: "Remove from folder", onClick: () => setProfileFolder(p.id, "") }]
       : []),
+    { sep: true, label: "", onClick: () => {} },
+    { label: "Back up (encrypted)", onClick: () => backupProfile(p) },
+    { label: "Restore from backup", onClick: () => restoreProfile(p) },
     { sep: true, label: "", onClick: () => {} },
     { label: "Export cookies", onClick: () => exportCookies(p) },
     { label: "Import cookies", onClick: () => importCookies(p) },

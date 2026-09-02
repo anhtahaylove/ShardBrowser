@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+### Encrypted profile backup, wired into the Launcher
+
+Closes the gap recorded in #17: v0.2.0 shipped the sealing library and the
+fleet server, but nothing in the app could reach them. `shared::backup` now has
+a production caller.
+
+- Add `shared::passphrase`: Argon2id (64 MiB, 3 passes) derivation of the
+  backup FKEK from a user passphrase. Nothing is persisted but a random salt,
+  so a backup opens on a machine that has never seen the source.
+- Add `shared::backup_file`: `create`/`restore`/`inspect` over a self-contained
+  `.shxbak` file (magic, salt, verifying key, sealed container). Written via a
+  temp file and renamed, so an interrupted backup cannot replace a good file
+  with a truncated one.
+- Add Tauri commands `profile_backup_create`, `profile_backup_restore` and
+  `profile_backup_inspect`. Both mutating commands take the same
+  `begin_user_mutation` claim as delete/clone: a backup of a running profile is
+  torn, and a restore under one corrupts it.
+- Add "Back up (encrypted)" and "Restore from backup" to the profile menu, with
+  a passphrase prompt that requires confirmation on backup and warns that a lost
+  passphrase makes the backup unreadable.
+
+Restore recovers and authenticates the whole container in memory before
+`snapshot::unpack` touches the profile. `backup::open` streams authenticated
+frames and only detects truncation at the signed head, so an in-place restore
+could otherwise leave a profile that looks complete and was never verified.
+
 ## 0.2.0 - 2026-09-02
 
 > Scope: this release adds a library and a server. It is not wired into the
