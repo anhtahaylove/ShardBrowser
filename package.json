@@ -1,11 +1,14 @@
 {
   "name": "shardx-launcher",
   "private": true,
-  "version": "0.1.10",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:e2e": "tsc && vite build --mode e2e",
+    "test:e2e": "playwright test",
+    "test:release-package": "node --test scripts/stage-mcp-release.test.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },
@@ -18,11 +21,12 @@
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@tauri-apps/cli": "^2",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
     "typescript": "~5.8.3",
-    "vite": "^5.4.10"
+    "vite": "^6.4.3"
   }
 }

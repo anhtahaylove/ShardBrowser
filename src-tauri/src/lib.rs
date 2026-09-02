@@ -1,6 +1,7 @@
 // ShardX Launcher — Tauri backend.
 
 mod api;
+mod codex_mcp;
 mod cookies;
 mod fingerprints;
 mod launch;
@@ -11,7 +12,9 @@ mod proxy;
 mod psapi;
 mod runtime;
 mod settings;
+mod startup;
 mod store;
+mod updater;
 
 use serde_json::Value;
 
@@ -48,10 +51,264 @@ pub fn notify_store_changed(kind: &str) {
 /// Download MCP server source into `<dir>/mcp`; user manages registration.
 #[tauri::command]
 async fn mcp_download(dir: String) -> Result<String, String> {
-    mcp_setup::download_mcp(std::path::Path::new(&dir))
+    let path = mcp_setup::download_mcp(std::path::Path::new(&dir))
         .await
-        .map(|p| p.display().to_string())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let path_string = path.display().to_string();
+    let mut s = settings::load().map_err(|e| e.to_string())?;
+    s.mcp_path = Some(path_string.clone());
+    settings::save(&s).map_err(|e| e.to_string())?;
+    notify_store_changed("settings");
+    Ok(path_string)
+}
+
+#[tauri::command]
+async fn mcp_set_path(dir: String) -> Result<Value, String> {
+    let path = mcp_setup::resolve_mcp_dir(std::path::Path::new(&dir))
+        .ok_or_else(|| "Selected folder is not a ShardX MCP server folder.".to_string())?;
+    let path = path.display().to_string();
+    let mut s = settings::load().map_err(|e| e.to_string())?;
+    s.mcp_path = Some(path.clone());
+    settings::save(&s).map_err(|e| e.to_string())?;
+    notify_store_changed("settings");
+    mcp_status().await
+}
+
+async fn automation_api_reachable() -> bool {
+    let runtime = api::runtime_status();
+    let Some(port) = runtime.port else {
+        return false;
+    };
+    if !runtime.running {
+        return false;
+    }
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(750))
+        .build()
+    else {
+        return false;
+    };
+    match client
+        .get(format!("http://127.0.0.1:{port}/health"))
+        .send()
+        .await
+    {
+        Ok(response) => response.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+fn mcp_status_value(
+    path: Option<String>,
+    files_downloaded: bool,
+    lockfile_present: bool,
+    version: Option<String>,
+    version_current: bool,
+    dependencies_installed: bool,
+    api_reachable: bool,
+    missing_saved_path: bool,
+    discovered: bool,
+) -> Value {
+    let ready = files_downloaded && version_current && dependencies_installed && api_reachable;
+    let (state, message) = if ready {
+        (
+            "ready",
+            (if discovered {
+                "Found an existing MCP install; files, dependencies, and Automation API are ready."
+            } else {
+                "MCP files, dependencies, and Automation API are ready."
+            })
+            .to_string(),
+        )
+    } else if !files_downloaded && missing_saved_path {
+        (
+            "missing",
+            "Saved MCP folder is missing index.js or package.json.".to_string(),
+        )
+    } else if !files_downloaded {
+        (
+            "not_downloaded",
+            "MCP server files have not been downloaded yet.".to_string(),
+        )
+    } else if !version_current {
+        (
+            "update_available",
+            match version.as_deref() {
+                Some(v) => format!("MCP files are v{v}; download/repair them for Launcher v{}.", env!("CARGO_PKG_VERSION")),
+                None => format!("MCP file version is unknown; download/repair them for Launcher v{}.", env!("CARGO_PKG_VERSION")),
+            },
+        )
+    } else if !dependencies_installed {
+        (
+            "dependencies_missing",
+            if lockfile_present {
+                "MCP files are downloaded; run npm ci in the selected folder."
+            } else {
+                "This legacy MCP folder has no package-lock.json; run npm install in the selected folder."
+            }
+            .to_string(),
+        )
+    } else {
+        (
+            "api_unavailable",
+            "MCP files and dependencies are ready, but the Automation API is unreachable.".to_string(),
+        )
+    };
+
+    serde_json::json!({
+        "path": path,
+        // Keep `installed` for compatibility with the v0.1.11 UI/API shape.
+        "installed": files_downloaded,
+        "files_downloaded": files_downloaded,
+        "lockfile_present": lockfile_present,
+        "version": version,
+        "version_current": version_current,
+        "required_version": env!("CARGO_PKG_VERSION"),
+        "dependencies_installed": dependencies_installed,
+        "api_reachable": api_reachable,
+        "ready": ready,
+        "state": state,
+        "message": message,
+    })
+}
+
+#[cfg(test)]
+mod mcp_status_tests {
+    use super::{devtools_frontend_url, mcp_status_value, select_devtools_target};
+    use serde_json::json;
+
+    #[test]
+    fn version_mismatch_needs_update_not_ready() {
+        let status = mcp_status_value(
+            Some("C:\\MCP\\ShardBrowser\\mcp".into()),
+            true,
+            true,
+            Some("0.1.11".into()),
+            false,
+            true,
+            true,
+            false,
+            false,
+        );
+
+        assert_eq!(status["state"].as_str(), Some("update_available"));
+        assert_eq!(status["ready"].as_bool(), Some(false));
+        assert_eq!(status["version"].as_str(), Some("0.1.11"));
+        assert_eq!(status["lockfile_present"].as_bool(), Some(true));
+        assert_eq!(status["required_version"].as_str(), Some(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn missing_dependencies_use_lockfile_aware_install_guidance() {
+        let locked = mcp_status_value(
+            Some("C:\\MCP\\ShardBrowser\\mcp".into()),
+            true,
+            true,
+            Some(env!("CARGO_PKG_VERSION").into()),
+            true,
+            false,
+            true,
+            false,
+            false,
+        );
+        let legacy = mcp_status_value(
+            Some("C:\\MCP\\Legacy\\mcp".into()),
+            true,
+            false,
+            Some(env!("CARGO_PKG_VERSION").into()),
+            true,
+            false,
+            true,
+            false,
+            false,
+        );
+
+        assert_eq!(locked["state"].as_str(), Some("dependencies_missing"));
+        assert!(locked["message"].as_str().unwrap().contains("npm ci"));
+        assert!(legacy["message"].as_str().unwrap().contains("npm install"));
+    }
+
+    #[test]
+    fn devtools_frontend_url_joins_relative_path() {
+        assert_eq!(
+            devtools_frontend_url("http://127.0.0.1:9222", "/devtools/inspector.html?ws=x"),
+            "http://127.0.0.1:9222/devtools/inspector.html?ws=x"
+        );
+    }
+
+    #[test]
+    fn devtools_target_prefers_cloudflare_challenge_page() {
+        let targets = vec![
+            json!({ "id": "normal", "type": "page", "title": "WordPress", "url": "https://example.com/wp-admin/" }),
+            json!({ "id": "challenge", "type": "page", "title": "Just a moment...", "url": "https://example.com/?__cf_chl_rt_tk=x" }),
+        ];
+
+        assert_eq!(
+            select_devtools_target(&targets).and_then(|target| target["id"].as_str()),
+            Some("challenge")
+        );
+    }
+}
+
+#[tauri::command]
+async fn mcp_status() -> Result<Value, String> {
+    let mut s = settings::load().map_err(|e| e.to_string())?;
+    let saved_path = s.mcp_path.clone();
+    let mut discovered = false;
+    let resolved = saved_path
+        .as_deref()
+        .and_then(|path| mcp_setup::resolve_mcp_dir(std::path::Path::new(path)))
+        .or_else(|| {
+            let found = mcp_setup::find_existing_mcp();
+            discovered = found.is_some();
+            found
+        });
+
+    if discovered {
+        if let Some(path) = &resolved {
+            s.mcp_path = Some(path.display().to_string());
+            settings::save(&s).map_err(|e| e.to_string())?;
+            notify_store_changed("settings");
+        }
+    }
+
+    let api_reachable = automation_api_reachable().await;
+    if let Some(path) = resolved {
+        let version = mcp_setup::package_version(&path);
+        let version_current = version.as_deref() == Some(env!("CARGO_PKG_VERSION"));
+        let lockfile_present = path.join("package-lock.json").is_file();
+        let dependencies_installed = mcp_setup::dependencies_installed(&path);
+        let path = path.display().to_string();
+        return Ok(mcp_status_value(
+            Some(path),
+            true,
+            lockfile_present,
+            version,
+            version_current,
+            dependencies_installed,
+            api_reachable,
+            false,
+            discovered,
+        ));
+    }
+
+    let missing_saved_path = saved_path.is_some();
+    Ok(mcp_status_value(
+        saved_path,
+        false,
+        false,
+        None,
+        false,
+        false,
+        api_reachable,
+        missing_saved_path,
+        false,
+    ))
+}
+
+#[tauri::command]
+async fn codex_mcp_status() -> Result<Value, String> {
+    codex_mcp::status().await
 }
 
 // ---- Profiles ----
@@ -67,11 +324,27 @@ fn profile_get(id: String) -> Result<Value, String> {
     // Backfill gpu_preset_id for legacy profiles by matching webgl.renderer.
     if stored.meta.gpu_preset_id.is_none() {
         if let Some(gid) = infer_gpu_preset_id(&stored.config) {
-            stored.meta.gpu_preset_id = Some(gid);
-            let _ = profile::save_raw(&mut stored);
+            if let Ok(_claim) = profile::begin_user_mutation([&id], "backfill profile metadata") {
+                if let Ok(mut current) = profile::load_raw(&id) {
+                    if current.meta.gpu_preset_id.is_none() {
+                        current.meta.gpu_preset_id = Some(gid);
+                        if profile::save_raw(&mut current).is_ok() {
+                            stored = current;
+                        }
+                    } else {
+                        stored = current;
+                    }
+                }
+            }
         }
     }
     serde_json::to_value(stored).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn profile_validate_name(name: String, id: Option<String>) -> Result<String, String> {
+    profile::validate_profile_name_for_mutation(&name, id.as_deref())
+        .map_err(|error| error.to_string())
 }
 
 /// Recover library fingerprint id by matching webgl.renderer (+ screen if ambiguous).
@@ -399,14 +672,51 @@ pub fn save_profile_core(
     payload: Value,
     enrich: bool,
 ) -> Result<profile::ProfileMeta, String> {
-    let mut payload = payload;
+    persist_profile_core(window, payload, enrich).map_err(|error| error.to_string())
+}
 
+pub fn persist_profile_core(
+    window: Option<&tauri::WebviewWindow>,
+    payload: Value,
+    enrich: bool,
+) -> anyhow::Result<profile::ProfileMeta> {
     let is_new = payload
         .get("_meta")
         .and_then(|m| m.get("id"))
         .and_then(|v| v.as_str())
         .map(|s| s.is_empty())
         .unwrap_or(true);
+    let _claim = if is_new {
+        profile::begin_profile_creation("create a profile")
+    } else {
+        let id = payload
+            .get("_meta")
+            .and_then(|meta| meta.get("id"))
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        profile::begin_user_mutation([id], "modify this profile")
+    }
+    ?;
+
+    persist_profile_core_claimed(window, payload, enrich)
+}
+
+/// Persist after the caller has acquired the appropriate lifecycle claim.
+/// API create flows use this to keep validation, proxy setup, and profile write
+/// inside one claim without trying to acquire the same claim twice.
+pub(crate) fn persist_profile_core_claimed(
+    window: Option<&tauri::WebviewWindow>,
+    payload: Value,
+    enrich: bool,
+) -> anyhow::Result<profile::ProfileMeta> {
+    let mut payload = payload;
+    let is_new = payload
+        .get("_meta")
+        .and_then(|m| m.get("id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.is_empty())
+        .unwrap_or(true);
+
     if is_new && enrich {
         if let Some(obj) = payload.as_object_mut() {
             enrich_new_config(window, obj);
@@ -414,8 +724,9 @@ pub fn save_profile_core(
     }
 
     let mut stored: profile::StoredProfile =
-        serde_json::from_value(payload).map_err(|e| e.to_string())?;
-    profile::save_raw(&mut stored).map_err(|e| e.to_string())?;
+        serde_json::from_value(payload)?;
+    profile::prepare_profile_name_for_save(&mut stored)?;
+    profile::save_raw(&mut stored)?;
     let name = stored
         .config
         .get("name")
@@ -443,11 +754,15 @@ pub fn save_profile_core(
 
 #[tauri::command]
 fn profile_delete(id: String) -> Result<(), String> {
+    let _claim = profile::begin_user_mutation([&id], "delete this profile")
+        .map_err(|error| error.to_string())?;
     profile::delete(&id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn profile_bind_proxy(profile_id: String, proxy_id: Option<String>) -> Result<(), String> {
+    let _claim = profile::begin_user_mutation([&profile_id], "change this profile's proxy")
+        .map_err(|error| error.to_string())?;
     let mut p = profile::load_raw(&profile_id).map_err(|e| e.to_string())?;
     p.meta.proxy_id = proxy_id;
     profile::save_raw(&mut p).map_err(|e| e.to_string())
@@ -455,28 +770,24 @@ fn profile_bind_proxy(profile_id: String, proxy_id: Option<String>) -> Result<()
 
 #[tauri::command]
 fn profile_clone(id: String) -> Result<profile::ProfileMeta, String> {
+    let _claim = profile::begin_clone_mutation(&id).map_err(|error| error.to_string())?;
     profile::clone_profile(&id).map_err(|e| e.to_string())
 }
 
 /// Import profiles verbatim under fresh ids; returns the count.
 #[tauri::command]
 fn profile_import(payloads: Vec<Value>) -> Result<usize, String> {
-    let mut n = 0;
-    for mut payload in payloads {
-        if let Some(obj) = payload.as_object_mut() {
-            match obj.get_mut("_meta").and_then(|m| m.as_object_mut()) {
-                Some(meta) => {
-                    meta.insert("id".into(), Value::String(String::new()));
-                }
-                None => {
-                    obj.insert("_meta".into(), serde_json::json!({ "id": "" }));
-                }
-            }
-        }
-        save_profile_core(None, payload, false)?;
-        n += 1;
+    let _claim = profile::begin_profile_creation("import profiles")
+        .map_err(|error| error.to_string())?;
+    let mut stored_profiles: Vec<profile::StoredProfile> = payloads
+        .into_iter()
+        .map(|payload| serde_json::from_value(payload).map_err(|error| error.to_string()))
+        .collect::<Result<_, _>>()?;
+    profile::prepare_import_batch(&mut stored_profiles).map_err(|error| error.to_string())?;
+    for stored in &mut stored_profiles {
+        profile::save_raw(stored).map_err(|error| error.to_string())?;
     }
-    Ok(n)
+    Ok(stored_profiles.len())
 }
 
 // ---- Clipboard (via tauri-plugin-clipboard-manager; webview navigator.clipboard throws) ----
@@ -495,11 +806,15 @@ fn clipboard_read(app: tauri::AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 fn profile_set_pin(id: String, pinned: bool) -> Result<(), String> {
+    let _claim = profile::begin_user_mutation([&id], "change this profile's pin")
+        .map_err(|error| error.to_string())?;
     profile::set_pin(&id, pinned).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn profile_set_folder(id: String, folder: String) -> Result<(), String> {
+    let _claim = profile::begin_user_mutation([&id], "move this profile")
+        .map_err(|error| error.to_string())?;
     profile::set_folder(&id, &folder).map_err(|e| e.to_string())
 }
 
@@ -708,6 +1023,137 @@ fn process_list() -> Vec<process::RunningProfile> {
     process::Tracker::shared().running()
 }
 
+fn devtools_frontend_url(cdp_http_url: &str, path: &str) -> String {
+    if path.starts_with("http://") || path.starts_with("https://") || path.starts_with("devtools://") {
+        return path.to_string();
+    }
+    format!(
+        "{}{}{}",
+        cdp_http_url.trim_end_matches('/'),
+        if path.starts_with('/') { "" } else { "/" },
+        path
+    )
+}
+
+fn devtools_target_summary(cdp: &process::CdpInfo, target: &Value) -> Value {
+    let frontend = target
+        .get("devtoolsFrontendUrl")
+        .and_then(Value::as_str)
+        .map(|path| devtools_frontend_url(&cdp.http_url, path));
+    serde_json::json!({
+        "id": target.get("id").and_then(Value::as_str).unwrap_or(""),
+        "type": target.get("type").and_then(Value::as_str).unwrap_or(""),
+        "title": target.get("title").and_then(Value::as_str).unwrap_or(""),
+        "url": target.get("url").and_then(Value::as_str).unwrap_or(""),
+        "attached": target.get("attached").and_then(Value::as_bool).unwrap_or(false),
+        "web_socket_debugger_url": target.get("webSocketDebuggerUrl").and_then(Value::as_str),
+        "devtools_frontend_url": frontend,
+    })
+}
+
+fn select_devtools_target(targets: &[Value]) -> Option<&Value> {
+    let is_challenge = |target: &&Value| {
+        let title = target
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let url = target
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        title.contains("just a moment")
+            || title.contains("chờ một chút")
+            || url.contains("__cf_chl")
+            || url.contains("challenges.cloudflare.com")
+    };
+    targets.iter().find(is_challenge).or_else(|| {
+        targets.iter().find(|target| {
+            target
+                .get("url")
+                .and_then(Value::as_str)
+                .is_some_and(|url| !url.is_empty() && !url.starts_with("devtools://"))
+        })
+    })
+}
+
+#[tauri::command]
+async fn devtools_context(profile_id: String) -> Result<Value, String> {
+    let cdp = process::Tracker::shared()
+        .cdp(&profile_id)
+        .ok_or_else(|| "Profile is running without CDP. Start it through Automation API or MCP to enable DevTools.".to_string())?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let targets: Value = client
+        .get(format!("{}/json/list", cdp.http_url.trim_end_matches('/')))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?
+        .json()
+        .await
+        .map_err(|e| e.to_string())?;
+    let targets: Vec<Value> = match targets.as_array() {
+        Some(targets) => targets
+            .iter()
+            .filter(|target| target.get("type").and_then(Value::as_str) == Some("page"))
+            .map(|target| devtools_target_summary(&cdp, target))
+            .collect(),
+        None => Vec::new(),
+    };
+    let current = select_devtools_target(&targets).cloned();
+    Ok(serde_json::json!({
+        "profile_id": profile_id,
+        "cdp": cdp,
+        "targets": targets,
+        "current": current,
+    }))
+}
+
+#[tauri::command]
+async fn devtools_activate(profile_id: String) -> Result<Value, String> {
+    let context = devtools_context(profile_id.clone()).await?;
+    let target = context
+        .get("current")
+        .filter(|target| !target.is_null())
+        .cloned()
+        .ok_or_else(|| "No page target is available for this profile.".to_string())?;
+    let target_id = target
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| "The selected page target has no id.".to_string())?;
+    let cdp_http_url = context
+        .get("cdp")
+        .and_then(|cdp| cdp.get("http_url"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| "The profile has no CDP HTTP URL.".to_string())?;
+    let mut activate_url = url::Url::parse(cdp_http_url).map_err(|e| e.to_string())?;
+    activate_url.set_path(&format!("/json/activate/{target_id}"));
+    activate_url.set_query(None);
+
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .map_err(|e| e.to_string())?
+        .get(activate_url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?;
+
+    Ok(serde_json::json!({
+        "profile_id": profile_id,
+        "activated": true,
+        "target": target,
+    }))
+}
+
 #[tauri::command]
 async fn process_kill(profile_id: String) -> Result<bool, String> {
     process::Tracker::shared()
@@ -831,10 +1277,8 @@ fn cookies_export_to_file(profile_id: String, path: String) -> Result<usize, Str
 
 #[tauri::command]
 fn cookies_import(profile_id: String, cookies: Vec<cookies::Cookie>) -> Result<usize, String> {
-    // Running browser would clobber the import on exit.
-    if is_profile_running(&profile_id) {
-        return Err("stop the profile before importing cookies".into());
-    }
+    let _claim = profile::begin_user_mutation([&profile_id], "import cookies")
+        .map_err(|error| error.to_string())?;
     cookies::import(&profile_id, &cookies).map_err(|e| e.to_string())
 }
 
@@ -846,23 +1290,46 @@ fn settings_get() -> Result<settings::Settings, String> {
 }
 
 #[tauri::command]
-fn settings_save(value: settings::Settings) -> Result<(), String> {
-    settings::save(&value).map_err(|e| e.to_string())
+fn settings_save(app: tauri::AppHandle, value: settings::Settings) -> Result<(), String> {
+    startup::save(&app, &value)?;
+    notify_store_changed("settings");
+    Ok(())
+}
+
+#[tauri::command]
+fn startup_status(app: tauri::AppHandle) -> Result<startup::StartupStatus, String> {
+    startup::status(&app)
 }
 
 // ---- Automation API ----
 
-/// API connection info: base URL + permanent Bearer JWT (no raw key exposed).
-#[tauri::command]
-fn api_info() -> Result<Value, String> {
-    let s = settings::ensure_secret().map_err(|e| e.to_string())?;
-    let token = api::long_lived_token(&s.api_secret)?;
-    Ok(serde_json::json!({
+fn api_info_value(s: &settings::Settings, token: String) -> Value {
+    let runtime = api::runtime_status();
+    let runtime_base_url = runtime
+        .port
+        .map(|port| format!("http://127.0.0.1:{port}"));
+    let restart_required = s.api_enabled != runtime.enabled
+        || (s.api_enabled && runtime.port != Some(s.api_port));
+    serde_json::json!({
         "enabled": s.api_enabled,
         "port": s.api_port,
         "base_url": format!("http://127.0.0.1:{}", s.api_port),
         "token": token,
-    }))
+        "running": runtime.running,
+        "runtime_enabled": runtime.enabled,
+        "runtime_port": runtime.port,
+        "runtime_base_url": runtime_base_url,
+        "error": runtime.error,
+        "restart_required": restart_required,
+    })
+}
+
+/// Saved API connection info plus the listener's actual runtime state.
+#[tauri::command]
+fn api_info() -> Result<Value, String> {
+    let s = settings::ensure_secret().map_err(|e| e.to_string())?;
+    let token = api::long_lived_token(&s.api_secret)?;
+    Ok(api_info_value(&s, token))
 }
 
 /// Rotate API secret; live-swap on running server invalidates prior tokens.
@@ -877,12 +1344,7 @@ fn api_regenerate_token() -> Result<Value, String> {
     settings::save(&s).map_err(|e| e.to_string())?;
     api::set_secret(&s.api_secret);
     let token = api::long_lived_token(&s.api_secret)?;
-    Ok(serde_json::json!({
-        "enabled": s.api_enabled,
-        "port": s.api_port,
-        "base_url": format!("http://127.0.0.1:{}", s.api_port),
-        "token": token,
-    }))
+    Ok(api_info_value(&s, token))
 }
 
 // ---- ProxyShard billing API ----
@@ -1120,15 +1582,63 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+#[cfg(test)]
+mod profile_mutation_boundary_tests {
+    use super::*;
+
+    fn assert_running_blocked<T>(result: Result<T, String>) {
+        let error = result.err().expect("running profile mutation must fail");
+        assert!(
+            error.contains("Stop the running browser"),
+            "expected actionable running-profile error, got: {error}"
+        );
+    }
+
+    #[test]
+    fn every_tauri_profile_mutation_entry_point_checks_running_state_first() {
+        let profile_id = "tauri-running-mutation-boundary-test";
+        let tracker = process::Tracker::shared();
+        tracker.set_running_for_test(profile_id, true);
+
+        assert_running_blocked(save_profile_core(
+            None,
+            serde_json::json!({
+                "name": "Running profile",
+                "_meta": { "id": profile_id }
+            }),
+            false,
+        ));
+        assert_running_blocked(profile_delete(profile_id.to_string()));
+        assert_running_blocked(profile_bind_proxy(profile_id.to_string(), None));
+        assert_running_blocked(profile_clone(profile_id.to_string()));
+        assert_running_blocked(profile_set_pin(profile_id.to_string(), true));
+        assert_running_blocked(profile_set_folder(
+            profile_id.to_string(),
+            "folder".to_string(),
+        ));
+        assert_running_blocked(cookies_import(profile_id.to_string(), Vec::new()));
+
+        tracker.set_running_for_test(profile_id, false);
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         // Must be the first plugin: a second launch focuses the running window.
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            show_main_window(app);
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if !startup::args_request_autostart(&argv) {
+                show_main_window(app);
+            }
         }))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![startup::AUTOSTART_ARG]),
+        ))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(updater::PendingUpdate::default())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let to_tray = settings::load().map(|s| s.minimize_to_tray).unwrap_or(true);
@@ -1141,6 +1651,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             profile_list,
             profile_get,
+            profile_validate_name,
             profile_save,
             profile_delete,
             profile_bind_proxy,
@@ -1162,6 +1673,8 @@ pub fn run() {
             fingerprint_dir,
             read_text_file,
             process_list,
+            devtools_context,
+            devtools_activate,
             process_kill,
             proxy_list,
             proxy_save,
@@ -1178,6 +1691,7 @@ pub fn run() {
             launch,
             settings_get,
             settings_save,
+            startup_status,
             api_info,
             api_regenerate_token,
             ps_get_key,
@@ -1203,12 +1717,37 @@ pub fn run() {
             cookies_export_to_file,
             cookies_import,
             mcp_download,
+            mcp_set_path,
+            mcp_status,
+            codex_mcp_status,
             runtime::runtime_status,
             runtime::runtime_install,
-            runtime::launcher_update_check,
+            updater::launcher_update_check,
+            updater::launcher_update_download,
+            updater::launcher_update_install,
+            updater::launcher_update_restart,
         ])
         .setup(|app| {
             let _ = APP_HANDLE.set(app.handle().clone());
+
+            // The window is created hidden to avoid a login-time flash. Normal
+            // launches show it immediately; a configured startup launch keeps
+            // it in the tray while the embedded Automation API comes online.
+            let autostart_launch = startup::launched_for_autostart();
+            match settings::load() {
+                Ok(configured) => {
+                    if let Err(error) = startup::refresh_registration_path(app.handle(), &configured) {
+                        eprintln!("[launcher] startup registration refresh failed: {error}");
+                    }
+                    if !startup::should_start_hidden(&configured, autostart_launch) {
+                        show_main_window(app.handle());
+                    }
+                }
+                Err(error) => {
+                    eprintln!("[launcher] startup settings load failed: {error}");
+                    show_main_window(app.handle());
+                }
+            }
 
             {
                 use tauri::menu::{Menu, MenuItem};
@@ -1271,7 +1810,10 @@ pub fn run() {
                         api::serve(secret, port).await;
                     });
                 }
-                Ok(_) => eprintln!("[launcher] automation API disabled in settings"),
+                Ok(_) => {
+                    api::mark_disabled();
+                    eprintln!("[launcher] automation API disabled in settings");
+                }
                 Err(e) => eprintln!("[launcher] API secret init failed: {e}"),
             }
             Ok(())

@@ -2,7 +2,7 @@ openapi: 3.0.3
 
 info:
   title: ShardX Launcher — Automation API
-  version: "0.1.0"
+  version: "0.1.29"
   description: |
     Local HTTP API for automating the ShardX anti-detect browser launcher:
     generate fingerprints, create/launch/close profiles, and obtain a Chrome
@@ -12,8 +12,10 @@ info:
     ## Binding & lifecycle
     The server runs inside the launcher app, bound to **127.0.0.1** only,
     on the port configured in *Settings → Automation API* (default **40325**).
-    It is **not** reachable from other hosts. Enabling/port changes take
-    effect after the app restarts.
+    It is **not** reachable from other hosts. Enable *Settings → Startup &
+    background services* to launch ShardX at desktop sign-in and make the API
+    available automatically. API enable/port changes take effect after the app
+    restarts.
 
     ## Authentication
     Every endpoint except `GET /health` requires a **Bearer JWT** (HS256,
@@ -84,8 +86,9 @@ info:
 
     Run it standalone over **stdio** (the client spawns it) or, with
     `MCP_HTTP_PORT` set, over HTTP at `127.0.0.1:<port>/mcp`. See the MCP
-    server's README for setup. (The launcher only downloads it; it does
-    not run it.)
+    server's README for setup. The launch-at-login entry starts the Launcher
+    and embedded API; MCP remains client-spawned rather than an always-on
+    daemon.
 
 servers:
   - url: http://127.0.0.1:40325
@@ -118,7 +121,52 @@ paths:
                 properties:
                   ok: { type: boolean, example: true }
                   name: { type: string, example: shardx-launcher }
-                  version: { type: string, example: "0.1.0" }
+                  version: { type: string, example: "0.1.29" }
+                  capabilities:
+                    type: array
+                    items: { type: string }
+                    example: [launch-instance-ownership-v1]
+
+  /startup:
+    get:
+      tags: [System]
+      summary: Inspect desktop sign-in startup
+      description: |
+        Reports both the saved launch-at-login preference and the operating
+        system's observed registration state. No executable path is returned.
+        The Automation API is embedded in the Launcher; MCP is spawned on
+        demand by its client.
+      responses:
+        "200":
+          description: Current startup state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StartupStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [System]
+      summary: Configure desktop sign-in startup
+      description: |
+        Enables or disables the current user's ShardX Launcher startup entry
+        and persists the matching preference. This does not create a separate
+        API or MCP daemon.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StartupConfigRequest" }
+      responses:
+        "200":
+          description: Updated and verified startup state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StartupStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500":
+          description: The operating-system registration or settings write failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /fingerprint/new:
     get:
@@ -211,11 +259,16 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ProfileMeta" }
         "400":
-          description: Missing/!object `fingerprint`, or an unparseable proxy string.
+          description: Missing/!object `fingerprint`, invalid/reserved/duplicate profile name, or an unparseable proxy string.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: Another profile create/edit/import operation is in progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /profiles/temporary:
     post:
@@ -250,11 +303,16 @@ paths:
                     type: boolean
                     description: Whether an inline proxy string was attached.
         "400":
-          description: Unparseable proxy string.
+          description: Invalid/reserved/duplicate profile name or unparseable proxy string.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: Another profile create/edit/import operation is in progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "404":
           description: No matching fingerprint / empty library.
           content:
@@ -300,6 +358,11 @@ paths:
                   deleted: { type: boolean, example: true }
                   id: { type: string, format: uuid }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: The browser is running or another profile lifecycle operation is in progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "500":
           description: Deletion failed.
           content:
@@ -328,11 +391,16 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/StoredProfile" }
         "400":
-          description: Bad fingerprint (not an object) or unparseable proxy.
+          description: Bad fingerprint, invalid/reserved/duplicate profile name, or unparseable proxy.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: The browser is running or another profile lifecycle operation is in progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "404":
           description: No such profile.
           content:
@@ -375,11 +443,20 @@ paths:
                 properties:
                   profile_id: { type: string }
                   pid: { type: integer, format: int64, description: OS process id. }
+                  launch_instance_token:
+                    type: string
+                    format: uuid
+                    description: Opaque in-memory identity for this exact launch; use only with the conditional launch-instance stop endpoint.
                   headless: { type: boolean }
                   cdp:
                     nullable: true
                     allOf: [{ $ref: "#/components/schemas/CdpInfo" }]
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: The browser is already running or the profile is being modified.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "500":
           description: Binary not configured / spawn failed.
           content:
@@ -407,6 +484,81 @@ paths:
                   profile_id: { type: string }
                   stopped: { type: boolean }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /profiles/{id}/stop-if-pid/{expected_pid}:
+    post:
+      tags: [Profiles]
+      summary: Disabled legacy PID guard
+      deprecated: true
+      description: |
+        Retained only so older clients fail closed with 410. PID alone cannot distinguish a
+        recycled numeric PID, so this endpoint never stops a process. Use
+        `stop-if-launch-instance`.
+      parameters:
+        - $ref: "#/components/parameters/ProfileId"
+        - name: expected_pid
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "410":
+          description: PID-only conditional stopping is permanently disabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /profiles/{id}/stop-if-launch-instance:
+    post:
+      tags: [Profiles]
+      summary: Stop one exact profile launch instance
+      description: |
+        Stops only the in-memory launch instance identified by both its PID and
+        opaque launch-instance token. The token is returned by the matching
+        authenticated start call, is never persisted, and must be sent in the
+        JSON body rather than a URL.
+      parameters:
+        - $ref: "#/components/parameters/ProfileId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_pid, launch_instance_token]
+              properties:
+                expected_pid:
+                  type: integer
+                  format: int64
+                  minimum: 1
+                launch_instance_token:
+                  type: string
+                  format: uuid
+      responses:
+        "200":
+          description: Conditional stop result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  profile_id: { type: string }
+                  stopped: { type: boolean }
+                  pid: { type: integer, format: int64 }
+        "400":
+          description: PID or launch-instance token is malformed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: The tracked PID or launch-instance token no longer matches.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /profiles/{id}/cookies:
     get:
@@ -522,6 +674,16 @@ paths:
                   renamed_to: { type: string }
                   profiles: { type: integer, description: Profiles retagged. }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: A target browser is running or another profile lifecycle operation is in progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: Profile inventory or atomic write failed; the error reports any partial progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
     delete:
       tags: [Folders]
       summary: Delete a folder
@@ -550,6 +712,16 @@ paths:
                   delete_profiles: { type: boolean }
                   profiles: { type: integer, description: Profiles affected. }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: A target browser is running or another profile lifecycle operation is in progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: Profile inventory, delete, or atomic write failed; the error reports any partial progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /folders/{folder}/profiles:
     post:
@@ -575,11 +747,16 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ProfileMeta" }
         "400":
-          description: Missing/!object `fingerprint`, or an unparseable proxy string.
+          description: Missing/!object `fingerprint`, invalid/reserved/duplicate profile name, or an unparseable proxy string.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: Another profile create/edit/import operation is in progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /fingerprints:
     get:
@@ -691,6 +868,41 @@ components:
       description: Missing or invalid Bearer token.
 
   schemas:
+    StartupConfigRequest:
+      type: object
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+          description: Register or remove ShardX Launcher for the current user's desktop sign-in.
+        start_minimized:
+          type: boolean
+          default: true
+          description: Keep the main window hidden in the system tray for startup launches.
+
+    StartupStatus:
+      type: object
+      required:
+        - supported
+        - configured
+        - registered
+        - matches_configuration
+        - start_minimized
+        - launched_for_autostart
+        - api_enabled
+        - api_mode
+        - mcp_mode
+      properties:
+        supported: { type: boolean, example: true }
+        configured: { type: boolean, description: Saved launch-at-login preference. }
+        registered: { type: boolean, description: Operating-system observed registration state. }
+        matches_configuration: { type: boolean }
+        start_minimized: { type: boolean }
+        launched_for_autostart: { type: boolean }
+        api_enabled: { type: boolean }
+        api_mode: { type: string, enum: [launcher_embedded] }
+        mcp_mode: { type: string, enum: [client_spawned] }
+
     Error:
       type: object
       properties:
@@ -708,7 +920,8 @@ components:
       description: |
         Native FingerprintConfig. Documented sub-objects are the common
         ones; the object is open and stored verbatim by the create
-        endpoints, so any field present here is round-tripped.
+        endpoints, except `custom_fonts`, which is rejected until the bundled
+        browser engine can prove coherent font rendering and profile isolation.
       additionalProperties: true
       properties:
         name: { type: string }
@@ -762,6 +975,8 @@ components:
           enum: [auto, tcp_only, block]
         noise:
           $ref: "#/components/schemas/NoisePrefs"
+        launch:
+          $ref: "#/components/schemas/LaunchOptions"
         network:
           type: object
           properties:
@@ -807,6 +1022,23 @@ components:
           type: integer
           description: Per-profile entropy; 0 = derive automatically.
 
+    LaunchOptions:
+      type: object
+      description: |
+        Per-profile launch customizations. The Launcher validates these at
+        launch time with a conservative switch allowlist and refuses isolation,
+        proxy, fingerprint-profile, CDP, and extension-loader override switches.
+      properties:
+        args:
+          type: array
+          items: { type: string }
+          description: Safe Chromium switches, one full `--switch[=value]` per entry.
+          example: ["--mute-audio", "--window-size=1200,900"]
+        extension_dirs:
+          type: array
+          items: { type: string }
+          description: Absolute unpacked extension directories.
+
     CreateProfileRequest:
       type: object
       required: [fingerprint]
@@ -833,6 +1065,8 @@ components:
         fingerprint:
           allOf: [{ $ref: "#/components/schemas/Fingerprint" }]
           description: Stored verbatim. Get one from /fingerprint/new and edit as needed.
+        launch:
+          $ref: "#/components/schemas/LaunchOptions"
 
     EditProfileRequest:
       type: object
@@ -862,6 +1096,13 @@ components:
         proxy:
           type: string
           description: Inline proxy string (not saved to the store).
+        noise:
+          allOf: [{ $ref: "#/components/schemas/NoisePrefs" }]
+          description: |
+            Per-vector noise override for the temporary profile; seed 0 is
+            derived from the temporary profile id.
+        launch:
+          $ref: "#/components/schemas/LaunchOptions"
         name: { type: string }
         folder: { type: string }
 

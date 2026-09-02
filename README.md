@@ -167,6 +167,8 @@ across iframes, web workers, devtools and headless inspection.
   [docs.proxyshard.com/eng/shardx-launcher-api](https://docs.proxyshard.com/eng/shardx-launcher-api/binding-and-lifecycle?fallback=true&utm_source=shardx&utm_medium=referral&utm_campaign=shardx-launcher),
   raw schema in [openapi.yaml](openapi.yaml). Create / start / stop
   profiles and get a CDP WebSocket URL programmatically.
+* **Launch at sign-in** — optional per-user startup entry keeps the
+  Launcher and embedded Automation API ready in the system tray.
 * **MCP server bundled** — drop into Claude Desktop / IDE for
   natural-language profile orchestration.
 * **Cookie I/O** — import / export the profile's Chromium Cookies
@@ -363,7 +365,9 @@ and hit *Start*. The launcher takes care of:
 Bulk import / export, folders, tags, pin-to-top, clone, cookie
 import / export (Chromium SQLite v10 / DPAPI), and a fingerprint
 editor that randomises coherent hardware (CPU ↔ RAM ↔ platform version)
-are all in the workspace.
+are all in the workspace. Enable *Settings → Startup & background
+services* to start the Launcher and embedded API at desktop sign-in,
+optionally without showing the main window.
 
 ### 2. Local automation API
 
@@ -395,10 +399,10 @@ curl -s -X POST "$BASE/profiles/win-rtx4060/stop" \
      -H "Authorization: Bearer $TOKEN"
 ```
 
-Endpoints cover profiles (create / edit / delete / start / stop / list
-running), proxies (add / delete / list), fingerprints (generate, list
-library), folders, cookies (export / import) and a fingerprint
-generator — full list in the OpenAPI file.
+Endpoints cover startup status/configuration, profiles (create / edit /
+delete / start / stop / list running), proxies (add / delete / list),
+fingerprints (generate, list library), folders, cookies (export / import)
+and a fingerprint generator — full list in the OpenAPI file.
 
 ### 3. MCP server
 
@@ -412,9 +416,10 @@ language model can:
 * navigate / click / type / wait / screenshot in a live ShardX
   profile, with the profile auto-starting when needed.
 
-The app doesn't run the server itself — open *Settings → MCP server →
-Download MCP server*, pick a folder, then `npm install` and register
-with your MCP client. Full setup, env vars and tool list in
+The Launcher startup entry keeps its embedded API available. MCP itself
+remains a stdio process spawned on demand by your MCP client — open
+*Settings → MCP server → Download MCP server*, pick a folder, then
+`npm install` and register it. Full setup, env vars and tool list in
 **[mcp/README.md](mcp/README.md)**.
 
 Minimal stdio registration:

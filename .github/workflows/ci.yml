@@ -1,0 +1,143 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-sdk:
+    runs-on: ubuntu-22.04
+    name: Rust SDK stable and MSRV
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Set up Rust SDK MSRV
+        uses: dtolnay/rust-toolchain@1.74.1
+
+      - name: Rust SDK stable checks
+        run: |
+          cargo +stable test --manifest-path sdks/rust/Cargo.toml --all-features
+          cargo +stable test --manifest-path sdks/rust/Cargo.toml --no-default-features
+          cargo +stable clippy --manifest-path sdks/rust/Cargo.toml --all-targets --all-features -- -D warnings
+          cargo +stable clippy --manifest-path sdks/rust/Cargo.toml --all-targets --no-default-features -- -D warnings
+
+      - name: Rust SDK RustSec audit
+        run: |
+          cargo +stable install cargo-audit --locked --version 0.22.2
+          cargo +stable audit --file sdks/rust/Cargo.lock
+
+      - name: Rust SDK MSRV checks
+        env:
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
+        run: |
+          rm -f sdks/rust/Cargo.lock
+          cargo +stable generate-lockfile --manifest-path sdks/rust/Cargo.toml
+          cargo +1.74.1 test --locked --manifest-path sdks/rust/Cargo.toml --all-features
+          cargo +1.74.1 test --locked --manifest-path sdks/rust/Cargo.toml --no-default-features
+
+  checks:
+    runs-on: ubuntu-22.04
+    name: frontend, Rust, and MCP checks
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Set up Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Tauri build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            patchelf
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Launcher UI regression tests
+        id: e2e
+        run: npm run test:e2e
+
+      - name: Upload UI failure diagnostics
+        if: failure() && steps.e2e.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: launcher-e2e-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Install MCP dependencies
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+          PATCHRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm ci --prefix mcp
+
+      - name: MCP tests
+        run: npm test --prefix mcp
+
+      - name: MCP release manifest tests
+        run: npm run test:release-package
+
+      - name: MCP release package smoke
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+          PATCHRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: |
+          package_root="$RUNNER_TEMP/ShardX-MCP"
+          archive="$RUNNER_TEMP/ShardX-MCP.tar.gz"
+          verify_root="$RUNNER_TEMP/ShardX-MCP-verify"
+          node scripts/stage-mcp-release.mjs "$package_root"
+          node scripts/stage-mcp-release.mjs --verify-directory "$package_root"
+          tar -czf "$archive" -C "$RUNNER_TEMP" ShardX-MCP
+          tar -tzf "$archive" | node scripts/stage-mcp-release.mjs --verify-archive-entries ShardX-MCP
+          mkdir -p "$verify_root"
+          tar -xzf "$archive" -C "$verify_root"
+          node scripts/stage-mcp-release.mjs --verify-directory "$verify_root/ShardX-MCP"
+          npm ci --prefix "$verify_root/ShardX-MCP"
+          npm test --prefix "$verify_root/ShardX-MCP"
+
+      - name: MCP syntax and helper contract
+        run: |
+          node --check mcp/index.js
+          for helper in health_check startup_status configure_startup find_profile_by_name ensure_profile_started safe_open_url devtools_context cleanup_stale_profile_processes; do
+            grep -q "\"$helper\"" mcp/index.js
+          done
+
+      - name: Version parity
+        run: node -e "const fs=require('fs'); const v={root:require('./package.json').version,mcp:require('./mcp/package.json').version,tauri:require('./src-tauri/tauri.conf.json').version,cargo:fs.readFileSync('./src-tauri/Cargo.toml','utf8').match(/^version\s*=\s*\"([^\"]+)/m)?.[1]}; if(new Set(Object.values(v)).size!==1){console.error(v); process.exit(1)}"
+
+      - name: Rust check
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml

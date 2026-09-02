@@ -11,11 +11,15 @@
 //! use shardx::{ShardX, ShardXOptions, LaunchOptions};
 //!
 //! # async fn run() -> anyhow::Result<()> {
+//! # #[cfg(feature = "control")]
+//! # {
 //! let sdk = ShardX::new(ShardXOptions::default())?;
 //!
-//! // Launch a random profile through a proxy AND attach a CDP browser.
+//! // Create a random persistent profile, then launch it through a proxy and
+//! // attach a CDP browser.
+//! let profile = sdk.create_profile(None).await?;
 //! let session = sdk
-//!     .session(None, LaunchOptions {
+//!     .session(profile, LaunchOptions {
 //!         proxy: Some("socks5://user:pass@host:1080".into()),
 //!         ..Default::default()
 //!     })
@@ -24,6 +28,7 @@
 //! let _page = session.new_page("https://example.com").await?;
 //! // ... drive `session.browser` (chromiumoxide) ...
 //! session.close().await?;
+//! # }
 //! # Ok(())
 //! # }
 //! ```
@@ -45,7 +50,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use rand::seq::SliceRandom;
+use rand::seq::IndexedRandom;
 use serde_json::Value;
 
 pub use auto_resolve::{has_auto_fields, resolve_auto_fields};
@@ -130,10 +135,12 @@ impl ShardX {
     /// Pick a random profile from the library. Auto-installs on first call.
     pub async fn random_profile(&self, platform: Option<&str>) -> Result<Profile> {
         let ids = self.list_profiles(platform).await?;
-        let id = ids.choose(&mut rand::thread_rng()).ok_or_else(|| {
+        let id = ids.choose(&mut rand::rng()).ok_or_else(|| {
             anyhow!(
                 "No bundled profiles found{}.",
-                platform.map(|p| format!(" for platform={p}")).unwrap_or_default()
+                platform
+                    .map(|p| format!(" for platform={p}"))
+                    .unwrap_or_default()
             )
         })?;
         self.library.load(id)
@@ -249,11 +256,7 @@ impl ShardX {
     ///
     /// Requires the default `control` feature.
     #[cfg(feature = "control")]
-    pub async fn session(
-        &self,
-        profile: Profile,
-        mut opts: LaunchOptions,
-    ) -> Result<Session> {
+    pub async fn session(&self, profile: Profile, mut opts: LaunchOptions) -> Result<Session> {
         opts.cdp = true;
         let engine = self.launch(profile, opts).await?;
         if engine.cdp_url.is_none() {

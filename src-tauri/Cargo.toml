@@ -1,6 +1,6 @@
 [package]
 name = "shardx-launcher"
-version = "0.1.10"
+version = "0.2.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -62,5 +62,13 @@ getrandom = "0.2"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",            # HLOCAL + LocalFree live here in 0.59
     "Win32_Security_Cryptography", # CryptProtectData / CryptUnprotectData
+    "Win32_Storage_FileSystem",    # Atomic profile JSON replacement
+    "Win32_System_Recovery",       # RegisterApplicationRestart
 ] }
 
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-autostart = "2"
+tauri-plugin-updater = "2.10.1"
+
+[dev-dependencies]
+minisign-verify = "0.2.5"

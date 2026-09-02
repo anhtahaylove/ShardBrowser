@@ -74,6 +74,11 @@ const FINGERPRINTS_TOP_DIR = "shardx-fingerprints";
 
 export type ProgressCb = (label: string, received: number, total: number) => void;
 
+/** @internal Shared extraction boundary for the two Windows/plain-data archives. */
+export function extractZipArchive(archive: string, destination: string): void {
+  new AdmZip(archive).extractAllTo(destination, true);
+}
+
 interface Manifest {
   browser_etag?: string;
   widevine_etag?: string;
@@ -280,7 +285,7 @@ export class Runtime {
     // on every helper executable.  The result extracts cleanly but
     // fails to launch — GPU helper can't find the framework dylib.
     if (osPlatform() === "win32") {
-      new AdmZip(tmp).extractAllTo(dest, /*overwrite*/ true);
+      extractZipArchive(tmp, dest);
     } else {
       systemUnzip(tmp, dest);
     }
@@ -329,7 +334,7 @@ export class Runtime {
 
     // Fingerprints bundle is plain JSON files — adm-zip is fine here
     // (no symlinks / exec bits to preserve).
-    new AdmZip(tmp).extractAllTo(staging, true);
+    extractZipArchive(tmp, staging);
 
     const srcDir = join(staging, FINGERPRINTS_TOP_DIR);
     const walk = existsSync(srcDir) ? srcDir : staging;

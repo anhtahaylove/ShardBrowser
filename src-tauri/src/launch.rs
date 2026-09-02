@@ -3,13 +3,22 @@ use crate::{
     profile, proxy, settings, store,
 };
 use anyhow::{Context, Result};
+use serde_json::Value;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 /// Launch result: OS pid plus CDP endpoint when remote-debugging is on.
 pub struct LaunchOutcome {
     pub pid: u32,
+    pub launch_instance_token: String,
     pub cdp: Option<process::CdpInfo>,
+}
+
+#[derive(Default)]
+struct LaunchOptions {
+    args: Vec<String>,
+    extension_dirs: Vec<PathBuf>,
 }
 
 /// Resolve the ShardX executable from settings, runtime cache, or dev guess.
@@ -43,6 +52,7 @@ pub async fn launch_profile(
     enable_cdp: bool,
     headless: bool,
 ) -> Result<LaunchOutcome> {
+    let launch_claim = profile::begin_profile_launch(profile_id)?;
     let bin = resolve_binary()?;
     let stored = profile::load_raw(profile_id)?;
     let udd = profile::user_data_dir(profile_id)?;
@@ -82,6 +92,11 @@ pub async fn launch_profile(
     // Strip `_meta` wrapper and resolve "auto" sentinels before serialising.
     let mut raw = stored.config.clone();
     raw.remove("_meta");
+    let launch_options = parse_launch_options(raw.remove("launch"))
+        .context("invalid launch options")?;
+    // Preserve legacy profile data in storage, but do not hand it to the
+    // closed-source engine until the coherence gate in the design note passes.
+    remove_unavailable_custom_fonts(&mut raw);
     resolve_auto_fields(&mut raw, bound_proxy.as_ref()).await;
     let json = serde_json::to_string(&raw).context("serialize profile")?;
 
@@ -98,6 +113,15 @@ pub async fn launch_profile(
     cmd.arg(format!("--fingerprint-profile={}", fp_file.display()));
     cmd.arg(format!("--user-data-dir={}", udd.display()));
     cmd.arg("--no-first-run");
+
+    for arg in &launch_options.args {
+        cmd.arg(arg);
+    }
+    if !launch_options.extension_dirs.is_empty() {
+        let joined = join_comma_paths(&launch_options.extension_dirs);
+        cmd.arg(format!("--disable-extensions-except={joined}"));
+        cmd.arg(format!("--load-extension={joined}"));
+    }
 
     // Disable WebGPU when profile omits `webgpu` (matches real Linux Chrome).
     let webgpu_present = raw
@@ -200,22 +224,32 @@ pub async fn launch_profile(
     cmd.stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
         // 0x08000000 = CREATE_NO_WINDOW — suppress the brief console flash
         // when a Tauri GUI app spawns the engine binary.
         cmd.creation_flags(0x08000000);
     }
-    let child = cmd.spawn().context("spawn ShardX")?;
-    let pid = Tracker::shared().track(profile_id.to_string(), child, stored.meta.temporary);
-
-    profile::touch_launched(profile_id, None)?;
+    let mut child = cmd.spawn().context("spawn ShardX")?;
+    if let Err(error) = profile::touch_launched(profile_id, None) {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        return Err(error).context("persist launch metadata before tracking ShardX");
+    }
+    let tracked = Tracker::shared().track(profile_id.to_string(), child, stored.meta.temporary);
+    drop(launch_claim);
 
     let cdp = if enable_cdp {
         match read_devtools_endpoint(&udd).await {
             Some(c) => {
                 eprintln!("[launcher] CDP ready for {profile_id}: {}", c.web_socket_debugger_url);
-                Tracker::shared().set_cdp(profile_id, c.clone());
-                Some(c)
+                if Tracker::shared().set_cdp_if_instance(
+                    profile_id,
+                    &tracked.launch_instance_token,
+                    c.clone(),
+                ) {
+                    Some(c)
+                } else {
+                    None
+                }
             }
             None => {
                 eprintln!("[launcher] CDP: DevToolsActivePort not found within timeout");
@@ -226,7 +260,191 @@ pub async fn launch_profile(
         None
     };
 
-    Ok(LaunchOutcome { pid, cdp })
+    Ok(LaunchOutcome {
+        pid: tracked.pid,
+        launch_instance_token: tracked.launch_instance_token,
+        cdp,
+    })
+}
+
+fn parse_launch_options(value: Option<Value>) -> Result<LaunchOptions> {
+    let Some(value) = value else {
+        return Ok(LaunchOptions::default());
+    };
+    let obj = value
+        .as_object()
+        .context("`launch` must be an object")?;
+    Ok(LaunchOptions {
+        args: parse_launch_args(obj.get("args"))?,
+        extension_dirs: parse_dirs(obj.get("extension_dirs"), "launch.extension_dirs")?,
+    })
+}
+
+fn remove_unavailable_custom_fonts(raw: &mut serde_json::Map<String, Value>) -> bool {
+    raw.remove("custom_fonts").is_some()
+}
+
+fn parse_launch_args(value: Option<&Value>) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
+    for arg in parse_string_list(value, "launch.args", 256)? {
+        let arg = sanitize_launch_arg(&arg)?;
+        if seen.insert(arg.clone()) {
+            out.push(arg);
+        }
+    }
+    Ok(out)
+}
+
+fn parse_string_list(value: Option<&Value>, label: &str, max_len: usize) -> Result<Vec<String>> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let arr = value.as_array().with_context(|| format!("`{label}` must be an array"))?;
+    let mut out = Vec::new();
+    for item in arr {
+        let s = item
+            .as_str()
+            .with_context(|| format!("`{label}` entries must be strings"))?
+            .trim();
+        if s.is_empty() {
+            continue;
+        }
+        if s.len() > max_len || s.chars().any(|c| c.is_control()) {
+            anyhow::bail!("`{label}` contains an invalid string");
+        }
+        out.push(s.to_string());
+    }
+    Ok(out)
+}
+
+fn parse_dirs(value: Option<&Value>, label: &str) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
+    for s in parse_string_list(value, label, 1024)? {
+        if s.contains(',') {
+            anyhow::bail!("`{label}` entries cannot contain commas");
+        }
+        let path = PathBuf::from(&s);
+        if !path.is_absolute() {
+            anyhow::bail!("`{label}` entries must be absolute paths");
+        }
+        if !path.is_dir() {
+            anyhow::bail!("`{label}` entry is not a directory: {s}");
+        }
+        let canonical = path.canonicalize().with_context(|| format!("canonicalize {s}"))?;
+        let key = canonical.to_string_lossy().to_string();
+        if seen.insert(key) {
+            out.push(canonical);
+        }
+    }
+    Ok(out)
+}
+
+fn sanitize_launch_arg(arg: &str) -> Result<String> {
+    if !arg.starts_with("--") || arg == "--" {
+        anyhow::bail!("launch arg `{arg}` must start with `--`");
+    }
+    if arg.len() > 512 || arg.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        anyhow::bail!("launch arg contains invalid characters");
+    }
+    let name = arg[2..]
+        .split(['=', ' '])
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if !SAFE_LAUNCH_SWITCHES.contains(&name.as_str()) {
+        anyhow::bail!("launch switch `--{name}` is not in the safe allowlist");
+    }
+    Ok(arg.trim().to_string())
+}
+
+const SAFE_LAUNCH_SWITCHES: &[&str] = &[
+    "allow-file-access-from-files",
+    "autoplay-policy",
+    "disable-background-networking",
+    "disable-background-timer-throttling",
+    "disable-backgrounding-occluded-windows",
+    "disable-breakpad",
+    "disable-component-update",
+    "disable-dev-shm-usage",
+    "disable-gpu-watchdog",
+    "disable-notifications",
+    "disable-popup-blocking",
+    "disable-renderer-backgrounding",
+    "force-color-profile",
+    "ignore-certificate-errors",
+    "mute-audio",
+    "start-maximized",
+    "use-fake-device-for-media-stream",
+    "use-fake-ui-for-media-stream",
+    "window-position",
+    "window-size",
+];
+
+fn join_comma_paths(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+#[cfg(test)]
+mod launch_option_tests {
+    use super::{parse_launch_options, remove_unavailable_custom_fonts};
+    use serde_json::json;
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("shardx-launch-test-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn launch_options_allow_safe_args_and_extension_dirs() {
+        let ext = temp_dir("extension");
+        let value = json!({
+            "args": ["--mute-audio", "--window-size=1200,900", "--mute-audio"],
+            "extension_dirs": [ext.to_string_lossy()]
+        });
+
+        let opts = parse_launch_options(Some(value)).unwrap();
+
+        assert_eq!(opts.args, vec!["--mute-audio", "--window-size=1200,900"]);
+        assert_eq!(opts.extension_dirs.len(), 1);
+    }
+
+    #[test]
+    fn launch_options_reject_profile_isolation_switches() {
+        let value = json!({ "args": ["--user-data-dir=C:\\tmp\\other"] });
+
+        assert!(parse_launch_options(Some(value)).is_err());
+    }
+
+    #[test]
+    fn launch_options_reject_embedded_whitespace() {
+        let value = json!({ "args": ["--mute-audio --user-data-dir=C:\\tmp\\other"] });
+
+        assert!(parse_launch_options(Some(value)).is_err());
+    }
+
+    #[test]
+    fn legacy_custom_fonts_are_not_handed_to_the_engine() {
+        let mut raw = json!({
+            "custom_fonts": { "mode": "append", "dirs": ["C:\\fonts"] },
+            "navigator": { "platform": "Win32" }
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        assert!(remove_unavailable_custom_fonts(&mut raw));
+        assert!(!raw.contains_key("custom_fonts"));
+        assert_eq!(raw["navigator"]["platform"], "Win32");
+    }
 }
 
 /// Poll `<udd>/DevToolsActivePort` for ~6s; line 1 = port, line 2 = ws path.

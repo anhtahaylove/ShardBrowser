@@ -1,0 +1,41 @@
+[package]
+name = "shardx-core"
+version = "0.1.0"
+edition = "2021"
+description = "Shared ShardX logic: Chromium os_crypt cookie/secret encryption and portable user-data-dir snapshots (Mac/Win/Linux)."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+sha2 = "0.10"
+rusqlite = { version = "0.32", features = ["bundled"] }
+tar = "0.4"
+flate2 = "1"
+
+# v0.2 team/fleet sync + encrypted profile backup. Versions are pinned exactly:
+# these crates define wire-visible behaviour (AEAD suite, signature encoding),
+# so a silent minor bump could change bytes that signatures commit to.
+chacha20poly1305 = { version = "=0.11.0", features = ["alloc"] }
+ed25519-dalek = { version = "=3.0.0" }
+zeroize = { version = "=1.8.2", features = ["derive"] }
+hpke = { version = "=0.14.0", default-features = false, features = ["alloc", "x25519", "chacha", "hkdfsha2"] }
+getrandom04 = { package = "getrandom", version = "=0.4.3" }
+
+# POSIX os_crypt: AES-128-CBC with a fixed IV.
+[target.'cfg(not(windows))'.dependencies]
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+pbkdf2 = "0.12"
+sha1 = "0.10"
+
+# Windows os_crypt: AES-256-GCM with a DPAPI-unwrapped key from Local State.
+[target.'cfg(windows)'.dependencies]
+aes-gcm = "0.10"
+getrandom = "0.2"
+base64 = "0.22"
+serde_json = "1"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+] }

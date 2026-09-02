@@ -13,11 +13,45 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
+import os from "node:os";
+import path from "node:path";
 import { z } from "zod";
 import { chromium } from "patchright";
 
-const API = (process.env.SHARDX_API || "http://127.0.0.1:40325").replace(/\/+$/, "");
-const TOKEN = process.env.SHARDX_TOKEN || "";
+import { classifyCloudflareChallenge, waitForChallengeClear } from "./challenge.js";
+import {
+  acquireSafeOpenProfile,
+  navigateActivePage,
+  redactLaunchInstanceToken,
+  runSafeOpenLifecycle,
+} from "./safe-open-lifecycle.js";
+import {
+  clearVerificationCheckpoint,
+  notifyVerificationRequired,
+  readVerificationCheckpoint,
+  saveVerificationCheckpoint,
+} from "./verification-checkpoint.js";
+
+function readWindowsUserEnv(name) {
+  if (process.platform !== "win32") return "";
+  try {
+    const out = execFileSync("reg", ["query", "HKCU\\Environment", "/v", name], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
+    });
+    const line = out.split(/\r?\n/).find((l) => l.trim().startsWith(name));
+    return line?.trim().split(/\s{2,}/).slice(2).join(" ").trim() || "";
+  } catch {
+    return "";
+  }
+}
+
+const env = (name) => process.env[name] || readWindowsUserEnv(name);
+const API = (env("SHARDX_API") || "http://127.0.0.1:40325").replace(/\/+$/, "");
+const TOKEN = env("SHARDX_TOKEN") || "";
 
 // ---------- HTTP API helper ----------
 
@@ -35,7 +69,9 @@ async function api(path, { method = "GET", body } = {}) {
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
   if (!res.ok) {
     const msg = data && data.error ? data.error : `HTTP ${res.status}`;
-    throw new Error(`${method} ${path} → ${msg}`);
+    const error = new Error(`${method} ${path} → ${msg}`);
+    error.status = res.status;
+    throw error;
   }
   return data;
 }
@@ -57,7 +93,7 @@ async function cdpEndpoint(profileId, { autostart = true, headless = false } = {
   }
   const cdp = entry?.cdp;
   if (!cdp?.http_url) {
-    throw new Error(`profile ${profileId} is not running with CDP (start it first)`);
+    throw new Error(`profile ${profileId} is not running with CDP (stop/restart it through MCP or the Automation API to enable DevTools)`);
   }
   return cdp;
 }
@@ -89,6 +125,94 @@ async function pageFor(profileId, opts) {
   return p;
 }
 
+async function existingPageFor(profileId, opts) {
+  const browser = await browserFor(profileId, opts);
+  const context = browser.contexts()[0];
+  if (!context) return null;
+  const current = activePage.get(profileId);
+  if (current && !current.isClosed() && current.context() === context) return current;
+  const page = context.pages().find((candidate) => !candidate.url().startsWith("devtools://")) || null;
+  if (page) activePage.set(profileId, page);
+  return page;
+}
+
+async function challengeStatusForPage(page, response) {
+  const [title, bodyText, turnstileVisible] = await Promise.all([
+    page.title().catch(() => ""),
+    page.locator("body").innerText({ timeout: 2000 }).catch(() => ""),
+    page
+      .locator('iframe[src*="challenges.cloudflare.com"], .cf-turnstile')
+      .first()
+      .isVisible()
+      .catch(() => false),
+  ]);
+  return {
+    ...classifyCloudflareChallenge({
+      headers: response?.headers?.() || {},
+      title,
+      bodyText,
+      turnstileVisible,
+    }),
+    url: page.isClosed() ? "" : page.url(),
+    title,
+    manual_action_required: false,
+  };
+}
+
+async function updateChallengeStatus(profileId, page, response, operation = "challenge_check") {
+  const status = await challengeStatusForPage(page, response);
+  status.manual_action_required = status.detected;
+  try {
+    if (status.detected) {
+      const saved = await saveVerificationCheckpoint(profileId, status, { operation });
+      status.checkpoint = saved.checkpoint;
+      status.windows_notification_dispatched = saved.created && notifyVerificationRequired();
+    } else {
+      await clearVerificationCheckpoint(profileId);
+      status.checkpoint = null;
+      status.windows_notification_dispatched = false;
+    }
+  } catch {
+    // Filesystem or notification failures must not interrupt challenge handoff.
+    status.checkpoint = null;
+    status.windows_notification_dispatched = false;
+  }
+  try {
+    await api(`/profiles/${profileId}/verification-status`, {
+      method: "POST",
+      body: {
+        required: status.detected,
+        kind: status.kind,
+      },
+    });
+    status.launcher_status_reported = true;
+  } catch {
+    // Challenge detection must keep working with older Launcher builds that
+    // do not expose the optional verification-status handoff endpoint.
+    status.launcher_status_reported = false;
+  }
+  return status;
+}
+
+async function waitForVerification(profileId, page, initialChallenge, timeoutMs, operation) {
+  await page.bringToFront().catch(() => {});
+  const result = await waitForChallengeClear(
+    initialChallenge,
+    () => challengeStatusForPage(page),
+    { timeoutMs, isClosed: () => page.isClosed() },
+  );
+  if (page.isClosed()) {
+    return { ...result, page_closed: true, resumed: false, timed_out: false };
+  }
+  const challenge = await updateChallengeStatus(profileId, page, undefined, operation);
+  return {
+    ...result,
+    challenge,
+    timed_out: challenge.detected && result.timed_out,
+    resumed: result.waited && !challenge.detected,
+  };
+}
+
 // Locator with a default timeout, shared by element actions.
 const loc = (page, selector) => page.locator(selector).first();
 const TIMEOUT = 15000;
@@ -99,15 +223,609 @@ const text = (v) => ({
   content: [{ type: "text", text: typeof v === "string" ? v : JSON.stringify(v, null, 2) }],
 });
 
-const server = new McpServer({ name: "shardx", version: "0.1.0" });
+function profileSummary(profile, match) {
+  return {
+    id: profile.id,
+    name: profile.name,
+    folder: profile.folder,
+    running: !!profile.running,
+    cdp: profile.cdp,
+    ...(match ? { match } : {}),
+  };
+}
+
+function matchProfile(profile, query, exact = false) {
+  const q = query.trim().toLowerCase();
+  if (!q) return null;
+  const id = String(profile.id || "");
+  const name = String(profile.name || "");
+  const lower = name.toLowerCase();
+  if (id === query) return "id";
+  if (exact ? lower === q : lower.includes(q)) return exact ? "name_exact" : "name";
+  return null;
+}
+
+async function findProfiles(query, { exact = false, limit = 10 } = {}) {
+  const profiles = await api("/profiles");
+  const matches = [];
+  for (const profile of profiles) {
+    const match = matchProfile(profile, query, exact);
+    if (match) matches.push(profileSummary(profile, match));
+    if (matches.length >= limit) break;
+  }
+  return matches;
+}
+
+async function resolveProfile({ profile_id, profile_query, exact = false }) {
+  if (profile_id) return { id: profile_id, match: "id" };
+  const matches = await findProfiles(profile_query || "", { exact, limit: 2 });
+  if (matches.length !== 1) {
+    throw new Error(`expected exactly 1 profile match, got ${matches.length}`);
+  }
+  return matches[0];
+}
+
+function assertHttpUrl(url) {
+  const parsed = new URL(url);
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    throw new Error("safe_open_url only supports http(s) URLs");
+  }
+  return parsed.href;
+}
+
+async function cdpJson(cdp, path) {
+  const res = await fetch(new URL(path, cdp.http_url).href);
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(`CDP ${path} → HTTP ${res.status}`);
+  }
+  return data;
+}
+
+function targetSummary(cdp, target) {
+  const frontend = target.devtoolsFrontendUrl
+    ? new URL(target.devtoolsFrontendUrl, cdp.http_url).href
+    : null;
+  return {
+    id: target.id,
+    type: target.type,
+    title: target.title || "",
+    url: target.url || "",
+    attached: !!target.attached,
+    web_socket_debugger_url: target.webSocketDebuggerUrl || null,
+    devtools_frontend_url: frontend,
+  };
+}
+
+function launcherDataDir() {
+  if (process.platform === "win32") {
+    return process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
+  }
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support");
+  }
+  return process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share");
+}
+
+function profileUserDataDir(profileId) {
+  return path.join(launcherDataDir(), "shardx-launcher", "user-data", profileId);
+}
+
+function normalizeProcessText(value) {
+  return String(value || "").toLowerCase().replace(/\\/g, "/");
+}
+
+function parseProcessJson(out) {
+  const trimmed = out.trim();
+  if (!trimmed) return [];
+  const parsed = JSON.parse(trimmed);
+  return Array.isArray(parsed) ? parsed : [parsed];
+}
+
+function listProcesses() {
+  if (process.platform === "win32") {
+    const out = execFileSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress",
+      ],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true },
+    );
+    return parseProcessJson(out).map((p) => ({
+      pid: Number(p.ProcessId),
+      parent_pid: Number(p.ParentProcessId),
+      exe: p.ExecutablePath || "",
+      command: p.CommandLine || "",
+    }));
+  }
+  const out = execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" });
+  return out
+    .split(/\r?\n/)
+    .map((line) => line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/))
+    .filter(Boolean)
+    .map((m) => ({ pid: Number(m[1]), parent_pid: Number(m[2]), exe: "", command: m[3] }));
+}
+
+function descendantPids(processes, rootPids) {
+  const byParent = new Map();
+  for (const proc of processes) {
+    if (!Number.isFinite(proc.pid) || !Number.isFinite(proc.parent_pid)) continue;
+    const siblings = byParent.get(proc.parent_pid) || [];
+    siblings.push(proc.pid);
+    byParent.set(proc.parent_pid, siblings);
+  }
+
+  const descendants = new Set();
+  const stack = [...rootPids];
+  while (stack.length) {
+    const parentPid = stack.pop();
+    for (const childPid of byParent.get(parentPid) || []) {
+      if (descendants.has(childPid)) continue;
+      descendants.add(childPid);
+      stack.push(childPid);
+    }
+  }
+  return descendants;
+}
+
+async function staleProfileProcesses(profileId) {
+  const running = await api("/running");
+  const tracked = new Set(
+    running
+      .filter((r) => r.profile_id === profileId)
+      .map((r) => Number(r.pid))
+      .filter((pid) => Number.isFinite(pid)),
+  );
+  const userDataDir = normalizeProcessText(profileUserDataDir(profileId));
+  const processes = listProcesses();
+  const trackedDescendants = descendantPids(processes, tracked);
+  const stale = processes
+    .filter((p) => Number.isFinite(p.pid))
+    .filter((p) => !tracked.has(p.pid))
+    .filter((p) => !trackedDescendants.has(p.pid))
+    .filter((p) => {
+      const cmd = normalizeProcessText(p.command);
+      return cmd.includes("--user-data-dir") && cmd.includes(userDataDir);
+    })
+    .map((p) => ({ pid: p.pid, parent_pid: p.parent_pid }));
+  return { running, tracked_pids: [...tracked], stale };
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function stopStartedProfile(profileId, expectedPid, launchInstanceToken) {
+  if (!Number.isInteger(expectedPid) || expectedPid <= 0) {
+    throw new Error(`cannot stop profile ${profileId} without an owned PID`);
+  }
+  if (typeof launchInstanceToken !== "string" || !launchInstanceToken.trim()) {
+    throw new Error(`cannot stop profile ${profileId} without a launch-instance token`);
+  }
+  let stopError = null;
+  try {
+    await api(`/profiles/${profileId}/stop-if-launch-instance`, {
+      method: "POST",
+      body: {
+        expected_pid: expectedPid,
+        launch_instance_token: launchInstanceToken,
+      },
+    });
+  } catch (error) {
+    if (error.status === 409) throw error;
+    stopError = error;
+  }
+  browsers.delete(profileId);
+  activePage.delete(profileId);
+  let readError = null;
+  for (let i = 0; i < 60; i++) {
+    try {
+      const running = await api("/running");
+      const current = running.find((item) => item.profile_id === profileId);
+      if (!current || current.pid !== expectedPid) return;
+      readError = null;
+    } catch (error) {
+      readError = error;
+    }
+    await sleep(250);
+  }
+  const details = [stopError, readError]
+    .filter(Boolean)
+    .map((error) => error.message)
+    .join("; ");
+  throw new Error(`owned profile process ${expectedPid} did not stop within 15 seconds${details ? `: ${details}` : ""}`);
+}
+
+const MCP_VERSION = createRequire(import.meta.url)("./package.json").version;
+const server = new McpServer({ name: "shardx", version: MCP_VERSION });
 
 // ================= API tools =================
+
+server.tool(
+  "health_check",
+  "Check that the ShardX Launcher API is reachable and, when SHARDX_TOKEN is set, authenticated.",
+  {},
+  async () => {
+    const health = await api("/health");
+    if (!TOKEN) {
+      return text({
+        ok: false,
+        api: API,
+        launcher: health,
+        token_present: false,
+        authenticated: false,
+      });
+    }
+    try {
+      const [profiles, running, startup] = await Promise.all([
+        api("/profiles"),
+        api("/running"),
+        api("/startup").catch((error) => ({ available: false, error: String(error?.message || error) })),
+      ]);
+      return text({
+        ok: true,
+        api: API,
+        launcher: health,
+        token_present: true,
+        authenticated: true,
+        profiles_count: profiles.length,
+        running_count: running.length,
+        startup,
+      });
+    } catch (error) {
+      return text({
+        ok: false,
+        api: API,
+        launcher: health,
+        token_present: true,
+        authenticated: false,
+        error: String(error?.message || error),
+      });
+    }
+  },
+);
+
+server.tool(
+  "startup_status",
+  "Read whether ShardX Launcher is configured and registered to start at desktop sign-in. Also reports that the API is embedded and MCP is client-spawned.",
+  {},
+  async () => text(await api("/startup")),
+);
+
+server.tool(
+  "configure_startup",
+  "Enable or disable ShardX Launcher at desktop sign-in for the current user. The embedded API starts with the Launcher; MCP remains client-spawned. Optionally choose whether the window stays in the system tray.",
+  {
+    enabled: z.boolean(),
+    start_minimized: z.boolean().optional(),
+  },
+  async ({ enabled, start_minimized }) =>
+    text(await api("/startup", {
+      method: "PUT",
+      body: {
+        enabled,
+        ...(start_minimized !== undefined ? { start_minimized } : {}),
+      },
+    })),
+);
 
 server.tool(
   "list_profiles",
   "List persistent profiles with their running state and CDP endpoint.",
   {},
   async () => text(await api("/profiles")),
+);
+
+server.tool(
+  "find_profile_by_name",
+  "Find profiles by id or profile name. Returns safe profile summaries, not full fingerprint config.",
+  {
+    query: z.string(),
+    exact: z.boolean().optional(),
+    limit: z.number().int().positive().max(50).optional(),
+  },
+  async ({ query, exact, limit }) =>
+    text(await findProfiles(query, { exact: !!exact, limit: limit || 10 })),
+);
+
+server.tool(
+  "ensure_profile_started",
+  "Start a profile only if needed and return its CDP endpoint. Accepts a profile id or a unique profile name/query.",
+  {
+    profile_id: z.string().optional(),
+    profile_query: z.string().optional(),
+    exact: z.boolean().optional(),
+    headless: z.boolean().optional(),
+  },
+  async ({ profile_id, profile_query, exact, headless }) => {
+    const profile = await resolveProfile({ profile_id, profile_query, exact });
+    const running = await api("/running");
+    let entry = running.find((r) => r.profile_id === profile.id);
+    if (!entry?.cdp) {
+      const started = await api(`/profiles/${profile.id}/start`, {
+        method: "POST",
+        body: { headless: !!headless },
+      });
+      entry = { profile_id: profile.id, cdp: started.cdp, started: true };
+    }
+    return text({
+      profile: profileSummary(profile),
+      running: true,
+      started: !!entry.started,
+      cdp: entry.cdp,
+    });
+  },
+);
+
+server.tool(
+  "safe_open_url",
+  "Resolve/start a profile, open an http(s) URL in the MCP-active tab, and automatically pause a visible run for manual Cloudflare verification before resuming. By default it restores a profile started by this call; set keep_running=true when follow-up tab/screenshot/ARIA/network tools in the same MCP process must use that tab, then call stop_profile. Never clicks, solves, or bypasses challenge controls.",
+  {
+    profile_id: z.string().optional(),
+    profile_query: z.string().optional(),
+    exact: z.boolean().optional(),
+    url: z.string(),
+    headless: z.boolean().optional(),
+    keep_running: z.boolean().optional(),
+    verification_timeout_ms: z.number().int().min(0).max(600000).optional(),
+  },
+  async ({ profile_id, profile_query, exact, url, headless, keep_running, verification_timeout_ms }) => {
+    // Reject non-http(s) input before resolving/starting a profile so an
+    // invalid navigation request has no browser-process side effect.
+    const targetUrl = assertHttpUrl(url);
+    const profile = await resolveProfile({ profile_id, profile_query, exact });
+    const acquire = () =>
+      acquireSafeOpenProfile({
+        profileId: profile.id,
+        headless: !!headless,
+        listRunning: () => api("/running"),
+        getLauncherHealth: () => api("/health"),
+        startProfile: ({ headless: startHeadless }) =>
+          api(`/profiles/${profile.id}/start`, {
+            method: "POST",
+            body: { headless: startHeadless },
+          }),
+        cleanupStartedProfile: (ownedPid, ownedLaunchInstanceToken) =>
+          stopStartedProfile(profile.id, ownedPid, ownedLaunchInstanceToken),
+      });
+    const open = async () => {
+      const page = await pageFor(profile.id, { autostart: false, headless: !!headless });
+      const response = await navigateActivePage({
+        page,
+        profileId: profile.id,
+        targetUrl,
+        activePages: activePage,
+      });
+      let challenge = await updateChallengeStatus(profile.id, page, response, "safe_open_url");
+      let verification = null;
+      const timeoutMs = verification_timeout_ms ?? (headless ? 0 : 120000);
+      if (challenge.detected && timeoutMs > 0) {
+        const wait = await waitForVerification(profile.id, page, challenge, timeoutMs, "safe_open_url");
+        if (wait.page_closed) throw new Error("verification page closed while waiting");
+        challenge = wait.challenge;
+        verification = {
+          paused: wait.waited,
+          resumed: wait.resumed,
+          timed_out: wait.timed_out,
+          elapsed_ms: wait.elapsed_ms,
+        };
+      }
+      return {
+        url: page.url(),
+        title: await page.title(),
+        challenge,
+        verification,
+      };
+    };
+    const { result, selfHealed: self_healed, lifecycle } = await runSafeOpenLifecycle({
+      acquire,
+      open,
+      stopStartedProfile: (ownedPid, ownedLaunchInstanceToken) =>
+        stopStartedProfile(profile.id, ownedPid, ownedLaunchInstanceToken),
+      getRunningProfile: async () =>
+        (await api("/running")).find((item) => item.profile_id === profile.id) || null,
+      keepRunning: !!keep_running,
+    });
+    return text({
+      profile: profileSummary(profile),
+      url: result.url,
+      title: result.title,
+      challenge: result.challenge,
+      verification: result.verification,
+      self_healed,
+      lifecycle,
+    });
+  },
+);
+
+server.tool(
+  "challenge_status",
+  "Inspect the current page of a running profile for a Cloudflare interstitial or visible Turnstile widget. Read-only: never starts the profile or interacts with verification controls.",
+  {
+    profile_id: z.string().optional(),
+    profile_query: z.string().optional(),
+    exact: z.boolean().optional(),
+  },
+  async ({ profile_id, profile_query, exact }) => {
+    const profile = await resolveProfile({ profile_id, profile_query, exact });
+    const running = await api("/running");
+    const entry = running.find((item) => item.profile_id === profile.id);
+    if (!entry) {
+      return text({
+        profile: profileSummary(profile),
+        running: false,
+        cdp_ready: false,
+        checked: false,
+        reason: "profile_not_running",
+        challenge: null,
+      });
+    }
+    if (!entry.cdp?.http_url) {
+      return text({
+        profile: profileSummary(profile),
+        running: true,
+        cdp_ready: false,
+        checked: false,
+        reason: "cdp_unavailable",
+        challenge: null,
+      });
+    }
+    const page = await existingPageFor(profile.id, { autostart: false });
+    if (!page) {
+      return text({
+        profile: profileSummary(profile),
+        running: true,
+        cdp_ready: true,
+        checked: false,
+        reason: "no_page",
+        challenge: null,
+      });
+    }
+    return text({
+      profile: profileSummary(profile),
+      running: true,
+      cdp_ready: true,
+      checked: true,
+      challenge: await updateChallengeStatus(profile.id, page, undefined, "challenge_status"),
+    });
+  },
+);
+
+server.tool(
+  "verification_checkpoint",
+  "Read a privacy-minimal persisted checkpoint for a Cloudflare verification handoff. Does not inspect, start, or change the browser profile.",
+  {
+    profile_id: z.string().optional(),
+    profile_query: z.string().optional(),
+    exact: z.boolean().optional(),
+  },
+  async ({ profile_id, profile_query, exact }) => {
+    const profile = await resolveProfile({ profile_id, profile_query, exact });
+    const checkpoint = await readVerificationCheckpoint(profile.id);
+    return text({
+      profile: profileSummary(profile),
+      pending: !!checkpoint,
+      checkpoint,
+      ...(checkpoint
+        ? { next_step: "Bring the visible verification tab to front and call wait_for_human_verification." }
+        : {}),
+    });
+  },
+);
+
+server.tool(
+  "wait_for_human_verification",
+  "Wait for a person to complete a detected Cloudflare verification in an already-running visible profile. Never clicks, solves, or bypasses the challenge.",
+  {
+    profile_id: z.string().optional(),
+    profile_query: z.string().optional(),
+    exact: z.boolean().optional(),
+    timeout_ms: z.number().int().min(1000).max(600000).optional(),
+  },
+  async ({ profile_id, profile_query, exact, timeout_ms }) => {
+    const profile = await resolveProfile({ profile_id, profile_query, exact });
+    const running = await api("/running");
+    const entry = running.find((item) => item.profile_id === profile.id);
+    if (!entry?.cdp?.http_url) {
+      return text({
+        profile: profileSummary(profile),
+        running: !!entry,
+        cdp_ready: false,
+        challenge_cleared: false,
+        waited: false,
+        reason: entry ? "cdp_unavailable" : "profile_not_running",
+        next_step: "Start a visible CDP-enabled profile with ensure_profile_started, then open the target page again.",
+      });
+    }
+
+    const page = await existingPageFor(profile.id, { autostart: false });
+    if (!page) {
+      return text({
+        profile: profileSummary(profile),
+        running: true,
+        cdp_ready: true,
+        challenge_cleared: false,
+        waited: false,
+        reason: "no_page",
+        next_step: "Open the target page in the visible browser, then call this tool again.",
+      });
+    }
+    const initial = await updateChallengeStatus(
+      profile.id,
+      page,
+      undefined,
+      "wait_for_human_verification",
+    );
+    const wait = await waitForVerification(
+      profile.id,
+      page,
+      initial,
+      timeout_ms ?? 120000,
+      "wait_for_human_verification",
+    );
+    if (wait.page_closed) {
+      return text({
+        profile: profileSummary(profile),
+        running: true,
+        cdp_ready: true,
+        challenge_cleared: false,
+        waited: wait.waited,
+        timed_out: false,
+        elapsed_ms: wait.elapsed_ms,
+        reason: "page_closed",
+        challenge: wait.challenge,
+      });
+    }
+    return text({
+      profile: profileSummary(profile),
+      running: true,
+      cdp_ready: true,
+      challenge_cleared: !wait.challenge.detected,
+      waited: wait.waited,
+      timed_out: wait.timed_out,
+      elapsed_ms: wait.elapsed_ms,
+      challenge: wait.challenge,
+      ...(wait.challenge.detected
+        ? { next_step: "Complete verification manually in the visible browser, then call this tool again." }
+        : {}),
+    });
+  },
+);
+
+server.tool(
+  "devtools_context",
+  "Resolve/start a profile and return its CDP endpoint plus /json/list page targets for Chrome DevTools handoff.",
+  {
+    profile_id: z.string().optional(),
+    profile_query: z.string().optional(),
+    exact: z.boolean().optional(),
+    headless: z.boolean().optional(),
+  },
+  async ({ profile_id, profile_query, exact, headless }) => {
+    const profile = await resolveProfile({ profile_id, profile_query, exact });
+    const cdp = await cdpEndpoint(profile.id, { autostart: true, headless: !!headless });
+    const rawTargets = await cdpJson(cdp, "/json/list");
+    const targets = (Array.isArray(rawTargets) ? rawTargets : [])
+      .filter((t) => t.type === "page")
+      .map((t) => targetSummary(cdp, t));
+    const currentPage = activePage.get(profile.id);
+    let current = targets.find((t) => t.url && !t.url.startsWith("devtools://")) || null;
+    if (currentPage && !currentPage.isClosed()) {
+      const url = currentPage.url();
+      const target = targets.find((t) => t.url === url);
+      current = {
+        ...(target || {}),
+        url,
+        title: await currentPage.title().catch(() => target?.title || ""),
+      };
+    }
+    return text({
+      profile: { id: profile.id, name: profile.name, running: true },
+      cdp,
+      targets,
+      current,
+    });
+  },
 );
 
 server.tool(
@@ -136,12 +854,14 @@ server.tool(
     proxy_id: z.string().optional(),
     platform: z.enum(["Windows", "macOS", "Linux"]).optional(),
     fingerprint: z.any().optional(),
+    launch: z.record(z.any()).optional(),
   },
-  async ({ name, notes, folder, proxy, proxy_id, platform, fingerprint }) => {
+  async ({ name, notes, folder, proxy, proxy_id, platform, fingerprint, launch }) => {
     if (!fingerprint) {
       const fp = await api(platform ? `/fingerprint/new/${platform}` : "/fingerprint/new");
       fingerprint = fp.fingerprint;
     }
+    if (launch) fingerprint.launch = launch;
     const path = folder ? `/folders/${encodeURIComponent(folder)}/profiles` : "/profiles";
     const body = { name, notes, proxy, proxy_id, fingerprint };
     if (folder) delete body.folder; // folder comes from the path
@@ -156,6 +876,8 @@ server.tool(
     fingerprint_id: z.string().optional(),
     platform: z.enum(["Windows", "macOS", "Linux"]).optional(),
     proxy: z.string().optional(),
+    noise: z.record(z.any()).optional(),
+    launch: z.record(z.any()).optional(),
     name: z.string().optional(),
     folder: z.string().optional(),
   },
@@ -188,8 +910,13 @@ server.tool(
   "start_profile",
   "Launch a profile with CDP. Returns { pid, cdp:{ web_socket_debugger_url, http_url } }. Set headless to run without a window.",
   { id: z.string(), headless: z.boolean().optional() },
-  async ({ id, headless }) =>
-    text(await api(`/profiles/${id}/start`, { method: "POST", body: { headless: !!headless } })),
+  async ({ id, headless }) => {
+    const started = await api(`/profiles/${id}/start`, {
+      method: "POST",
+      body: { headless: !!headless },
+    });
+    return text(redactLaunchInstanceToken(started));
+  },
 );
 
 server.tool(
@@ -208,6 +935,34 @@ server.tool(
   "List running profiles with pid and CDP endpoint.",
   {},
   async () => text(await api("/running")),
+);
+
+server.tool(
+  "cleanup_stale_profile_processes",
+  "Inspect stale ShardX browser processes for one profile. This tool is inventory-only because a numeric PID cannot prove process ownership safely.",
+  {
+    profile_id: z.string().optional(),
+    profile_query: z.string().optional(),
+    exact: z.boolean().optional(),
+    dry_run: z.boolean().optional(),
+  },
+  async ({ profile_id, profile_query, exact, dry_run }) => {
+    const profile = await resolveProfile({ profile_id, profile_query, exact });
+    const inspection = await staleProfileProcesses(profile.id);
+    return text({
+      profile: { id: profile.id, name: profile.name },
+      running_tracked: inspection.running.some((r) => r.profile_id === profile.id),
+      tracked_pids: inspection.tracked_pids,
+      dry_run: true,
+      requested_dry_run: dry_run ?? true,
+      termination_supported: false,
+      stale_count: inspection.stale.length,
+      stale_pids: inspection.stale.map((p) => p.pid),
+      killed_pids: [],
+      errors: [],
+      note: "PID-only termination is disabled; stop a tracked profile through Launcher ownership APIs.",
+    });
+  },
 );
 
 server.tool("list_fingerprints", "List the fingerprint library entries.", {}, async () =>
@@ -288,8 +1043,12 @@ server.tool(
   { profile_id: z.string(), url: z.string(), headless: z.boolean().optional() },
   async ({ profile_id, url, headless }) => {
     const page = await pageFor(profile_id, { headless: !!headless });
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    return text({ url: page.url(), title: await page.title() });
+    const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    return text({
+      url: page.url(),
+      title: await page.title(),
+      challenge: await updateChallengeStatus(profile_id, page, response, "browser_navigate"),
+    });
   },
 );
 

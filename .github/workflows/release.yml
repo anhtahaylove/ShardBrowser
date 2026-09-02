@@ -1,28 +1,9 @@
-# Build the Tauri launcher for macOS arm64, Windows x64 and Linux x64
-# on free GitHub-hosted runners, then attach every bundle to a GitHub
-# Release.
+# Build native Tauri bundles, sign updater artifacts with the Tauri updater
+# key, and publish the custom fork release with its matching MCP source.
 #
-# Why three runners instead of cross-compiling from Linux?  Tauri's
-# bundlers are platform-native — .dmg needs `hdiutil`/`codesign` (mac
-# only), .msi needs WiX (Windows only); cross-compiling the Rust
-# binary is possible but the bundling step then fails.  GitHub's
-# hosted runners are free for public repos (and have a generous free
-# tier for private ones), so this is cost-free for the maintainer and
-# avoids any self-hosted-runner setup.
-#
-# Triggers:
-#   * pushing a tag like `v1.2.3`  → release named "ShardX Launcher v1.2.3"
-#   * manual dispatch via the Actions tab (handy for ad-hoc builds)
-#
-# Artifacts attached to the Release:
-#   * macOS arm64 — .dmg + .app.tar.gz
-#   * Windows x64 — .msi installer + portable .exe
-#   * Linux x64   — .AppImage + .deb
-#
-# No Apple Developer ID / Authenticode cert in this repo, so the bundles are
-# unsigned / not notarized.  macOS users clear the quarantine flag
-# (`xattr -dr com.apple.quarantine`) on first launch; README + the release
-# notes document the Gatekeeper / SmartScreen steps.
+# Windows bundles are intentionally not Authenticode-signed. Manual installs
+# can therefore show Windows SmartScreen / Unknown Publisher. A tag push
+# publishes publicly; a manual run publishes only when enabled explicitly.
 
 name: Release
 
@@ -33,19 +14,148 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to publish (e.g. v0.1.0). Required for manual runs.'
+        description: 'Tag/version for the build (for example v0.1.29).'
         required: true
+      publish_release:
+        description: 'Publish a public GitHub Release after all updater-signed builds pass.'
+        required: true
+        type: boolean
+        default: false
 
 permissions:
-  contents: write   # needed to create / attach assets to releases
+  contents: write
+  id-token: write
+  attestations: write
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    name: validate release request
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+
+      - name: Set up Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Rust SDK MSRV
+        uses: dtolnay/rust-toolchain@1.74.1
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Verify JavaScript dependency and SDK gates
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+          PATCHRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: |
+          npm audit --audit-level=moderate
+          npm ci --prefix mcp
+          npm audit --prefix mcp --audit-level=moderate
+          npm test --prefix mcp
+          npm ci --prefix sdks/node
+          npm audit --prefix sdks/node --audit-level=moderate
+          npm test --prefix sdks/node
+
+      - name: Verify Rust SDK stable gates
+        run: |
+          cargo +stable test --manifest-path sdks/rust/Cargo.toml --all-features
+          cargo +stable test --manifest-path sdks/rust/Cargo.toml --no-default-features
+
+      - name: Verify Rust SDK RustSec gate
+        run: |
+          cargo +stable install cargo-audit --locked --version 0.22.2
+          cargo +stable audit --file sdks/rust/Cargo.lock
+
+      - name: Verify Rust SDK MSRV gates
+        env:
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
+        run: |
+          rm -f sdks/rust/Cargo.lock
+          cargo +stable generate-lockfile --manifest-path sdks/rust/Cargo.toml
+          cargo +1.74.1 test --locked --manifest-path sdks/rust/Cargo.toml --all-features
+          cargo +1.74.1 test --locked --manifest-path sdks/rust/Cargo.toml --no-default-features
+
+      - name: Install Linux dependencies for updater key verification
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            patchelf
+
+      - name: Verify updater signing key matches the shipped public key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ] || [ -z "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ]; then
+            echo "Tauri updater artifacts require TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD repository secrets." >&2
+            exit 1
+          fi
+          fixture="$RUNNER_TEMP/shardx-updater-key-check.bin"
+          printf 'ShardX updater signing key check\n' > "$fixture"
+          npx tauri signer sign "$fixture" >/dev/null
+          test -s "$fixture.sig"
+          SHARDX_UPDATER_TEST_ARTIFACT="$fixture" \
+          SHARDX_UPDATER_TEST_SIGNATURE="$fixture.sig" \
+            cargo +stable test --quiet --manifest-path src-tauri/Cargo.toml \
+              --lib updater_private_key_matches_shipped_public_key -- --ignored
+          rm -f "$fixture" "$fixture.sig"
+
+      - name: Validate requested version
+        id: version
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="$DISPATCH_TAG"
+          else
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+
+          version="$(node -p "require('./package.json').version")"
+          expected="v$version"
+          if [ "$tag" != "$expected" ]; then
+            echo "Release tag $tag must match package version $expected." >&2
+            exit 1
+          fi
+
+          node <<'NODE'
+          const fs = require('fs');
+          const versions = {
+            root: require('./package.json').version,
+            mcp: require('./mcp/package.json').version,
+            tauri: require('./src-tauri/tauri.conf.json').version,
+            cargo: fs.readFileSync('./src-tauri/Cargo.toml', 'utf8').match(/^version\s*=\s*"([^"]+)/m)?.[1],
+          };
+          if (new Set(Object.values(versions)).size !== 1) {
+            console.error(versions);
+            process.exit(1);
+          }
+          NODE
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14            # Apple Silicon (M-series) runner — free, ARM-only
+          - os: macos-14
             target: aarch64-apple-darwin
             label: mac-arm64
           - os: ubuntu-22.04
@@ -60,10 +170,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
@@ -73,8 +183,8 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Cache Cargo registry + build target
-        uses: actions/cache@v4
+      - name: Cache Cargo registry and build target
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -84,9 +194,11 @@ jobs:
           restore-keys: |
             ${{ matrix.label }}-cargo-
 
-      # Tauri needs WebKitGTK + a few X libs on Linux; nothing extra on
-      # mac / windows runners.
-      - name: Install Linux build deps
+      - name: Remove cached bundle outputs
+        run: >-
+          node -e "require('node:fs').rmSync('src-tauri/target/${{ matrix.target }}/release/bundle', { recursive: true, force: true })"
+
+      - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -97,97 +209,187 @@ jobs:
             libssl-dev \
             patchelf
 
-      - name: npm install
+      - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build Tauri bundle (unsigned)
-        # No Apple Developer ID / Authenticode cert in this repo, so bundles
-        # ship unsigned / un-notarized. (Ad-hoc signing wouldn't help: it only
-        # avoids the "app is damaged" error, not the "Apple could not verify…"
-        # notarization block — which needs a paid Developer ID.) The Tauri
-        # bundler only skips codesign / signtool when the signing env vars are
-        # UNSET — an *empty* string makes it import a cert and crash, so we set
-        # nothing here. macOS users clear the quarantine flag on first launch
-        # (`xattr -dr com.apple.quarantine`, see release notes / README).
+      - name: Validate Tauri updater signing secrets
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ] || [ -z "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ]; then
+            echo "Tauri updater artifacts require TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD repository secrets." >&2
+            exit 1
+          fi
+
+      - name: Build updater-signed Tauri bundle
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx tauri build --target ${{ matrix.target }}
+
+      - name: Verify NSIS upgrade replaces the installed executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-nsis-upgrade.ps1
 
       - name: Collect bundles
         shell: bash
         run: |
           mkdir -p staging
-          # Grab every distributable Tauri produced — paths differ per OS.
           find src-tauri/target/${{ matrix.target }}/release/bundle \
             -type f \
             \( -name '*.dmg' -o -name '*.app.tar.gz' \
                -o -name '*.msi' -o -name '*.exe' \
-               -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) \
+               -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
+               -o -name '*.sig' \) \
             -exec cp -v {} staging/ \;
           ls -la staging/
 
-      # The raw compiled binary (one level above bundle/) is a standalone,
-      # installer-free executable — no MSI/NSIS, no admin, just run it. It uses
-      # the system's Evergreen WebView2 (preinstalled on Windows 10/11). Ship it
-      # as the portable build alongside the installers.
       - name: Collect Windows portable binary
         if: runner.os == 'Windows'
         shell: bash
         run: |
           rel="src-tauri/target/${{ matrix.target }}/release"
-          # Tauri renames the binary to the product name; fall back to the
-          # cargo package name in case that changes.
           if [ -f "$rel/ShardX Launcher.exe" ]; then
             src="$rel/ShardX Launcher.exe"
           else
             src="$rel/shardx-launcher.exe"
           fi
           cp -v "$src" "staging/ShardX-Launcher-portable-${{ matrix.label }}.exe"
-          ls -la staging/
 
-      - name: Upload to workflow artifacts (intermediate)
-        uses: actions/upload-artifact@v4
+      - name: Upload updater-signed build artifacts
+        uses: actions/upload-artifact@v7
         with:
-          name: shardx-launcher-${{ matrix.label }}
+          name: shardx-launcher-${{ needs.validate.outputs.tag }}-${{ matrix.label }}
           path: staging/*
           if-no-files-found: error
 
   release:
-    needs: build
+    needs:
+      - validate
+      - build
+    if: github.event_name == 'push' || inputs.publish_release == true
     runs-on: ubuntu-latest
     name: publish release
+
     steps:
-      - name: Resolve tag
-        id: tag
+      - name: Checkout release source
+        uses: actions/checkout@v7
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+
+      - name: Test ShardX MCP
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+          PATCHRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          fi
+          npm ci --prefix mcp
+          npm test --prefix mcp
 
       - name: Download every per-platform artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
 
-      - name: List collected bundles
+      - name: Normalize GitHub release asset names
+        shell: bash
+        run: |
+          while IFS= read -r -d '' source; do
+            name="$(basename "$source")"
+            normalized="${name// /.}"
+            target="dist/$normalized"
+            if [ -e "$target" ]; then
+              echo "Release asset normalization collision: $name -> $normalized" >&2
+              exit 1
+            fi
+            mv -v "$source" "$target"
+          done < <(find dist -maxdepth 1 -type f -name '* *' -print0)
+
+          if find dist -maxdepth 1 -type f -name '* *' -print -quit | grep -q .; then
+            echo "GitHub release asset names must not contain spaces." >&2
+            exit 1
+          fi
+
+      - name: Validate and package ShardX MCP
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+          PATCHRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: |
+          test -f mcp/package-lock.json
+          node --check mcp/index.js
+          for helper in health_check startup_status configure_startup find_profile_by_name ensure_profile_started safe_open_url devtools_context cleanup_stale_profile_processes challenge_status verification_checkpoint wait_for_human_verification; do
+            grep -q "\"$helper\"" mcp/index.js
+          done
+          npm run test:release-package
+          package_root="$RUNNER_TEMP/ShardX-MCP"
+          node scripts/stage-mcp-release.mjs "$package_root"
+          node scripts/stage-mcp-release.mjs --verify-directory "$package_root"
+          tar -czf dist/ShardX-MCP.tar.gz -C "$RUNNER_TEMP" ShardX-MCP
+          archive_entries="$RUNNER_TEMP/ShardX-MCP-entries.txt"
+          tar -tzf dist/ShardX-MCP.tar.gz | tee "$archive_entries"
+          node scripts/stage-mcp-release.mjs --verify-archive-entries ShardX-MCP < "$archive_entries"
+          verify_root="$RUNNER_TEMP/ShardX-MCP-verify"
+          mkdir -p "$verify_root"
+          tar -xzf dist/ShardX-MCP.tar.gz -C "$verify_root"
+          node scripts/stage-mcp-release.mjs --verify-directory "$verify_root/ShardX-MCP"
+          npm ci --prefix "$verify_root/ShardX-MCP"
+          npm test --prefix "$verify_root/ShardX-MCP"
+
+      - name: Generate static updater manifest
+        run: node scripts/generate-updater-manifest.mjs --dist dist --tag "${{ needs.validate.outputs.tag }}" --repo "${{ github.repository }}"
+
+      - name: Generate SHA-256 checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/*
+
+      - name: List collected release assets
         run: ls -la dist/
 
-      - name: Create / update GitHub Release
+      - name: Write release notes
+        run: |
+          cat > release-notes.md <<'EOF'
+          Custom integration release for [anhtahaylove/ShardBrowser](https://github.com/anhtahaylove/ShardBrowser).
+
+          ## Highlights
+
+          * Every API-launched browser now receives an opaque in-memory launch-instance token; conditional cleanup requires the exact profile, PID, and token so PID reuse cannot stop a replacement process.
+          * `safe_open_url` verifies Launcher ownership capability before spawning, preserves the active tab for follow-up tools, restores the prior profile state, and fails closed on mixed-version or cleanup mismatches.
+          * The legacy PID-only stop endpoint is disabled with HTTP 410, and stale-process cleanup remains inventory-only until a stable operating-system process identity is available.
+          * MCP release packaging enforces exact entry equality for the staging directory, raw tar manifest, and extracted payload, rejecting missing, extra, duplicate, nested, or non-regular entries.
+          * The 96-tool MCP contract, startup-in-tray behavior, signed Tauri updater, NSIS upgrade safety, headless automation, and Rust SDK gates remain covered by CI and release validation.
+
+          ## Install
+
+          * **Windows** — the installer and portable executable are not Authenticode-signed, so Windows can show SmartScreen / **Unknown Publisher** during a manual install. The in-app updater separately verifies downloaded update bytes with the shipped Tauri updater public key.
+          * **macOS** — Apple Silicon .dmg; this build is not notarized because the fork does not currently have an Apple Developer ID.
+          * **Linux** — .AppImage or .deb.
+          * **MCP** — ShardX-MCP.tar.gz contains the matching MCP source and Codex helpers. Launcher Settings downloads this asset from this exact fork release.
+
+          Verify downloaded assets with SHA256SUMS.txt, latest.json signatures, or the GitHub build-provenance attestation.
+          EOF
+
+      - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: ShardX Launcher ${{ steps.tag.outputs.tag }}
+          tag_name: ${{ needs.validate.outputs.tag }}
+          name: ShardX Launcher ${{ needs.validate.outputs.tag }} custom integration
+          target_commitish: ${{ github.sha }}
           draft: false
           prerelease: false
           fail_on_unmatched_files: true
           generate_release_notes: true
-          body: |
-            ## Install
-
-            * **macOS** (Apple Silicon — M1/M2/M3/M4) — download the `.dmg` and drag *ShardX Launcher.app* to Applications.  The build isn't notarized (no Apple Developer ID), so macOS blocks it on first launch — clear the quarantine flag in Terminal, then open it normally: `xattr -dr com.apple.quarantine "/Applications/ShardX Launcher.app"`  (alternative: *System Settings → Privacy & Security → Open Anyway*).
-            * **Windows** — `.msi` installer, or the installer-free **portable** `ShardX-Launcher-portable-win-x64.exe` (just run it — needs the Evergreen WebView2 runtime, preinstalled on Windows 10/11).  SmartScreen will warn: *More info* → *Run anyway* (the build isn't signed with Authenticode).
-            * **Linux** — `.AppImage` (`chmod +x` and run) or `.deb` (`sudo apt install ./...deb`).
-
-            On first launch the launcher downloads the patched ShardX browser, Widevine CDM and a starter library of 170 device profiles from our CDN.  After that it boots straight to the workspace.
+          body_path: release-notes.md
           files: dist/*
