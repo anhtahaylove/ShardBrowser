@@ -83,6 +83,24 @@ pub fn create(
     dest: &Path,
     passphrase: &str,
 ) -> Result<BackupFileInfo> {
+    let sealed = seal_profile(profile_id, udd, passphrase)?;
+    write_atomic(dest, &sealed.bytes).with_context(|| format!("write backup to {}", dest.display()))?;
+    Ok(sealed.info)
+}
+
+/// A sealed profile container held in memory.
+///
+/// Fleet sync needs the same bytes `create` writes to disk, but must hand them
+/// to an uploader instead. Both paths go through here so the wire format
+/// cannot drift between a local backup and a synced snapshot.
+pub struct SealedProfile {
+    pub bytes: Vec<u8>,
+    pub info: BackupFileInfo,
+}
+
+/// Pack and seal `udd` under a key derived from `passphrase`, returning the
+/// container rather than writing it.
+pub fn seal_profile(profile_id: &str, udd: &Path, passphrase: &str) -> Result<SealedProfile> {
     let plaintext = snapshot::pack(udd).context("pack profile for backup")?;
 
     let salt: [u8; BACKUP_SALT_LEN] = os_random()?;
@@ -139,12 +157,13 @@ pub fn create(
     file.extend_from_slice(&vk);
     file.extend_from_slice(&sealed);
 
-    write_atomic(dest, &file).with_context(|| format!("write backup to {}", dest.display()))?;
-
-    Ok(BackupFileInfo {
-        file_bytes: file.len() as u64,
-        sha256: hex(&Sha256::digest(&file)),
-        plaintext_bytes: plaintext.len() as u64,
+    Ok(SealedProfile {
+        info: BackupFileInfo {
+            file_bytes: file.len() as u64,
+            sha256: hex(&Sha256::digest(&file)),
+            plaintext_bytes: plaintext.len() as u64,
+        },
+        bytes: file,
     })
 }
 
@@ -155,7 +174,14 @@ pub fn create(
 /// half-written profile behind.
 pub fn restore(src: &Path, udd: &Path, passphrase: &str) -> Result<u64> {
     let bytes = fs::read(src).with_context(|| format!("read backup {}", src.display()))?;
+    open_profile(&bytes, udd, passphrase)
+}
 
+/// Open an in-memory container and restore it over `udd`.
+///
+/// This is `restore` without the file read, for containers that arrived from a
+/// team server rather than from disk. Authentication and staging are identical.
+pub fn open_profile(bytes: &[u8], udd: &Path, passphrase: &str) -> Result<u64> {
     let header_len = FILE_MAGIC.len() + BACKUP_SALT_LEN + 32;
     if bytes.len() < header_len {
         bail!("not a ShardX backup file: too short");
