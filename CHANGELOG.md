@@ -2,6 +2,12 @@
 
 ## 0.2.0 - 2026-09-02
 
+> Scope: this release adds a library and a server. It is not wired into the
+> app — `shared::backup::{seal, open}` has no production caller, and the
+> Launcher exposes no backup, restore, fleet or sync command. The entries
+> below describe implemented and tested building blocks, not user-facing
+> features.
+
 ### Team/fleet control plane (new)
 
 - Add `shared/src/grants.rs`: RFC 9180 HPKE (DHKEM-X25519 / HKDF-SHA256 /
