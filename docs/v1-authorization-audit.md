@@ -31,7 +31,8 @@ Two questions per route:
 | `proxies` | list/create/delete | `require_admin` |
 | `acl` | grant/revoke | `require_admin` |
 | `users` | list/create/delete/set-role/reset-password | `require_admin` |
-| `me`, `auth/*` | — | scoped to the session's own user |
+| `audit` | list | `require_admin` |
+| `me`, `me/password`, `auth/*` | — | scoped to the session's own user |
 
 The two `list` routes take no guard at the top of the handler because they do
 not name a resource: each branches on `user.is_admin()` and otherwise runs a
