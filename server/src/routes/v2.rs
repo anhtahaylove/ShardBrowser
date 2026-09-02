@@ -409,6 +409,23 @@ pub async fn begin_idempotent_operation(
     }
 }
 
+/// Resolve the caller's account in `tenant_id`, refusing the request when the
+/// caller has none.
+///
+/// The fleet endpoints take `tenant_id` from the request body or path. Being
+/// authenticated says only that the caller is *some* user of this deployment,
+/// not that they belong to the tenant they just named, so every fleet handler
+/// has to establish that link before touching tenant data. The signed-record
+/// endpoints do not need this — a tenant issuer's signature already covers
+/// their fields — but nothing signs a lease or a download.
+async fn require_tenant_member(
+    app: &AppState,
+    tenant_id: [u8; 16],
+    user: &AuthUser,
+) -> Result<[u8; 16], AppError> {
+    account_id_for(app, tenant_id, &user.id).await
+}
+
 /// Map a v1 session user to a v2 account within a tenant.
 async fn account_id_for(
     app: &AppState,
@@ -458,6 +475,13 @@ pub async fn acquire_profile_lease(
     let lease_id = parse_id16(&req.lease_id, "lease_id")?;
     let account_id = parse_id16(&req.account_id, "account_id")?;
     let device_id = parse_id16(&req.device_id, "device_id")?;
+
+    // The body names the account taking the lease; confirm the caller actually
+    // holds it, or one member could check out a profile as another.
+    let caller_account_id = require_tenant_member(&app, tenant_id, &user).await?;
+    if caller_account_id != account_id {
+        return Err(AppError::Forbidden);
+    }
 
     if !(MIN_LEASE_TTL_SECONDS..=MAX_LEASE_TTL_SECONDS).contains(&req.ttl_seconds) {
         return Err(AppError::BadRequest(format!(
@@ -518,6 +542,8 @@ pub async fn release_profile_lease(
     let tenant_id = parse_id16(&req.tenant_id, "tenant_id")?;
     let lease_id = parse_id16(&req.lease_id, "lease_id")?;
 
+    require_tenant_member(&app, tenant_id, &user).await?;
+
     fleet::release_lease(&app.db, &tenant_id, &lease_id, &util::now_rfc3339())
         .await
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
@@ -549,13 +575,15 @@ pub struct OpenUploadReq {
 /// Open an upload session. The bytes are streamed in afterwards.
 pub async fn open_snapshot_upload(
     State(app): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
     axum::Json(req): axum::Json<OpenUploadReq>,
 ) -> Result<impl IntoResponse, AppError> {
     let tenant_id = parse_id16(&req.tenant_id, "tenant_id")?;
     let profile_id = parse_id16(&req.profile_id, "profile_id")?;
     let session_id = parse_id16(&req.session_id, "session_id")?;
     let lease_id = parse_id16(&req.lease_id, "lease_id")?;
+
+    require_tenant_member(&app, tenant_id, &user).await?;
 
     let intent_hash: [u8; 32] = decode_hex(&req.intent_hash)
         .ok_or_else(|| AppError::BadRequest("intent_hash: not hex".into()))?
@@ -603,13 +631,15 @@ pub async fn open_snapshot_upload(
 /// the staged file.
 pub async fn append_snapshot_chunk(
     State(app): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
     axum::extract::Path((tenant_hex, session_hex)): axum::extract::Path<(String, String)>,
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, AppError> {
     let tenant_id = parse_id16(&tenant_hex, "tenant_id")?;
     let session_id = parse_id16(&session_hex, "session_id")?;
+
+    require_tenant_member(&app, tenant_id, &user).await?;
 
     let offset: i64 = headers
         .get("x-chunk-offset")
@@ -661,6 +691,13 @@ pub async fn commit_snapshot_upload(
     let fleet_id = parse_id16(&req.fleet_id, "fleet_id")?;
     let author_account_id = parse_id16(&req.author_account_id, "author_account_id")?;
     let author_device_id = parse_id16(&req.author_device_id, "author_device_id")?;
+
+    // A signature proves the manifest came from a tenant issuer, not that this
+    // caller belongs to the tenant or is the author it claims to be.
+    let caller_account_id = require_tenant_member(&app, tenant_id, &user).await?;
+    if caller_account_id != author_account_id {
+        return Err(AppError::Forbidden);
+    }
 
     let container_sha256: [u8; 32] = decode_hex(&req.container_sha256)
         .ok_or_else(|| AppError::BadRequest("container_sha256: not hex".into()))?
@@ -757,11 +794,13 @@ pub struct AbortUploadReq {
 
 pub async fn abort_snapshot_upload(
     State(app): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
     axum::Json(req): axum::Json<AbortUploadReq>,
 ) -> Result<impl IntoResponse, AppError> {
     let tenant_id = parse_id16(&req.tenant_id, "tenant_id")?;
     let session_id = parse_id16(&req.session_id, "session_id")?;
+
+    require_tenant_member(&app, tenant_id, &user).await?;
 
     fleet::abort_upload(&app.db, &tenant_id, &session_id, &util::now_rfc3339())
         .await
@@ -773,12 +812,14 @@ pub async fn abort_snapshot_upload(
 /// Describe the snapshot a device would download.
 pub async fn head_snapshot(
     State(app): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
     axum::extract::Path((tenant_hex, profile_hex)): axum::extract::Path<(String, String)>,
     axum::extract::Query(q): axum::extract::Query<VersionQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     let tenant_id = parse_id16(&tenant_hex, "tenant_id")?;
     let profile_id = parse_id16(&profile_hex, "profile_id")?;
+
+    require_tenant_member(&app, tenant_id, &user).await?;
 
     let target = fleet::resolve_download(&app.db, &tenant_id, &profile_id, q.version)
         .await
@@ -810,7 +851,7 @@ pub struct RangeQuery {
 /// server's memory budget, so neither side ever holds the whole container.
 pub async fn download_snapshot_range(
     State(app): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
     axum::extract::Path((tenant_hex, profile_hex)): axum::extract::Path<(String, String)>,
     axum::extract::Query(q): axum::extract::Query<RangeQuery>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -819,6 +860,8 @@ pub async fn download_snapshot_range(
     let tenant_id = parse_id16(&tenant_hex, "tenant_id")?;
     let profile_id = parse_id16(&profile_hex, "profile_id")?;
     let length = q.length.unwrap_or(1024 * 1024).min(MAX_RANGE);
+
+    require_tenant_member(&app, tenant_id, &user).await?;
 
     let target = fleet::resolve_download(&app.db, &tenant_id, &profile_id, q.version)
         .await

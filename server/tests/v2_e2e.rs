@@ -818,3 +818,69 @@ async fn a_body_that_contradicts_the_signed_manifest_is_refused() {
         "refusal should name the manifest mismatch, got: {body}"
     );
 }
+
+/// A member with no v2 account in a tenant must not be able to lease that
+/// tenant's profiles.
+///
+/// The lease handler reads `account_id` from the request body. Nothing tied
+/// that value to the caller, so any authenticated user could name any account
+/// in any tenant and check out its profiles. The signed-record endpoints are
+/// safe because a signature covers their fields; the fleet endpoints carry no
+/// signature, so the tenant boundary has to be enforced by the handler.
+#[tokio::test]
+async fn a_member_outside_the_tenant_cannot_lease_its_profiles() {
+    let port = 38117u16;
+    let data = std::env::temp_dir().join(format!("shardx-e2e-crosstenant-{}", std::process::id()));
+    let _guard = spawn_server(&data, port);
+    let cl = client();
+    wait_health(&cl, port).await;
+
+    let admin = token(&cl, port, "admin", "secret").await;
+    let user_id = admin_user_id(&cl, port, &admin).await;
+    let sk_a = Ed25519SigningKey::from_bytes(&[11u8; 32]);
+    let sk_b = Ed25519SigningKey::from_bytes(&[22u8; 32]);
+    seed(&data, &user_id, &sk_a, &sk_b).await;
+
+    let fleet = [0x63u8; 16];
+    let profile = [0x61u8; 16];
+    seed_profile(&data, &fleet, &profile).await;
+
+    // A second, legitimate user of the deployment — but seeded into no tenant,
+    // so it holds no v2 account anywhere.
+    let created = cl
+        .post(format!("{}/users", base(port)))
+        .bearer_auth(&admin)
+        .json(&json!({ "username": "outsider", "password": "outsider-pass", "role": "member" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        created.status().is_success(),
+        "could not create the outsider account: {}",
+        created.status()
+    );
+    let outsider = token(&cl, port, "outsider", "outsider-pass").await;
+
+    // The account id the *admin* owns in tenant A, named by someone who has no
+    // account in that tenant at all.
+    let res = cl
+        .post(format!("{}/v2/fleet/leases", base(port)))
+        .bearer_auth(&outsider)
+        .json(&json!({
+            "tenant_id": hex(&TENANT_A),
+            "profile_id": hex(&profile),
+            "lease_id": hex(&[0x64u8; 16]),
+            "account_id": hex(&[1u8; 16]),
+            "device_id": hex(&[0x65u8; 16]),
+            "ttl_seconds": 60,
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        res.status(),
+        reqwest::StatusCode::FORBIDDEN,
+        "a caller with no account in the tenant leased one of its profiles"
+    );
+}
