@@ -610,7 +610,7 @@ async fn download_and_extract(window: &Window, spec: &ArchiveSpec, base: &Path) 
             out.write_all(&chunk).await?;
             received += chunk.len() as u64;
             // Emit once per integer percent.
-            let pct = if total > 0 { received * 100 / total } else { 0 };
+            let pct = received.saturating_mul(100).checked_div(total).unwrap_or(0);
             if pct != last_pct {
                 last_pct = pct;
                 let _ = window.emit(

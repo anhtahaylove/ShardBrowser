@@ -98,17 +98,28 @@ async fn automation_api_reachable() -> bool {
     }
 }
 
-fn mcp_status_value(
-    path: Option<String>,
+/// Named MCP readiness flags. Grouped into a struct so call sites cannot
+/// silently transpose two adjacent booleans.
+struct McpStatusFlags {
     files_downloaded: bool,
     lockfile_present: bool,
-    version: Option<String>,
     version_current: bool,
     dependencies_installed: bool,
     api_reachable: bool,
     missing_saved_path: bool,
     discovered: bool,
-) -> Value {
+}
+
+fn mcp_status_value(path: Option<String>, version: Option<String>, flags: McpStatusFlags) -> Value {
+    let McpStatusFlags {
+        files_downloaded,
+        lockfile_present,
+        version_current,
+        dependencies_installed,
+        api_reachable,
+        missing_saved_path,
+        discovered,
+    } = flags;
     let ready = files_downloaded && version_current && dependencies_installed && api_reachable;
     let (state, message) = if ready {
         (
@@ -174,21 +185,23 @@ fn mcp_status_value(
 
 #[cfg(test)]
 mod mcp_status_tests {
-    use super::{devtools_frontend_url, mcp_status_value, select_devtools_target};
+    use super::{devtools_frontend_url, mcp_status_value, select_devtools_target, McpStatusFlags};
     use serde_json::json;
 
     #[test]
     fn version_mismatch_needs_update_not_ready() {
         let status = mcp_status_value(
             Some("C:\\MCP\\ShardBrowser\\mcp".into()),
-            true,
-            true,
             Some("0.1.11".into()),
-            false,
-            true,
-            true,
-            false,
-            false,
+            McpStatusFlags {
+                files_downloaded: true,
+                lockfile_present: true,
+                version_current: false,
+                dependencies_installed: true,
+                api_reachable: true,
+                missing_saved_path: false,
+                discovered: false,
+            },
         );
 
         assert_eq!(status["state"].as_str(), Some("update_available"));
@@ -202,25 +215,29 @@ mod mcp_status_tests {
     fn missing_dependencies_use_lockfile_aware_install_guidance() {
         let locked = mcp_status_value(
             Some("C:\\MCP\\ShardBrowser\\mcp".into()),
-            true,
-            true,
             Some(env!("CARGO_PKG_VERSION").into()),
-            true,
-            false,
-            true,
-            false,
-            false,
+            McpStatusFlags {
+                files_downloaded: true,
+                lockfile_present: true,
+                version_current: true,
+                dependencies_installed: false,
+                api_reachable: true,
+                missing_saved_path: false,
+                discovered: false,
+            },
         );
         let legacy = mcp_status_value(
             Some("C:\\MCP\\Legacy\\mcp".into()),
-            true,
-            false,
             Some(env!("CARGO_PKG_VERSION").into()),
-            true,
-            false,
-            true,
-            false,
-            false,
+            McpStatusFlags {
+                files_downloaded: true,
+                lockfile_present: false,
+                version_current: true,
+                dependencies_installed: false,
+                api_reachable: true,
+                missing_saved_path: false,
+                discovered: false,
+            },
         );
 
         assert_eq!(locked["state"].as_str(), Some("dependencies_missing"));
@@ -281,28 +298,32 @@ async fn mcp_status() -> Result<Value, String> {
         let path = path.display().to_string();
         return Ok(mcp_status_value(
             Some(path),
-            true,
-            lockfile_present,
             version,
-            version_current,
-            dependencies_installed,
-            api_reachable,
-            false,
-            discovered,
+            McpStatusFlags {
+                files_downloaded: true,
+                lockfile_present,
+                version_current,
+                dependencies_installed,
+                api_reachable,
+                missing_saved_path: false,
+                discovered,
+            },
         ));
     }
 
     let missing_saved_path = saved_path.is_some();
     Ok(mcp_status_value(
         saved_path,
-        false,
-        false,
         None,
-        false,
-        false,
-        api_reachable,
-        missing_saved_path,
-        false,
+        McpStatusFlags {
+            files_downloaded: false,
+            lockfile_present: false,
+            version_current: false,
+            dependencies_installed: false,
+            api_reachable,
+            missing_saved_path,
+            discovered: false,
+        },
     ))
 }
 
@@ -607,13 +628,11 @@ fn clamp_screen_to_real_display(
         return;
     }
     // macOS keeps curated FP unless real display smaller; Win/Linux always uses real.
-    if cfg!(target_os = "macos") {
-        if real_w >= fp_w && real_h >= fp_h {
-            eprintln!(
-                "[launcher] display: real {real_w}x{real_h} >= fp {fp_w}x{fp_h} — keeping FP screen (macOS)"
-            );
-            return;
-        }
+    if cfg!(target_os = "macos") && real_w >= fp_w && real_h >= fp_h {
+        eprintln!(
+            "[launcher] display: real {real_w}x{real_h} >= fp {fp_w}x{fp_h} — keeping FP screen (macOS)"
+        );
+        return;
     }
 
     // Preserve FP menubar/dock insets for avail_*.

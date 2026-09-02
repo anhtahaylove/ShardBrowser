@@ -391,61 +391,7 @@ fn join_comma_paths(paths: &[PathBuf]) -> String {
         .join(",")
 }
 
-#[cfg(test)]
-mod launch_option_tests {
-    use super::{parse_launch_options, remove_unavailable_custom_fonts};
-    use serde_json::json;
 
-    fn temp_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("shardx-launch-test-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    #[test]
-    fn launch_options_allow_safe_args_and_extension_dirs() {
-        let ext = temp_dir("extension");
-        let value = json!({
-            "args": ["--mute-audio", "--window-size=1200,900", "--mute-audio"],
-            "extension_dirs": [ext.to_string_lossy()]
-        });
-
-        let opts = parse_launch_options(Some(value)).unwrap();
-
-        assert_eq!(opts.args, vec!["--mute-audio", "--window-size=1200,900"]);
-        assert_eq!(opts.extension_dirs.len(), 1);
-    }
-
-    #[test]
-    fn launch_options_reject_profile_isolation_switches() {
-        let value = json!({ "args": ["--user-data-dir=C:\\tmp\\other"] });
-
-        assert!(parse_launch_options(Some(value)).is_err());
-    }
-
-    #[test]
-    fn launch_options_reject_embedded_whitespace() {
-        let value = json!({ "args": ["--mute-audio --user-data-dir=C:\\tmp\\other"] });
-
-        assert!(parse_launch_options(Some(value)).is_err());
-    }
-
-    #[test]
-    fn legacy_custom_fonts_are_not_handed_to_the_engine() {
-        let mut raw = json!({
-            "custom_fonts": { "mode": "append", "dirs": ["C:\\fonts"] },
-            "navigator": { "platform": "Win32" }
-        })
-        .as_object()
-        .unwrap()
-        .clone();
-
-        assert!(remove_unavailable_custom_fonts(&mut raw));
-        assert!(!raw.contains_key("custom_fonts"));
-        assert_eq!(raw["navigator"]["platform"], "Win32");
-    }
-}
 
 /// Poll `<udd>/DevToolsActivePort` for ~6s; line 1 = port, line 2 = ws path.
 async fn read_devtools_endpoint(udd: &Path) -> Option<process::CdpInfo> {
@@ -740,4 +686,60 @@ fn host_locale() -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod launch_option_tests {
+    use super::{parse_launch_options, remove_unavailable_custom_fonts};
+    use serde_json::json;
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("shardx-launch-test-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn launch_options_allow_safe_args_and_extension_dirs() {
+        let ext = temp_dir("extension");
+        let value = json!({
+            "args": ["--mute-audio", "--window-size=1200,900", "--mute-audio"],
+            "extension_dirs": [ext.to_string_lossy()]
+        });
+
+        let opts = parse_launch_options(Some(value)).unwrap();
+
+        assert_eq!(opts.args, vec!["--mute-audio", "--window-size=1200,900"]);
+        assert_eq!(opts.extension_dirs.len(), 1);
+    }
+
+    #[test]
+    fn launch_options_reject_profile_isolation_switches() {
+        let value = json!({ "args": ["--user-data-dir=C:\\tmp\\other"] });
+
+        assert!(parse_launch_options(Some(value)).is_err());
+    }
+
+    #[test]
+    fn launch_options_reject_embedded_whitespace() {
+        let value = json!({ "args": ["--mute-audio --user-data-dir=C:\\tmp\\other"] });
+
+        assert!(parse_launch_options(Some(value)).is_err());
+    }
+
+    #[test]
+    fn legacy_custom_fonts_are_not_handed_to_the_engine() {
+        let mut raw = json!({
+            "custom_fonts": { "mode": "append", "dirs": ["C:\\fonts"] },
+            "navigator": { "platform": "Win32" }
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        assert!(remove_unavailable_custom_fonts(&mut raw));
+        assert!(!raw.contains_key("custom_fonts"));
+        assert_eq!(raw["navigator"]["platform"], "Win32");
+    }
 }
