@@ -2149,6 +2149,7 @@ dependencies = [
  "aes",
  "aes-gcm",
  "anyhow",
+ "argon2",
  "base64",
  "cbc",
  "chacha20poly1305",

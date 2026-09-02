@@ -21,6 +21,9 @@ ed25519-dalek = { version = "=3.0.0" }
 zeroize = { version = "=1.8.2", features = ["derive"] }
 hpke = { version = "=0.14.0", default-features = false, features = ["alloc", "x25519", "chacha", "hkdfsha2"] }
 getrandom04 = { package = "getrandom", version = "=0.4.3" }
+# Argon2id for passphrase-derived local backup keys. Pinned: the cost
+# parameters and algorithm version are part of the on-disk backup format.
+argon2 = { version = "=0.5.3", features = ["std"] }
 
 # POSIX os_crypt: AES-128-CBC with a fixed IV.
 [target.'cfg(not(windows))'.dependencies]

@@ -27,6 +27,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["process", "rt-multi-thread", "macros", "fs", "net", "io-util", "time"] }
 anyhow = "1"
+# Encrypted profile backup: pack/seal lives in the shared crate, the Tauri
+# commands in src/backup_cmd.rs are its first production caller.
+shardx-core = { path = "../shared" }
 dirs = "5"
 uuid = { version = "1", features = ["v4", "serde"] }
 url = "2"

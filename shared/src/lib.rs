@@ -8,6 +8,7 @@
 //!   taken on one machine restores correctly on another (incl. Mac↔Windows).
 
 pub mod backup;
+pub mod backup_file;
 pub mod canonical;
 pub mod cookies;
 pub mod envelope;
@@ -15,6 +16,7 @@ pub mod grants;
 pub mod keys;
 pub mod logins;
 pub mod oscrypt;
+pub mod passphrase;
 pub mod portable;
 pub mod signing;
 pub mod snapshot;
