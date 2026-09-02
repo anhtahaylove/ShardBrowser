@@ -5,13 +5,14 @@ mod backup_cmd;
 mod codex_mcp;
 mod cookies;
 mod fingerprints;
-mod fleet_client;
+pub mod fleet_client;
 mod launch;
 mod mcp_setup;
 mod process;
 mod profile;
 mod proxy;
 mod psapi;
+mod team_config;
 mod runtime;
 mod settings;
 mod startup;
@@ -1368,6 +1369,119 @@ fn api_regenerate_token() -> Result<Value, String> {
     Ok(api_info_value(&s, token))
 }
 
+// ---- Team server (v2 fleet) ----
+
+/// Connection status for the Settings page. Never returns the token or key.
+#[tauri::command]
+fn team_status() -> Result<team_config::TeamStatus, String> {
+    team_config::status().map_err(|e| e.to_string())
+}
+
+/// Save the server URL, token and tenant.
+///
+/// Changing the server clears the enrollment: a device id and signing key are
+/// only meaningful to the server that issued them, and keeping them would
+/// leave the UI claiming an enrollment that server never made.
+#[tauri::command]
+fn team_set_connection(
+    server_url: String,
+    token: String,
+    tenant_id: String,
+) -> Result<team_config::TeamStatus, String> {
+    let mut c = team_config::load().map_err(|e| e.to_string())?;
+
+    let url = server_url.trim().trim_end_matches('/').to_string();
+    if !url.is_empty() && !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err("server URL must start with http:// or https://".into());
+    }
+
+    let server_changed = url != c.server_url || tenant_id.trim() != c.tenant_id;
+    c.server_url = url;
+    c.token = token.trim().to_string();
+    c.tenant_id = tenant_id.trim().to_string();
+    if server_changed {
+        c.device_id.clear();
+        c.signing_key_seed.clear();
+    }
+
+    team_config::save(&c).map_err(|e| e.to_string())?;
+    team_config::status().map_err(|e| e.to_string())
+}
+
+/// Check the saved connection by asking the server who it is.
+#[tauri::command]
+async fn team_test_connection() -> Result<String, String> {
+    let c = team_config::load().map_err(|e| e.to_string())?;
+    if c.server_url.is_empty() || c.token.is_empty() {
+        return Err("set the server URL and token first".into());
+    }
+    let client =
+        fleet_client::FleetClient::new(&c.server_url, &c.token).map_err(|e| e.to_string())?;
+    let id = client.server_identity().await.map_err(|e| e.to_string())?;
+    Ok(id.server_instance_id)
+}
+
+/// Enroll this device: generate a signing key, prove possession, store the id.
+///
+/// The key is generated locally and only its public half is sent. Enrolling
+/// again replaces the previous identity, so the command refuses when this
+/// device is already enrolled rather than silently orphaning the old one.
+#[tauri::command]
+async fn team_enroll_device(label: String) -> Result<team_config::TeamStatus, String> {
+    let mut c = team_config::load().map_err(|e| e.to_string())?;
+    if c.server_url.is_empty() || c.token.is_empty() {
+        return Err("set the server URL and token first".into());
+    }
+    if c.tenant_id.is_empty() {
+        return Err("set the tenant id first".into());
+    }
+    if c.is_enrolled() {
+        return Err("this device is already enrolled".into());
+    }
+
+    // Fresh signing key for this device. `getrandom` is a Windows-only
+    // dependency in this crate, so go through shared, which has it on every
+    // platform — enrollment is not Windows-only.
+    let mut seed = [0u8; 32];
+    shardx_core::keys::fill_random(&mut seed).map_err(|e| e.to_string())?;
+    let signer = shardx_core::signing::Ed25519SigningKey::from_bytes(&seed);
+
+    // HPKE recipient key: enrollment records it, and fleet key grants will be
+    // sealed to it. Generated with the signing key so one enrollment covers
+    // both, rather than needing a second round trip later.
+    let mut hpke_seed = [0u8; 32];
+    shardx_core::keys::fill_random(&mut hpke_seed).map_err(|e| e.to_string())?;
+    let (_hpke_secret, hpke_public) = shardx_core::grants::derive_keypair(&hpke_seed);
+    let hpke_public: [u8; 32] = hpke_public
+        .as_slice()
+        .try_into()
+        .map_err(|_| "HPKE public key must be 32 bytes".to_string())?;
+
+    let client =
+        fleet_client::FleetClient::new(&c.server_url, &c.token).map_err(|e| e.to_string())?;
+    let enrolled = client
+        .enroll_device(&c.tenant_id, &signer, &hpke_public, label.trim().as_bytes())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    c.device_id = enrolled.device_id;
+    c.signing_key_seed = seed.iter().map(|b| format!("{b:02x}")).collect();
+    c.hpke_key_seed = hpke_seed.iter().map(|b| format!("{b:02x}")).collect();
+    team_config::save(&c).map_err(|e| e.to_string())?;
+
+    // Read the key back before reporting success. The server now trusts this
+    // public key; if the file did not round-trip, the failure should surface
+    // here and not at the first publish, when a snapshot is already staged.
+    let stored = team_config::load()
+        .and_then(|s| s.signing_key())
+        .map_err(|e| format!("device key did not round-trip: {e}"))?;
+    if stored.verifying_key().to_bytes() != signer.verifying_key().to_bytes() {
+        return Err("device key did not round-trip: key mismatch".into());
+    }
+
+    team_config::status().map_err(|e| e.to_string())
+}
+
 // ---- ProxyShard billing API ----
 
 /// Saved billing-API key (empty string when unset).
@@ -1678,6 +1792,10 @@ pub fn run() {
             profile_validate_name,
             profile_save,
             profile_delete,
+            team_status,
+            team_set_connection,
+            team_test_connection,
+            team_enroll_device,
             backup_cmd::profile_backup_create,
             backup_cmd::profile_backup_restore,
             backup_cmd::profile_backup_inspect,

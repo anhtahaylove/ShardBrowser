@@ -78,6 +78,21 @@ pub struct UploadRequest<'a> {
     pub container: &'a [u8],
 }
 
+/// Server response to an enrollment challenge request.
+#[derive(Deserialize)]
+struct EnrollmentChallenge {
+    challenge_id: String,
+    nonce: String,
+    account_id: String,
+}
+
+/// Ids the server assigned to a freshly enrolled device.
+#[derive(Deserialize, Debug)]
+pub struct EnrolledDevice {
+    pub device_id: String,
+    pub signing_key_id: String,
+}
+
 pub struct FleetClient {
     http: reqwest::Client,
     base_url: String,
@@ -116,6 +131,80 @@ impl FleetClient {
         let body = res.text().await.unwrap_or_default();
         let detail = body.chars().take(300).collect::<String>();
         Err(anyhow!("{what} failed ({status}): {detail}"))
+    }
+
+    /// Register this device's signing key with the server.
+    ///
+    /// Two round trips: the server issues a nonce committed to the key pair,
+    /// and the device signs it. The private key never leaves this process —
+    /// what proves possession is the signature, not the key.
+    ///
+    /// Returns the ids the server assigned. The caller stores them; a device
+    /// enrolls once per server.
+    pub async fn enroll_device(
+        &self,
+        tenant_id: &str,
+        signer: &Ed25519SigningKey,
+        hpke_public_key: &[u8; 32],
+        label_ciphertext: &[u8],
+    ) -> Result<EnrolledDevice> {
+        let signing_public_key = signer.verifying_key().to_bytes();
+
+        let res = self
+            .http
+            .post(self.url("/v2/devices/enrollment-challenges"))
+            .bearer_auth(&self.token)
+            .json(&serde_json::json!({
+                "tenant_id": tenant_id,
+                "signing_public_key": hex(&signing_public_key),
+                "hpke_public_key": hex(hpke_public_key),
+            }))
+            .send()
+            .await
+            .context("request enrollment challenge")?;
+        let challenge: EnrollmentChallenge = Self::ok_or_err(res, "enrollment challenge")
+            .await?
+            .json()
+            .await
+            .context("decode enrollment challenge")?;
+
+        let nonce = decode_hex32(&challenge.nonce, "challenge nonce")?;
+        let challenge_id = decode_hex16(&challenge.challenge_id, "challenge_id")?;
+        let account_id = decode_hex16(&challenge.account_id, "account_id")?;
+        let tenant_bytes = decode_hex16(tenant_id, "tenant_id")?;
+
+        let tbs = enrollment_proof_bytes(
+            &challenge_id,
+            &nonce,
+            &tenant_bytes,
+            &account_id,
+            &signing_public_key,
+            hpke_public_key,
+        );
+        let signature = shardx_core::signing::sign_tbs(signer, &tbs);
+
+        let res = self
+            .http
+            .post(self.url("/v2/devices/enrollment-proofs"))
+            .bearer_auth(&self.token)
+            .json(&serde_json::json!({
+                "tenant_id": tenant_id,
+                "challenge_id": challenge.challenge_id,
+                "nonce": challenge.nonce,
+                "signing_public_key": hex(&signing_public_key),
+                "hpke_public_key": hex(hpke_public_key),
+                "proof_signature": hex(&signature),
+                "label_ciphertext": hex(label_ciphertext),
+            }))
+            .send()
+            .await
+            .context("submit enrollment proof")?;
+
+        Self::ok_or_err(res, "device enrollment")
+            .await?
+            .json()
+            .await
+            .context("decode enrolled device")
     }
 
     pub async fn server_identity(&self) -> Result<ServerIdentity> {
@@ -416,6 +505,44 @@ impl FleetClient {
         };
         Ok(build_snapshot_manifest(signer, &fields))
     }
+}
+
+fn decode_hex32(s: &str, field: &str) -> Result<[u8; 32]> {
+    if s.len() != 64 {
+        bail!("{field}: must be 64 hex characters");
+    }
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16)
+            .map_err(|_| anyhow!("{field}: not hex"))?;
+    }
+    Ok(out)
+}
+
+/// Canonical bytes a device signs to prove it holds its signing key.
+///
+/// Must match the server's `enrollment::proof_tbs_bytes` exactly; the domain
+/// label keeps this signature from being valid as any other record.
+fn enrollment_proof_bytes(
+    challenge_id: &[u8; 16],
+    nonce: &[u8; 32],
+    tenant_id: &[u8; 16],
+    account_id: &[u8; 16],
+    signing_public_key: &[u8; 32],
+    hpke_public_key: &[u8; 32],
+) -> Vec<u8> {
+    // Shared with the server: one definition, so a mismatch is impossible
+    // rather than merely unlikely.
+    shardx_core::enrollment_proof::enrollment_proof_tbs(
+        &shardx_core::enrollment_proof::EnrollmentProofFields {
+            challenge_id,
+            nonce,
+            tenant_id,
+            account_id,
+            signing_public_key,
+            hpke_public_key,
+        },
+    )
 }
 
 fn hex(bytes: &[u8]) -> String {
