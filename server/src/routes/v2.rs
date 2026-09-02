@@ -92,6 +92,32 @@ async fn verification_context(
     })
 }
 
+/// Publish the deployment identity a client must bind its signed records to.
+///
+/// A client cannot construct a valid manifest without `server_instance_id` and
+/// `restore_epoch`. The verifier checks both against live deployment state, so
+/// a client that guesses them produces records the server refuses. Read-only
+/// and derived from the same singleton row the verifier reads.
+pub async fn server_identity(
+    State(app): State<AppState>,
+    _user: AuthUser,
+) -> Result<impl IntoResponse, AppError> {
+    let row = sqlx::query(
+        "SELECT server_instance_id, restore_epoch FROM v2_server_state WHERE singleton = 1",
+    )
+    .fetch_optional(&app.db)
+    .await?
+    .ok_or_else(|| AppError::BadRequest("server identity is not initialised".into()))?;
+
+    let instance: Vec<u8> = row.get("server_instance_id");
+    let epoch: i64 = row.get("restore_epoch");
+
+    Ok(axum::Json(serde_json::json!({
+        "server_instance_id": hex(&instance),
+        "restore_epoch": epoch,
+    })))
+}
+
 #[derive(Deserialize)]
 pub struct PresentRecordReq {
     /// Tenant this operation targets, hex-encoded.
@@ -651,6 +677,31 @@ pub async fn commit_snapshot_upload(
     // version is a mutation, so a session token alone must not authorise it.
     let verified = authz::verify_record(&manifest_bytes, authz::DOMAIN_SNAPSHOT_MANIFEST, &ctx)
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
+
+    // The signature authorizes the values inside the manifest, not whatever the
+    // request body happens to repeat. Without this cross-check a caller could
+    // present a valid manifest and publish different bytes under it.
+    let signed_mismatch = |field: &str| {
+        AppError::BadRequest(format!("{field} does not match the signed manifest"))
+    };
+    if verified.signed_hash32("container_sha256") != Some(container_sha256) {
+        return Err(signed_mismatch("container_sha256"));
+    }
+    if verified.signed_id16("profile_id") != Some(profile_id) {
+        return Err(signed_mismatch("profile_id"));
+    }
+    if verified.signed_id16("snapshot_id") != Some(snapshot_id) {
+        return Err(signed_mismatch("snapshot_id"));
+    }
+    if verified.signed_id16("fleet_id") != Some(fleet_id) {
+        return Err(signed_mismatch("fleet_id"));
+    }
+    if verified.signed_uint("base_version") != Some(req.base_version.max(0) as u64) {
+        return Err(signed_mismatch("base_version"));
+    }
+    if verified.signed_uint("key_generation") != Some(req.key_generation.max(0) as u64) {
+        return Err(signed_mismatch("key_generation"));
+    }
 
     let committed = fleet::commit_upload(
         &app.db,

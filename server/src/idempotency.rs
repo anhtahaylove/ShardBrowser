@@ -264,6 +264,7 @@ mod tests {
             not_before_ms: 1_000,
             not_after_ms: 2_000,
             exact_bytes_sha256: [10u8; 32],
+            fields: Vec::new(),
         }
     }
 

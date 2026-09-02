@@ -8,6 +8,7 @@
 //!   taken on one machine restores correctly on another (incl. Mac↔Windows).
 
 pub mod backup;
+pub mod fleet_manifest;
 pub mod backup_file;
 pub mod canonical;
 pub mod cookies;

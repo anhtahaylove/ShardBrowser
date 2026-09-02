@@ -28,6 +28,7 @@ pub fn router(state: AppState) -> Router {
         // audit trail (admin)
         .route("/audit", get(crate::audit::list))
         // v2 team/fleet control plane
+        .route("/v2/server-identity", get(v2::server_identity))
         .route("/v2/device-approvals", post(v2::present_device_approval))
         .route("/v2/capability-grants", post(v2::present_capability_grant))
         .route(

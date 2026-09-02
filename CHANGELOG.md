@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Fleet transfer client and a commit-path authorization fix
+
+Adds the `/v2/` client from #17 and fixes a server flaw the work exposed.
+
+- Add `shared::fleet_manifest`: one definition of the signed snapshot manifest,
+  used by both the client that signs and the tests that verify, so the two
+  cannot drift into a format only one side accepts.
+- Add `fleet_client` in the Launcher: lease, chunked upload, signed commit and
+  ranged download. The lease is released on every path, a failed upload aborts
+  its staging session, and a download that stalls is an error rather than a
+  silent truncation.
+- Add `GET /v2/server-identity`. A client must bind its signed records to the
+  live `server_instance_id` and `restore_epoch`; without this endpoint it could
+  only guess them.
+- **Security fix.** `/v2/fleet/uploads/commit` verified the manifest signature
+  and then trusted the request body for `container_sha256`, `profile_id`,
+  `snapshot_id`, `fleet_id`, `base_version` and `key_generation`. A caller with
+  a valid token could present a genuine manifest signed for one snapshot and
+  publish different bytes under it. The handler now rejects any body that
+  contradicts the signed manifest, covered by a regression test that publishes
+  version 1 when the check is removed.
+
+`fleet_client` has no UI caller yet: that needs device enrollment, which the
+server does not expose an endpoint for. #17 stays open.
+
 ### Encrypted profile backup, wired into the Launcher
 
 Closes the gap recorded in #17: v0.2.0 shipped the sealing library and the
