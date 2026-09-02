@@ -919,14 +919,20 @@ fn chrono_now_iso() -> String {
 }
 
 #[cfg(test)]
+/// Serializes tests that touch the process-wide lifecycle claim map. The claim
+pub(crate) fn lifecycle_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn lifecycle_test_guard() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("profile lifecycle test lock")
+        super::lifecycle_test_guard()
     }
 
     #[test]

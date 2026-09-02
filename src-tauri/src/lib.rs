@@ -1596,6 +1596,9 @@ mod profile_mutation_boundary_tests {
 
     #[test]
     fn every_tauri_profile_mutation_entry_point_checks_running_state_first() {
+        // The lifecycle claim map is process-wide; without this lock a claim
+        // held by a profile::tests case can surface as a Busy error here.
+        let _lifecycle = profile::lifecycle_test_guard();
         let profile_id = "tauri-running-mutation-boundary-test";
         let tracker = process::Tracker::shared();
         tracker.set_running_for_test(profile_id, true);

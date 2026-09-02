@@ -1390,4 +1390,376 @@ mod tests {
         .get(0);
         assert_eq!(live, 1, "exactly one live lease row may exist");
     }
+
+    // -----------------------------------------------------------------------
+    // G7: two-device drill
+    //
+    // The unit tests above each pin one invariant. These exercise the whole
+    // interleaving instead: two devices, one profile, one server, sharing the
+    // real lease/fencing/commit path end to end. Everything is disposable --
+    // a fresh database and blob root per test, removed on drop.
+    // -----------------------------------------------------------------------
+
+    /// A device runs a complete cycle: check out, upload in chunks, commit.
+    async fn device_cycle(
+        h: &Harness,
+        lease_id: [u8; 16],
+        device: [u8; 16],
+        session: [u8; 16],
+        snapshot: [u8; 16],
+        base_version: i64,
+        payload: &[u8],
+    ) -> Result<Committed, FleetError> {
+        let lease = try_acquire(h, lease_id, device, "2026-09-02T01:00:00+00:00").await?;
+        open_session(
+            h,
+            session,
+            lease.id,
+            lease.fencing_token,
+            base_version + 1,
+            payload.len() as i64,
+        )
+        .await;
+        let mut offset = 0i64;
+        for chunk in payload.chunks(512) {
+            offset = append(h, session, offset, chunk).await?;
+        }
+        let m = manifest_for(payload, base_version, snapshot);
+        commit(h, session, &m).await
+    }
+
+    async fn current_version(h: &Harness, tenant: &[u8; 16]) -> i64 {
+        sqlx::query("SELECT current_version FROM v2_profiles WHERE tenant_id = ? AND id = ?")
+            .bind(tenant.as_slice())
+            .bind(PROFILE.as_slice())
+            .fetch_one(&h.db)
+            .await
+            .unwrap()
+            .get::<i64, _>(0)
+    }
+
+    /// Device A publishes, hands the profile over, and device B publishes on
+    /// top. Versions advance one at a time and neither snapshot is lost.
+    #[tokio::test]
+    async fn g7_two_devices_hand_over_and_both_snapshots_survive() {
+        let h = setup("g7-handover").await;
+        let a_payload: Vec<u8> = (0..3000u32).map(|i| (i % 97) as u8).collect();
+        let b_payload: Vec<u8> = (0..4096u32).map(|i| (i % 61) as u8).collect();
+
+        let a = device_cycle(&h, [10; 16], DEVICE, [20; 16], [30; 16], 0, &a_payload)
+            .await
+            .expect("device A publish");
+        assert_eq!(a.version, 1);
+
+        release_lease(&h.db, &TENANT, &[10; 16], "2026-09-02T00:40:00+00:00")
+            .await
+            .unwrap();
+
+        let b = device_cycle(&h, [11; 16], DEVICE_B, [21; 16], [31; 16], 1, &b_payload)
+            .await
+            .expect("device B publish");
+        assert_eq!(b.version, 2, "the second device advances the version by one");
+        assert_eq!(current_version(&h, &TENANT).await, 2);
+
+        // Both versions stay downloadable byte-for-byte: publishing a new
+        // snapshot must not disturb the previous one.
+        for (version, expected) in [(1i64, &a_payload), (2i64, &b_payload)] {
+            let t = resolve_download(&h.db, &TENANT, &PROFILE, Some(version))
+                .await
+                .unwrap_or_else(|e| panic!("resolve v{version}: {e:?}"));
+            assert_eq!(t.version, version);
+            let bytes = read_range(std::path::Path::new(&t.blob_path), 0, t.container_size as usize)
+                .await
+                .unwrap();
+            assert_eq!(bytes.as_slice(), expected.as_slice(), "version {version} bytes");
+        }
+    }
+
+    /// Device A stalls mid-upload while B takes over. When A wakes and tries
+    /// to finish, it must lose: this is the split-brain the fencing token is
+    /// for, driven here through the full two-device path.
+    #[tokio::test]
+    async fn g7_stalled_device_cannot_publish_after_handover() {
+        let h = setup("g7-split").await;
+        let payload = vec![7u8; 2048];
+
+        let a = acquire(&h, [10; 16], DEVICE, "2026-09-02T01:00:00+00:00").await;
+        open_session(&h, [20; 16], a.id, a.fencing_token, 1, payload.len() as i64).await;
+        append(&h, [20; 16], 0, &payload).await.unwrap();
+
+        // A is presumed gone; B takes the profile.
+        release_lease(&h.db, &TENANT, &[10; 16], "2026-09-02T00:40:00+00:00")
+            .await
+            .unwrap();
+        let b = acquire(&h, [11; 16], DEVICE_B, "2026-09-02T01:00:00+00:00").await;
+        assert!(
+            b.fencing_token > a.fencing_token,
+            "a new lease must carry a strictly higher fencing token"
+        );
+
+        // A wakes up and tries to commit the work it still believes is valid.
+        let m = manifest_for(&payload, 0, [30; 16]);
+        let err = commit(&h, [20; 16], &m)
+            .await
+            .expect_err("a fenced device must not be able to commit");
+        assert!(
+            matches!(
+                err,
+                FleetError::StaleFencingToken { .. } | FleetError::NoSuchLease
+            ),
+            "expected a fencing rejection, got {err:?}"
+        );
+        assert_eq!(
+            current_version(&h, &TENANT).await,
+            0,
+            "a fenced commit must not advance the profile"
+        );
+
+        // The token comparison itself must be load-bearing. Above, A's lease row
+        // was gone, so NoSuchLease could answer before any token was compared.
+        // Here a live lease exists and only the *token* on the session is stale,
+        // which is the one path that isolates the fencing check.
+        open_session(&h, [23; 16], b.id, a.fencing_token, 1, payload.len() as i64).await;
+        append(&h, [23; 16], 0, &payload).await.unwrap();
+        let m_stale = manifest_for(&payload, 0, [32; 16]);
+        match commit(&h, [23; 16], &m_stale).await {
+            Err(FleetError::StaleFencingToken { presented, current }) => {
+                assert_eq!(presented, a.fencing_token);
+                assert_eq!(current, b.fencing_token);
+            }
+            other => panic!("a live lease with a stale token must be fenced, got {other:?}"),
+        }
+        assert_eq!(current_version(&h, &TENANT).await, 0);
+
+        // The profile is not wedged: B, which legitimately holds the lease,
+        // still completes normally. (A third lease id would be refused here --
+        // correctly -- because B's checkout is still live.)
+        open_session(&h, [22; 16], b.id, b.fencing_token, 1, payload.len() as i64).await;
+        append(&h, [22; 16], 0, &payload).await.unwrap();
+        let m2 = manifest_for(&payload, 0, [31; 16]);
+        let ok = commit(&h, [22; 16], &m2).await;
+        assert!(ok.is_ok(), "profile wedged after fencing: {ok:?}");
+        assert_eq!(current_version(&h, &TENANT).await, 1);
+    }
+
+    /// A commit whose base version is no longer current must be refused, even
+    /// when every other input is valid. Without this the second writer would
+    /// silently overwrite the first writer's snapshot (lost update).
+    #[tokio::test]
+    async fn g7_stale_base_version_is_refused() {
+        let h = setup("g7-stale-base").await;
+        let payload: Vec<u8> = (0..600u32).map(|i| (i % 97) as u8).collect();
+
+        // First device publishes version 1.
+        let a = acquire(&h, [10; 16], DEVICE, "2026-09-02T01:00:00+00:00").await;
+        open_session(&h, [20; 16], a.id, a.fencing_token, 1, payload.len() as i64).await;
+        append(&h, [20; 16], 0, &payload).await.unwrap();
+        commit(&h, [20; 16], &manifest_for(&payload, 0, [30; 16]))
+            .await
+            .unwrap();
+        release_lease(&h.db, &TENANT, &[10; 16], "2026-09-02T00:40:00+00:00")
+            .await
+            .unwrap();
+        assert_eq!(current_version(&h, &TENANT).await, 1);
+
+        // Second device still believes the profile sits at version 0.
+        let b = acquire(&h, [11; 16], DEVICE_B, "2026-09-02T02:00:00+00:00").await;
+        open_session(&h, [21; 16], b.id, b.fencing_token, 2, payload.len() as i64).await;
+        append(&h, [21; 16], 0, &payload).await.unwrap();
+        let stale = manifest_for(&payload, 0, [31; 16]);
+        match commit(&h, [21; 16], &stale).await {
+            Err(FleetError::VersionConflict { base, current }) => {
+                assert_eq!(base, 0);
+                assert_eq!(current, 1);
+            }
+            other => panic!("a stale base version must conflict, got {other:?}"),
+        }
+        assert_eq!(
+            current_version(&h, &TENANT).await,
+            1,
+            "a refused commit must not advance the profile"
+        );
+    }
+
+    /// A device that uploads fewer bytes than it declared must not be able to
+    /// publish a truncated snapshot, and chunks must arrive in order.
+    #[tokio::test]
+    async fn g7_short_upload_and_out_of_order_chunks_are_refused() {
+        let h = setup("g7-short-upload").await;
+        let payload: Vec<u8> = (0..4000u32).map(|i| (i % 251) as u8).collect();
+
+        let lease = acquire(&h, [10; 16], DEVICE, "2026-09-02T01:00:00+00:00").await;
+        open_session(&h, [20; 16], lease.id, lease.fencing_token, 1, payload.len() as i64).await;
+
+        // A chunk that skips ahead leaves a hole; it must be refused outright.
+        match append(&h, [20; 16], 100, &payload[..50]).await {
+            Err(FleetError::ChunkOutOfOrder { expected, got }) => {
+                assert_eq!(expected, 0);
+                assert_eq!(got, 100);
+            }
+            other => panic!("an out-of-order chunk must be refused, got {other:?}"),
+        }
+
+        // Upload only part of what was declared, then try to publish.
+        let sent = &payload[..1000];
+        append(&h, [20; 16], 0, sent).await.unwrap();
+        let m = manifest_for(sent, 0, [30; 16]);
+        match commit(&h, [20; 16], &m).await {
+            Err(FleetError::SizeMismatch { declared, received }) => {
+                assert_eq!(declared, payload.len() as i64);
+                assert_eq!(received, sent.len() as i64);
+            }
+            other => panic!("a short upload must not publish, got {other:?}"),
+        }
+        assert_eq!(current_version(&h, &TENANT).await, 0);
+    }
+
+    /// Many devices race for one checkout. Exactly one may win.
+    #[tokio::test]
+    async fn g7_concurrent_checkout_admits_exactly_one_device() {
+        let h = setup("g7-race").await;
+        let mut set = tokio::task::JoinSet::new();
+        for i in 0..8u8 {
+            let db = h.db.clone();
+            set.spawn(async move {
+                let mut lease_id = [0u8; 16];
+                lease_id[0] = 100 + i;
+                let mut device = [0u8; 16];
+                device[0] = 200 + i;
+                acquire_lease(
+                    &db,
+                    &TENANT,
+                    &PROFILE,
+                    &lease_id,
+                    &ACCOUNT,
+                    &device,
+                    &SERVER,
+                    0,
+                    "2026-09-02T00:00:00+00:00",
+                    "2026-09-02T01:00:00+00:00",
+                )
+                .await
+                .is_ok()
+            });
+        }
+        let mut winners = 0;
+        while let Some(r) = set.join_next().await {
+            if r.unwrap() {
+                winners += 1;
+            }
+        }
+        assert_eq!(winners, 1, "exactly one device may hold the checkout");
+    }
+
+    /// A rejected commit must roll back completely and leave the profile
+    /// usable: no version bump, no manifest, and the next device succeeds.
+    #[tokio::test]
+    async fn g7_rejected_commit_rolls_back_and_profile_stays_usable() {
+        let h = setup("g7-rollback").await;
+        let payload = vec![3u8; 1024];
+
+        let lease = acquire(&h, [10; 16], DEVICE, "2026-09-02T01:00:00+00:00").await;
+        open_session(&h, [20; 16], lease.id, lease.fencing_token, 1, payload.len() as i64).await;
+        append(&h, [20; 16], 0, &payload).await.unwrap();
+
+        // Manifest describes different bytes than were uploaded.
+        let mut m = manifest_for(&payload, 0, [30; 16]);
+        m.container_sha256 = [0xFF; 32];
+        let err = commit(&h, [20; 16], &m)
+            .await
+            .expect_err("content hash mismatch must be rejected");
+        assert!(
+            matches!(err, FleetError::ContentHashMismatch),
+            "expected ContentHashMismatch, got {err:?}"
+        );
+
+        assert_eq!(current_version(&h, &TENANT).await, 0, "version must not move");
+        let manifests: i64 =
+            sqlx::query("SELECT COUNT(*) FROM v2_snapshot_manifests WHERE tenant_id = ?")
+                .bind(TENANT.as_slice())
+                .fetch_one(&h.db)
+                .await
+                .unwrap()
+                .get(0);
+        assert_eq!(manifests, 0, "no manifest may survive a rejected commit");
+
+        // Recovery: a fresh cycle on the same profile still works.
+        release_lease(&h.db, &TENANT, &[10; 16], "2026-09-02T00:40:00+00:00")
+            .await
+            .unwrap();
+        let ok = device_cycle(&h, [11; 16], DEVICE_B, [21; 16], [31; 16], 0, &payload)
+            .await
+            .expect("profile must remain usable after a rejected commit");
+        assert_eq!(ok.version, 1);
+    }
+
+    /// Two tenants own a profile with the same id. Neither may read the
+    /// other's snapshot, and one publishing must not move the other.
+    #[tokio::test]
+    async fn g7_tenants_cannot_reach_each_others_snapshots() {
+        let h = setup("g7-tenant").await;
+        let payload = vec![5u8; 800];
+
+        device_cycle(&h, [10; 16], DEVICE, [20; 16], [30; 16], 0, &payload)
+            .await
+            .expect("tenant one publish");
+
+        let err = resolve_download(&h.db, &OTHER_TENANT, &PROFILE, Some(1))
+            .await
+            .expect_err("cross-tenant download must fail");
+        assert!(
+            matches!(err, FleetError::NoSuchVersion),
+            "expected NoSuchVersion, got {err:?}"
+        );
+        assert_eq!(
+            current_version(&h, &OTHER_TENANT).await,
+            0,
+            "the other tenant's profile must be untouched"
+        );
+    }
+
+    /// Restart the server: close the pool, reopen the same file, and confirm
+    /// the committed snapshot is still there and still readable. An in-memory
+    /// check would not catch an uncommitted transaction.
+    #[tokio::test]
+    async fn g7_committed_state_survives_restart() {
+        let h = setup("g7-restart").await;
+        let payload: Vec<u8> = (0..2500u32).map(|i| (i % 89) as u8).collect();
+
+        let c = device_cycle(&h, [10; 16], DEVICE, [20; 16], [30; 16], 0, &payload)
+            .await
+            .expect("publish");
+
+        let db_path = h._dir.0.join("server.db");
+        h.db.close().await;
+
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
+            .unwrap()
+            .foreign_keys(true);
+        let reopened = SqlitePoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
+
+        let after: i64 =
+            sqlx::query("SELECT current_version FROM v2_profiles WHERE tenant_id = ? AND id = ?")
+                .bind(TENANT.as_slice())
+                .bind(PROFILE.as_slice())
+                .fetch_one(&reopened)
+                .await
+                .unwrap()
+                .get(0);
+        assert_eq!(after, c.version, "version must survive a restart");
+
+        let t = resolve_download(&reopened, &TENANT, &PROFILE, None)
+            .await
+            .expect("resolve after restart");
+        let bytes = read_range(std::path::Path::new(&t.blob_path), 0, t.container_size as usize)
+            .await
+            .unwrap();
+        assert_eq!(bytes, payload, "blob must survive a restart");
+
+        reopened.close().await;
+    }
 }
