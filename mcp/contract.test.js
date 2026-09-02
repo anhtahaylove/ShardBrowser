@@ -8,6 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
+const pkg = JSON.parse(await readFile(path.join(dir, "package.json"), "utf8"));
 
 test("stdio server exposes the versioned ShardX tool contract", async () => {
   const transport = new StdioClientTransport({
@@ -24,7 +25,10 @@ test("stdio server exposes the versioned ShardX tool contract", async () => {
     const { tools } = await client.listTools();
     const names = new Set(tools.map((tool) => tool.name));
 
-    assert.equal(version, "0.2.0");
+    // Read from package.json: pinning the literal here means every release
+    // bump fails this test for no reason, which trains people to edit it
+    // without reading what it guards.
+    assert.equal(version, pkg.version);
     assert.equal(tools.length, 96);
     for (const name of [
       "health_check",
