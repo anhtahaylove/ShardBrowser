@@ -6,6 +6,7 @@ mod config;
 mod db;
 mod error;
 mod extract;
+mod fleet;
 mod idempotency;
 mod models;
 mod ratelimit;

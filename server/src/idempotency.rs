@@ -260,6 +260,7 @@ mod tests {
             replay_id: [7u8; 16],
             issuer_signing_key_id: [8u8; 32],
             signed_container_hash: [9u8; 32],
+            signature_bytes: [0u8; 64],
             not_before_ms: 1_000,
             not_after_ms: 2_000,
             exact_bytes_sha256: [10u8; 32],

@@ -21,6 +21,12 @@ pub const DOMAIN_DEVICE_APPROVAL: &str = "shardx.authorization.device-approval.v
 pub const DOMAIN_CAPABILITY_GRANT: &str = "shardx.authorization.capability-grant.v2";
 /// Domain separator for tenant root key grants.
 pub const DOMAIN_TENANT_ROOT_KEY_GRANT: &str = "shardx.authorization.tenant-root-key-grant.v2";
+/// Domain separator for snapshot manifests.
+///
+/// Publishing a version is its own authorized action: reusing a capability
+/// grant's domain here would let a record issued for one purpose authorise a
+/// write, which is exactly what domain separation exists to prevent.
+pub const DOMAIN_SNAPSHOT_MANIFEST: &str = "shardx.authorization.snapshot-manifest.v2";
 
 /// Why a record was refused.
 ///
@@ -104,6 +110,9 @@ pub struct VerifiedRecord {
     pub replay_id: [u8; 16],
     pub issuer_signing_key_id: [u8; 32],
     pub signed_container_hash: [u8; 32],
+    /// The Ed25519 signature that was verified, for callers that persist the
+    /// record alongside its proof.
+    pub signature_bytes: [u8; 64],
     pub not_before_ms: u64,
     pub not_after_ms: u64,
     /// SHA-256 over the exact bytes that were verified, for the audit trail.
@@ -283,6 +292,10 @@ pub fn verify_record(
         replay_id,
         issuer_signing_key_id: issuer_key_id,
         signed_container_hash: stored_hash,
+        signature_bytes: signature
+            .clone()
+            .try_into()
+            .map_err(|_| AuthzError::BadField("signature_bytes"))?,
         not_before_ms,
         not_after_ms,
         exact_bytes_sha256: c::sha256(exact_container_bytes),

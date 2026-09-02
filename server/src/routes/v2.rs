@@ -15,6 +15,7 @@ use sqlx::Row;
 use crate::auth::AuthUser;
 use crate::authz::{self, VerificationContext};
 use crate::error::AppError;
+use crate::fleet;
 use crate::idempotency::{self, OperationClaim, ReplayClaim, ReplayTable};
 use crate::state::AppState;
 use crate::util;
@@ -398,4 +399,415 @@ async fn account_id_for(
     let id: Vec<u8> = row.get("id");
     id.try_into()
         .map_err(|_| AppError::BadRequest("corrupt account id".into()))
+}
+
+
+// ---------------------------------------------------------------------------
+// Fleet sync transfer
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct AcquireLeaseReq {
+    tenant_id: String,
+    profile_id: String,
+    lease_id: String,
+    account_id: String,
+    device_id: String,
+    /// Lease lifetime. Bounded server-side so a crashed holder cannot hold a
+    /// profile forever by asking for an enormous TTL.
+    ttl_seconds: i64,
+}
+
+const MIN_LEASE_TTL_SECONDS: i64 = 15;
+const MAX_LEASE_TTL_SECONDS: i64 = 3600;
+
+/// Check out a profile for writing.
+pub async fn acquire_profile_lease(
+    State(app): State<AppState>,
+    user: AuthUser,
+    axum::Json(req): axum::Json<AcquireLeaseReq>,
+) -> Result<impl IntoResponse, AppError> {
+    let tenant_id = parse_id16(&req.tenant_id, "tenant_id")?;
+    let profile_id = parse_id16(&req.profile_id, "profile_id")?;
+    let lease_id = parse_id16(&req.lease_id, "lease_id")?;
+    let account_id = parse_id16(&req.account_id, "account_id")?;
+    let device_id = parse_id16(&req.device_id, "device_id")?;
+
+    if !(MIN_LEASE_TTL_SECONDS..=MAX_LEASE_TTL_SECONDS).contains(&req.ttl_seconds) {
+        return Err(AppError::BadRequest(format!(
+            "ttl_seconds must be between {MIN_LEASE_TTL_SECONDS} and {MAX_LEASE_TTL_SECONDS}"
+        )));
+    }
+
+    let now = chrono::Utc::now();
+    let expires = now + chrono::Duration::seconds(req.ttl_seconds);
+    let ctx = verification_context(&app, tenant_id, now.timestamp_millis().max(0) as u64).await?;
+
+    let lease = fleet::acquire_lease(
+        &app.db,
+        &tenant_id,
+        &profile_id,
+        &lease_id,
+        &account_id,
+        &device_id,
+        &ctx.server_instance_id,
+        ctx.restore_epoch as i64,
+        &now.to_rfc3339(),
+        &expires.to_rfc3339(),
+    )
+    .await
+    .map_err(fleet_error)?;
+
+    crate::audit::log(
+        &app.db,
+        Some(&user.id),
+        "v2.lease.acquired",
+        None,
+        &hex(&lease.id),
+    )
+    .await;
+
+    Ok((
+        StatusCode::CREATED,
+        axum::Json(serde_json::json!({
+            "lease_id": hex(&lease.id),
+            "fencing_token": lease.fencing_token,
+            "base_version": lease.base_version,
+            "expires_at": lease.expires_at,
+        })),
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct ReleaseLeaseReq {
+    tenant_id: String,
+    lease_id: String,
+}
+
+pub async fn release_profile_lease(
+    State(app): State<AppState>,
+    user: AuthUser,
+    axum::Json(req): axum::Json<ReleaseLeaseReq>,
+) -> Result<impl IntoResponse, AppError> {
+    let tenant_id = parse_id16(&req.tenant_id, "tenant_id")?;
+    let lease_id = parse_id16(&req.lease_id, "lease_id")?;
+
+    fleet::release_lease(&app.db, &tenant_id, &lease_id, &util::now_rfc3339())
+        .await
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+
+    crate::audit::log(
+        &app.db,
+        Some(&user.id),
+        "v2.lease.released",
+        None,
+        &hex(&lease_id),
+    )
+    .await;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct OpenUploadReq {
+    tenant_id: String,
+    profile_id: String,
+    session_id: String,
+    lease_id: String,
+    fencing_token: i64,
+    target_version: i64,
+    intent_hash: String,
+    declared_size: i64,
+}
+
+/// Open an upload session. The bytes are streamed in afterwards.
+pub async fn open_snapshot_upload(
+    State(app): State<AppState>,
+    _user: AuthUser,
+    axum::Json(req): axum::Json<OpenUploadReq>,
+) -> Result<impl IntoResponse, AppError> {
+    let tenant_id = parse_id16(&req.tenant_id, "tenant_id")?;
+    let profile_id = parse_id16(&req.profile_id, "profile_id")?;
+    let session_id = parse_id16(&req.session_id, "session_id")?;
+    let lease_id = parse_id16(&req.lease_id, "lease_id")?;
+
+    let intent_hash: [u8; 32] = decode_hex(&req.intent_hash)
+        .ok_or_else(|| AppError::BadRequest("intent_hash: not hex".into()))?
+        .try_into()
+        .map_err(|_| AppError::BadRequest("intent_hash: must be 32 bytes".into()))?;
+
+    if req.declared_size < 0 {
+        return Err(AppError::BadRequest("declared_size must not be negative".into()));
+    }
+
+    let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+    let ctx = verification_context(&app, tenant_id, now_ms).await?;
+
+    fleet::open_upload(
+        &app.db,
+        std::path::Path::new(&app.cfg.blob_dir),
+        &tenant_id,
+        &profile_id,
+        &session_id,
+        &lease_id,
+        &ctx.server_instance_id,
+        ctx.restore_epoch as i64,
+        req.fencing_token,
+        req.target_version,
+        &intent_hash,
+        req.declared_size,
+        &util::now_rfc3339(),
+    )
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    Ok((
+        StatusCode::CREATED,
+        axum::Json(serde_json::json!({
+            "session_id": hex(&session_id),
+            "received_size": 0,
+        })),
+    ))
+}
+
+/// Append one chunk to an open upload session.
+///
+/// The offset is explicit so a resumed upload cannot silently duplicate or
+/// skip a region: the server rejects anything that is not the current end of
+/// the staged file.
+pub async fn append_snapshot_chunk(
+    State(app): State<AppState>,
+    _user: AuthUser,
+    axum::extract::Path((tenant_hex, session_hex)): axum::extract::Path<(String, String)>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, AppError> {
+    let tenant_id = parse_id16(&tenant_hex, "tenant_id")?;
+    let session_id = parse_id16(&session_hex, "session_id")?;
+
+    let offset: i64 = headers
+        .get("x-chunk-offset")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok())
+        .ok_or_else(|| AppError::BadRequest("x-chunk-offset: missing or invalid".into()))?;
+
+    let received = fleet::append_chunk(
+        &app.db,
+        &tenant_id,
+        &session_id,
+        offset,
+        &body,
+        &util::now_rfc3339(),
+    )
+    .await
+    .map_err(fleet_error)?;
+
+    Ok(axum::Json(serde_json::json!({ "received_size": received })))
+}
+
+#[derive(Deserialize)]
+pub struct CommitUploadReq {
+    tenant_id: String,
+    profile_id: String,
+    session_id: String,
+    /// The signed snapshot manifest, hex-encoded. Verified before the version
+    /// is published.
+    manifest_hex: String,
+    snapshot_id: String,
+    fleet_id: String,
+    base_version: i64,
+    key_generation: i64,
+    container_sha256: String,
+    author_account_id: String,
+    author_device_id: String,
+}
+
+/// Publish a staged upload as the profile's next version.
+pub async fn commit_snapshot_upload(
+    State(app): State<AppState>,
+    user: AuthUser,
+    axum::Json(req): axum::Json<CommitUploadReq>,
+) -> Result<impl IntoResponse, AppError> {
+    let tenant_id = parse_id16(&req.tenant_id, "tenant_id")?;
+    let profile_id = parse_id16(&req.profile_id, "profile_id")?;
+    let session_id = parse_id16(&req.session_id, "session_id")?;
+    let snapshot_id = parse_id16(&req.snapshot_id, "snapshot_id")?;
+    let fleet_id = parse_id16(&req.fleet_id, "fleet_id")?;
+    let author_account_id = parse_id16(&req.author_account_id, "author_account_id")?;
+    let author_device_id = parse_id16(&req.author_device_id, "author_device_id")?;
+
+    let container_sha256: [u8; 32] = decode_hex(&req.container_sha256)
+        .ok_or_else(|| AppError::BadRequest("container_sha256: not hex".into()))?
+        .try_into()
+        .map_err(|_| AppError::BadRequest("container_sha256: must be 32 bytes".into()))?;
+
+    let manifest_bytes = decode_hex(&req.manifest_hex)
+        .ok_or_else(|| AppError::BadRequest("manifest_hex: not hex".into()))?;
+
+    let now = chrono::Utc::now();
+    let ctx = verification_context(&app, tenant_id, now.timestamp_millis().max(0) as u64).await?;
+
+    // The manifest is signed authorization in its own right: publishing a
+    // version is a mutation, so a session token alone must not authorise it.
+    let verified = authz::verify_record(&manifest_bytes, authz::DOMAIN_SNAPSHOT_MANIFEST, &ctx)
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+
+    let committed = fleet::commit_upload(
+        &app.db,
+        std::path::Path::new(&app.cfg.blob_dir),
+        &tenant_id,
+        &profile_id,
+        &session_id,
+        &fleet::ManifestInput {
+            snapshot_id,
+            fleet_id,
+            base_version: req.base_version,
+            key_generation: req.key_generation,
+            restore_epoch: ctx.restore_epoch as i64,
+            server_instance_id: ctx.server_instance_id,
+            // Binds the stored manifest row to the exact verified bytes.
+            intent_hash: verified.exact_bytes_sha256,
+            container_sha256,
+            author_account_id,
+            author_device_id,
+            signature_bytes: verified.signature_bytes,
+            issuer_signing_key_id: verified.issuer_signing_key_id,
+            signed_container_hash: verified.signed_container_hash,
+            exact_signed_container_bytes: &manifest_bytes,
+        },
+        &now.to_rfc3339(),
+    )
+    .await
+    .map_err(fleet_error)?;
+
+    crate::audit::log(
+        &app.db,
+        Some(&user.id),
+        "v2.snapshot.committed",
+        None,
+        &hex(&verified.signed_container_hash),
+    )
+    .await;
+
+    Ok((
+        StatusCode::CREATED,
+        axum::Json(serde_json::json!({
+            "version": committed.version,
+            "container_sha256": hex(&committed.container_sha256),
+        })),
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct AbortUploadReq {
+    tenant_id: String,
+    session_id: String,
+}
+
+pub async fn abort_snapshot_upload(
+    State(app): State<AppState>,
+    _user: AuthUser,
+    axum::Json(req): axum::Json<AbortUploadReq>,
+) -> Result<impl IntoResponse, AppError> {
+    let tenant_id = parse_id16(&req.tenant_id, "tenant_id")?;
+    let session_id = parse_id16(&req.session_id, "session_id")?;
+
+    fleet::abort_upload(&app.db, &tenant_id, &session_id, &util::now_rfc3339())
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Describe the snapshot a device would download.
+pub async fn head_snapshot(
+    State(app): State<AppState>,
+    _user: AuthUser,
+    axum::extract::Path((tenant_hex, profile_hex)): axum::extract::Path<(String, String)>,
+    axum::extract::Query(q): axum::extract::Query<VersionQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let tenant_id = parse_id16(&tenant_hex, "tenant_id")?;
+    let profile_id = parse_id16(&profile_hex, "profile_id")?;
+
+    let target = fleet::resolve_download(&app.db, &tenant_id, &profile_id, q.version)
+        .await
+        .map_err(fleet_error)?;
+
+    Ok(axum::Json(serde_json::json!({
+        "version": target.version,
+        "container_size": target.container_size,
+        "container_sha256": hex(&target.container_sha256),
+        "manifest_hex": hex(&target.exact_signed_container_bytes),
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct VersionQuery {
+    version: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub struct RangeQuery {
+    version: Option<i64>,
+    offset: Option<u64>,
+    length: Option<usize>,
+}
+
+/// Read a bounded range of a stored snapshot.
+///
+/// Range-based rather than whole-file: a snapshot can be far larger than the
+/// server's memory budget, so neither side ever holds the whole container.
+pub async fn download_snapshot_range(
+    State(app): State<AppState>,
+    _user: AuthUser,
+    axum::extract::Path((tenant_hex, profile_hex)): axum::extract::Path<(String, String)>,
+    axum::extract::Query(q): axum::extract::Query<RangeQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    const MAX_RANGE: usize = 8 * 1024 * 1024;
+
+    let tenant_id = parse_id16(&tenant_hex, "tenant_id")?;
+    let profile_id = parse_id16(&profile_hex, "profile_id")?;
+    let length = q.length.unwrap_or(1024 * 1024).min(MAX_RANGE);
+
+    let target = fleet::resolve_download(&app.db, &tenant_id, &profile_id, q.version)
+        .await
+        .map_err(fleet_error)?;
+
+    let bytes = fleet::read_range(
+        std::path::Path::new(&target.blob_path),
+        q.offset.unwrap_or(0),
+        length,
+    )
+    .await
+    .map_err(fleet_error)?;
+
+    Ok((
+        StatusCode::OK,
+        [
+            ("content-type", "application/octet-stream".to_string()),
+            ("x-snapshot-version", target.version.to_string()),
+            ("x-container-size", target.container_size.to_string()),
+        ],
+        bytes,
+    ))
+}
+
+/// Map a fleet refusal onto the status code that describes it.
+///
+/// Conflicts and precondition failures are distinct: a client retries the
+/// former after re-reading state, but must not retry the latter unchanged.
+fn fleet_error(e: fleet::FleetError) -> AppError {
+    use fleet::FleetError as F;
+    match e {
+        F::AlreadyLeased | F::VersionConflict { .. } => AppError::Conflict(e.to_string()),
+        F::NoSuchLease | F::NoSuchVersion => AppError::NotFound,
+        F::LeaseExpired
+        | F::StaleFencingToken { .. }
+        | F::SessionNotOpen
+        | F::SizeMismatch { .. }
+        | F::ContentHashMismatch
+        | F::ChunkOutOfOrder { .. }
+        | F::DeclaredSizeExceeded { .. } => AppError::BadRequest(e.to_string()),
+        F::BlobUnavailable | F::Database(_) => AppError::Internal(e.to_string()),
+    }
 }

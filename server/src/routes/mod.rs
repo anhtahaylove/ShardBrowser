@@ -39,6 +39,24 @@ pub fn router(state: AppState) -> Router {
             "/v2/operations/complete",
             post(v2::complete_idempotent_operation),
         )
+        // v2 fleet sync transfer
+        .route("/v2/fleet/leases", post(v2::acquire_profile_lease))
+        .route("/v2/fleet/leases/release", post(v2::release_profile_lease))
+        .route("/v2/fleet/uploads", post(v2::open_snapshot_upload))
+        .route(
+            "/v2/fleet/uploads/:tenant_id/:session_id/chunk",
+            post(v2::append_snapshot_chunk),
+        )
+        .route("/v2/fleet/uploads/commit", post(v2::commit_snapshot_upload))
+        .route("/v2/fleet/uploads/abort", post(v2::abort_snapshot_upload))
+        .route(
+            "/v2/fleet/snapshots/:tenant_id/:profile_id",
+            get(v2::head_snapshot),
+        )
+        .route(
+            "/v2/fleet/snapshots/:tenant_id/:profile_id/range",
+            get(v2::download_snapshot_range),
+        )
         // folders
         .route("/folders", get(folders::list).post(folders::create))
         .route(
