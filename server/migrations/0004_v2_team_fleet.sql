@@ -44,6 +44,12 @@ CREATE TABLE v2_accounts (
     tenant_id     BLOB    NOT NULL REFERENCES v2_tenants(id) ON DELETE CASCADE,
     username      TEXT    NOT NULL,
     pw_hash       TEXT    NOT NULL,
+    -- Links a v2 account to the v1 `users` row it was migrated from, so an
+    -- existing session token can be resolved to a v2 account without asking
+    -- the client to assert its own identity. NULL for accounts created
+    -- directly in v2. Not a foreign key: v1 users may be deleted while the
+    -- v2 audit trail must still resolve.
+    legacy_user_id TEXT,
     token_version INTEGER NOT NULL DEFAULT 0 CHECK (token_version BETWEEN 0 AND 9223372036854775807),
     status        TEXT    NOT NULL CHECK (status IN ('active', 'disabled')),
     created_at    TEXT    NOT NULL,
@@ -339,6 +345,45 @@ CREATE TABLE v2_upload_sessions (
     updated_at         TEXT    NOT NULL,
     PRIMARY KEY (tenant_id, id),
     FOREIGN KEY (tenant_id, profile_id) REFERENCES v2_profiles(tenant_id, id) ON DELETE CASCADE
+);
+
+-- Signing keys a tenant currently trusts to issue authorization records.
+--
+-- Revocation is expressed by setting `revoked_at` rather than deleting the
+-- row: the audit trail must still explain records that verified in the past.
+-- Verification filters on `revoked_at IS NULL`, so a revoked issuer stops
+-- being accepted without a separate check on the request path.
+CREATE TABLE v2_tenant_issuers (
+    tenant_id      BLOB    NOT NULL REFERENCES v2_tenants(id) ON DELETE CASCADE,
+    signing_key_id BLOB    NOT NULL CHECK (length(signing_key_id) = 32),
+    public_key     BLOB    NOT NULL CHECK (length(public_key) = 32),
+    added_at       TEXT    NOT NULL,
+    revoked_at     TEXT,
+    PRIMARY KEY (tenant_id, signing_key_id)
+);
+
+-- Consumption ledger for one-shot authorization records.
+--
+-- Separate from the record tables above, which hold the full parsed record
+-- and are written when a record is *issued or stored*. This table records
+-- that a record has been *used*, which is a distinct event: a record may be
+-- stored and never presented, and the primary key here is what makes the
+-- second presentation of the same record fail.
+--
+-- Keyed by (tenant, domain, replay_id): scoping by tenant means one tenant
+-- cannot burn another's replay ids, and scoping by domain means an approval
+-- and a grant that happen to share an id do not collide.
+CREATE TABLE v2_replay_ledger (
+    tenant_id             BLOB    NOT NULL REFERENCES v2_tenants(id) ON DELETE CASCADE,
+    payload_domain        TEXT    NOT NULL,
+    replay_id             BLOB    NOT NULL CHECK (length(replay_id) = 16),
+    record_table          TEXT    NOT NULL CHECK (record_table IN ('v2_device_approvals', 'v2_capability_grants')),
+    signed_container_hash BLOB    NOT NULL CHECK (length(signed_container_hash) = 32),
+    issuer_signing_key_id BLOB    NOT NULL CHECK (length(issuer_signing_key_id) = 32),
+    not_before_ms         INTEGER NOT NULL CHECK (not_before_ms BETWEEN 0 AND 9223372036854775807),
+    not_after_ms          INTEGER NOT NULL CHECK (not_after_ms BETWEEN 0 AND 9223372036854775807),
+    consumed_at           TEXT    NOT NULL,
+    PRIMARY KEY (tenant_id, payload_domain, replay_id)
 );
 
 CREATE INDEX v2_devices_by_account   ON v2_devices (tenant_id, account_id);

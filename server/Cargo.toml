@@ -25,6 +25,7 @@ sha2 = "0.10"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tower-http = { version = "0.5", features = ["trace", "cors"] }
+shared = { package = "shardx-core", path = "../shared" }
 
 [dev-dependencies]
 # End-to-end test: drive the real server binary the way the launcher's sync.rs

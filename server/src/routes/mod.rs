@@ -4,6 +4,7 @@ pub mod folders;
 pub mod locks;
 pub mod proxies;
 pub mod users;
+pub mod v2;
 
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, patch, post};
@@ -26,6 +27,18 @@ pub fn router(state: AppState) -> Router {
         .route("/users/:id/password", patch(users::reset_password))
         // audit trail (admin)
         .route("/audit", get(crate::audit::list))
+        // v2 team/fleet control plane
+        .route("/v2/device-approvals", post(v2::present_device_approval))
+        .route("/v2/capability-grants", post(v2::present_capability_grant))
+        .route(
+            "/v2/tenant-root-key-grants",
+            post(v2::present_tenant_root_key_grant),
+        )
+        .route("/v2/operations", post(v2::begin_idempotent_operation))
+        .route(
+            "/v2/operations/complete",
+            post(v2::complete_idempotent_operation),
+        )
         // folders
         .route("/folders", get(folders::list).post(folders::create))
         .route(
