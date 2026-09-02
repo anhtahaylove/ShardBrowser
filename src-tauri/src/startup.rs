@@ -199,9 +199,11 @@ mod tests {
 
     #[test]
     fn hides_only_an_enabled_minimized_autostart_launch() {
-        let mut configured = Settings::default();
-        configured.launch_at_login = true;
-        configured.start_minimized = true;
+        let mut configured = Settings {
+            launch_at_login: true,
+            start_minimized: true,
+            ..Default::default()
+        };
         assert!(should_start_hidden(&configured, true));
 
         configured.start_minimized = false;
