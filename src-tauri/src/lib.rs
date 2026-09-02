@@ -1439,16 +1439,18 @@ async fn team_enroll_device(label: String) -> Result<team_config::TeamStatus, St
         return Err("this device is already enrolled".into());
     }
 
-    // Fresh signing key for this device.
+    // Fresh signing key for this device. `getrandom` is a Windows-only
+    // dependency in this crate, so go through shared, which has it on every
+    // platform — enrollment is not Windows-only.
     let mut seed = [0u8; 32];
-    getrandom::getrandom(&mut seed).map_err(|e| e.to_string())?;
+    shardx_core::keys::fill_random(&mut seed).map_err(|e| e.to_string())?;
     let signer = shardx_core::signing::Ed25519SigningKey::from_bytes(&seed);
 
     // HPKE recipient key: enrollment records it, and fleet key grants will be
     // sealed to it. Generated with the signing key so one enrollment covers
     // both, rather than needing a second round trip later.
     let mut hpke_seed = [0u8; 32];
-    getrandom::getrandom(&mut hpke_seed).map_err(|e| e.to_string())?;
+    shardx_core::keys::fill_random(&mut hpke_seed).map_err(|e| e.to_string())?;
     let (_hpke_secret, hpke_public) = shardx_core::grants::derive_keypair(&hpke_seed);
     let hpke_public: [u8; 32] = hpke_public
         .as_slice()
