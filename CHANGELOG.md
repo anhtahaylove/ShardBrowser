@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.2.4
+
+### Root key custody
+
+- Tenant root keys now have a recorded lifecycle. A generation is created in
+  `PREPARING`, is activated only once its first grant exists, and grants are
+  refused unless they name a generation that exists, is not retired, and
+  wraps that generation's key.
+- The first grant for a generation must be a `FirstRootSelfGrant`, and a
+  second one is refused. Custodian-issued grants are only accepted afterwards,
+  so a tenant cannot end up with two competing roots.
+- Enrolled devices keep the HPKE private key generated during enrollment.
+  Previously it was discarded, so a device could be sent a wrapped root key it
+  could never open. Devices enrolled before this change are reported as unable
+  to receive custody, and Settings says so rather than failing later.
+- The Launcher can collect and open its own grants (`team_collect_custody`).
+
+### Releases
+
+- Releases now ship `shardx-team-server-<platform>` for all three platforms.
+  The grant and generation endpoints are server-side, so earlier releases
+  delivered them as source only. The release job fails if a server binary is
+  missing rather than publishing an incomplete set.
+
+### Note on scope
+
+Profile sync still derives its file key from a passphrase. Moving sync onto
+fleet keys needs the fleet key generation and grant tables that the plan
+specifies, which are not built yet; the root key work here is the layer
+underneath that. This release is not production-ready.
+
 ## v0.2.3
 
 Tenant root key grants are stored and retrievable, and a class of silently
