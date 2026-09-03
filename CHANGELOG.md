@@ -1,5 +1,53 @@
 # Changelog
 
+## v0.2.3
+
+Tenant root key grants are stored and retrievable, and a class of silently
+swallowed database errors is closed.
+
+### Key custody
+
+- `POST /v2/tenant-root-key-grants` now stores the grant it verifies. It
+  previously checked the signature and discarded the payload, so
+  `v2_tenant_root_key_grants` never held a row and a second device had no way
+  to obtain the tenant root key.
+- Add `GET /v2/tenants/:tenant/devices/:device/root-key-grants` to collect a
+  device's sealed grants. Storing grants without a way to read them back would
+  not have moved custody forward.
+- Grant fields are read from the signed field map rather than the request body.
+  A caller who could pair another issuer's signature with their own account and
+  device ids would redirect the custody that signature authorises.
+- The collection route derives tenant membership from the session, not the
+  path, matching the fix in #21.
+- `seal_trk` and `open_trk` now have a runtime caller and end-to-end coverage:
+  a grant is sealed, filed, collected, and opened with the device's private key
+  to recover the original root key.
+
+### Replay ledger
+
+- Fix a silent failure in `v2_replay_ledger`. Its `record_table` CHECK omitted
+  the root key grant table, and because the claim uses `INSERT OR IGNORE`, the
+  violation was indistinguishable from a duplicate key: zero rows affected,
+  reported as "already used". Every grant was refused as a replay of a record
+  that had never been stored, and grants had no replay protection at all,
+  because no ledger row was ever written.
+- Migration `0005` widens the constraint while preserving existing rows.
+  Rebuilding the ledger empty would let every previously consumed record be
+  presented again.
+- The claim now confirms the row exists before reporting a replay, and the
+  operation ledger reports the same class of fault instead of failing with an
+  unexplained database error.
+
+### Notes
+
+Grants must still be filed by an external custodian. Nothing generates a tenant
+root key, seals it to a newly enrolled device, or implements the root
+generation lifecycle and recovery bundle, so profile sync continues to use a
+passphrase-derived key. See `docs/key-custody.md`.
+
+This release is not production-ready: the P-OP gate is unmet, and key custody
+lifecycle and recovery are incomplete.
+
 ## v0.2.2
 
 Enrollment and profile sync reach the shipped binary, plus the tenant-boundary
