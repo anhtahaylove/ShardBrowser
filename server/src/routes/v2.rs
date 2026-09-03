@@ -30,6 +30,15 @@ fn parse_id16(hex: &str, field: &'static str) -> Result<[u8; 16], AppError> {
         .map_err(|_| AppError::BadRequest(format!("{field}: must be 16 bytes")))
 }
 
+/// Parse a 32-byte identifier such as a root key id.
+fn parse_id32(hex: &str, field: &'static str) -> Result<[u8; 32], AppError> {
+    let bytes = decode_hex(hex)
+        .ok_or_else(|| AppError::BadRequest(format!("{field}: not hex")))?;
+    bytes
+        .try_into()
+        .map_err(|_| AppError::BadRequest(format!("{field}: expected 32 bytes")))
+}
+
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
     if !s.len().is_multiple_of(2) {
         return None;
@@ -120,6 +129,19 @@ pub async fn server_identity(
     })))
 }
 
+#[derive(Deserialize)]
+pub struct BeginRootGenerationReq {
+    pub tenant_id: String,
+    /// Identifier of a root key generated on the caller's device. The key
+    /// itself is never sent.
+    pub root_key_id: String,
+}
+
+#[derive(Deserialize)]
+pub struct ActivateRootGenerationReq {
+    pub tenant_id: String,
+    pub generation: u64,
+}
 #[derive(Deserialize)]
 pub struct PresentRecordReq {
     /// Tenant this operation targets, hex-encoded.
@@ -312,6 +334,19 @@ pub async fn present_tenant_root_key_grant(
     // Read the grant out of the signed fields before claiming the replay id, so
     // a malformed record does not burn one.
     let row = crate::grants::grant_row_from_record(&verified)?;
+
+    // A grant names a generation and a root key. Both must match a generation
+    // this tenant actually has, and a first self-grant is only accepted while
+    // that generation is still preparing and unclaimed. Checked before the
+    // replay id is claimed so a rejected grant does not burn one.
+    crate::generations::check_grant_against_generation(
+        &app.db,
+        &tenant_id,
+        &row.grant_variant,
+        row.root_generation,
+        &row.root_key_id,
+    )
+    .await?;
 
     match idempotency::consume_replay_id(
         &app.db,
@@ -1018,6 +1053,84 @@ pub async fn head_snapshot(
     })))
 }
 
+
+/// Begin the tenant's first root key generation.
+///
+/// The caller generates the root key locally and sends only its identifier;
+/// the key itself never leaves the device, which is why the server can hold
+/// this record without being able to read anything sealed under it.
+pub async fn begin_root_generation(
+    State(app): State<AppState>,
+    user: AuthUser,
+    axum::Json(req): axum::Json<BeginRootGenerationReq>,
+) -> Result<axum::Json<serde_json::Value>, AppError> {
+    let tenant_id = parse_id16(&req.tenant_id, "tenant_id")?;
+    require_tenant_member(&app, tenant_id, &user).await?;
+
+    let root_key_id = parse_id32(&req.root_key_id, "root_key_id")?;
+
+    let generation = crate::generations::begin_first_generation(
+        &app.db,
+        &tenant_id,
+        &root_key_id,
+        &util::now_rfc3339(),
+    )
+    .await?;
+
+    Ok(axum::Json(serde_json::json!({
+        "generation": generation,
+        "state": crate::generations::STATE_PREPARING,
+    })))
+}
+
+/// Activate a prepared generation once its holder has proven it can unwrap.
+///
+/// Activation is a separate call because filing a grant only proves it was
+/// written, not that anyone can open it. The caller unwraps its own grant
+/// first; activating before that could leave a tenant sealed under a key that
+/// no device can recover.
+pub async fn activate_root_generation(
+    State(app): State<AppState>,
+    user: AuthUser,
+    axum::Json(req): axum::Json<ActivateRootGenerationReq>,
+) -> Result<axum::Json<serde_json::Value>, AppError> {
+    let tenant_id = parse_id16(&req.tenant_id, "tenant_id")?;
+    require_tenant_member(&app, tenant_id, &user).await?;
+
+    crate::generations::activate_generation(
+        &app.db,
+        &tenant_id,
+        req.generation,
+        &util::now_rfc3339(),
+    )
+    .await?;
+
+    Ok(axum::Json(serde_json::json!({
+        "generation": req.generation,
+        "state": crate::generations::STATE_ACTIVE,
+    })))
+}
+
+/// Report which generation is in force, so a device knows what to seal under.
+pub async fn get_active_root_generation(
+    State(app): State<AppState>,
+    user: AuthUser,
+    axum::extract::Path(tenant_hex): axum::extract::Path<String>,
+) -> Result<axum::Json<serde_json::Value>, AppError> {
+    let tenant_id = parse_id16(&tenant_hex, "tenant_id")?;
+    require_tenant_member(&app, tenant_id, &user).await?;
+
+    match crate::generations::active_generation(&app.db, &tenant_id).await? {
+        Some(g) => Ok(axum::Json(serde_json::json!({
+            "active": true,
+            "generation": g.generation,
+            "root_key_id": hex(&g.root_key_id),
+            "state": g.state,
+            "activated_at": g.activated_at,
+        }))),
+        None => Ok(axum::Json(serde_json::json!({ "active": false }))),
+    }
+}
 /// List the root key grants issued to one device.
 ///
 /// This is the collection half of custody: a device that was granted the tenant

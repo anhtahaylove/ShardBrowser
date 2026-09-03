@@ -41,6 +41,18 @@ pub fn router(state: AppState) -> Router {
             post(v2::present_tenant_root_key_grant),
         )
         .route(
+            "/v2/root-key-generations",
+            post(v2::begin_root_generation),
+        )
+        .route(
+            "/v2/root-key-generations/activate",
+            post(v2::activate_root_generation),
+        )
+        .route(
+            "/v2/tenants/:tenant_id/root-key-generation",
+            get(v2::get_active_root_generation),
+        )
+        .route(
             "/v2/tenants/:tenant_id/devices/:device_id/root-key-grants",
             get(v2::list_tenant_root_key_grants),
         )
