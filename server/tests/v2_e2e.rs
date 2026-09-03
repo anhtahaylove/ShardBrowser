@@ -1045,3 +1045,397 @@ fn enrollment_proof_bytes(
         ("hpke_public_key".into(), c::b(hpke_public_key)),
     ]))
 }
+
+
+/// Build a signed tenant-root-key-grant record.
+///
+/// The field set matches what the server reads out of the signed container; a
+/// grant assembled from anything less would be storable but not verifiable.
+#[allow(clippy::too_many_arguments)]
+fn grant_record(
+    sk: &Ed25519SigningKey,
+    tenant: [u8; 16],
+    replay_id: [u8; 16],
+    scope: &shared::grants::GrantScope,
+    sealed: &shared::grants::SealedGrant,
+    subject_signing_key_id: [u8; 32],
+    approval_replay_id: [u8; 16],
+    variant: &str,
+) -> Vec<u8> {
+    let fields = vec![
+        (
+            "container_domain",
+            c::Value::Text("shardx.authorization.tenant-root-key-grant.v2".to_string()),
+        ),
+        ("container_version", c::Value::Uint(1)),
+        ("tenant_id", c::Value::Bytes(tenant.to_vec())),
+        ("replay_id", c::Value::Bytes(replay_id.to_vec())),
+        ("grant_variant", c::Value::Text(variant.to_string())),
+        ("root_key_id", c::Value::Bytes(scope.root_key_id.to_vec())),
+        ("root_generation", c::Value::Uint(scope.root_generation)),
+        (
+            "grant_capability",
+            c::Value::Text("root-custody".to_string()),
+        ),
+        (
+            "subject_account_id",
+            c::Value::Bytes(scope.subject_account_id.to_vec()),
+        ),
+        (
+            "subject_device_id",
+            c::Value::Bytes(scope.subject_device_id.to_vec()),
+        ),
+        (
+            "subject_signing_key_id",
+            c::Value::Bytes(subject_signing_key_id.to_vec()),
+        ),
+        (
+            "recipient_hpke_key_id",
+            c::Value::Bytes(scope.recipient_hpke_key_id.to_vec()),
+        ),
+        (
+            "subject_device_approval_replay_id",
+            c::Value::Bytes(approval_replay_id.to_vec()),
+        ),
+        ("hpke_suite_id", c::Value::Uint(1)),
+        ("hpke_mode_id", c::Value::Uint(0)),
+        ("hpke_kem_id", c::Value::Uint(32)),
+        ("hpke_kdf_id", c::Value::Uint(1)),
+        ("hpke_aead_id", c::Value::Uint(3)),
+        (
+            "hpke_info_bytes",
+            c::Value::Bytes(sealed.hpke_info_bytes.clone()),
+        ),
+        (
+            "hpke_encapped_key_bytes",
+            c::Value::Bytes(sealed.encapped_key_bytes.clone()),
+        ),
+        (
+            "hpke_wrapped_trk_bytes",
+            c::Value::Bytes(sealed.ciphertext_bytes.clone()),
+        ),
+        ("issued_at_ms", c::Value::Uint(0)),
+        ("not_before_ms", c::Value::Uint(0)),
+        ("not_after_ms", c::Value::Uint(4_102_444_800_000)),
+        ("server_instance_id", c::Value::Bytes(INSTANCE.to_vec())),
+        ("restore_epoch", c::Value::Uint(0)),
+        (
+            "issuer_signing_key_id",
+            c::Value::Bytes(identity_key_id(&sk.verifying_key()).to_vec()),
+        ),
+    ];
+    build_signed_container(sk, fields).exact_bytes
+}
+
+/// Enroll a device over HTTP and return its id and account id.
+///
+/// Enrollment rather than a direct insert, because a grant is bound to a device
+/// the server considers enrolled; seeding the row directly would prove the
+/// storage path works against a device state the enrollment path cannot produce.
+async fn enroll(
+    cl: &reqwest::Client,
+    port: u16,
+    tok: &str,
+    tenant: &[u8; 16],
+    device_sk: &Ed25519SigningKey,
+    hpke_pk: &[u8; 32],
+) -> (Vec<u8>, Vec<u8>) {
+    let tenant_hex = hex(tenant);
+    let tenant_hex = tenant_hex.as_str();
+    let device_vk = device_sk.verifying_key().to_bytes();
+
+    let ch: Value = cl
+        .post(format!("{}/v2/devices/enrollment-challenges", base(port)))
+        .bearer_auth(tok)
+        .json(&json!({
+            "tenant_id": tenant_hex,
+            "signing_public_key": hex(&device_vk),
+            "hpke_public_key": hex(hpke_pk),
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let challenge_id = ch["challenge_id"].as_str().unwrap().to_string();
+    let nonce = decode_hex_str(ch["nonce"].as_str().unwrap());
+    let account_id = decode_hex_str(ch["account_id"].as_str().unwrap());
+
+    let proof_bytes = enrollment_proof_bytes(
+        &decode_hex_str(&challenge_id),
+        &nonce,
+        tenant,
+        &account_id,
+        &device_vk,
+        hpke_pk,
+    );
+    let sig = shared::signing::sign_tbs(device_sk, &proof_bytes);
+
+    let body = cl
+        .post(format!("{}/v2/devices/enrollment-proofs", base(port)))
+        .bearer_auth(tok)
+        .json(&json!({
+            "tenant_id": tenant_hex,
+            "challenge_id": challenge_id,
+            "nonce": hex(&nonce),
+            "signing_public_key": hex(&device_vk),
+            "hpke_public_key": hex(hpke_pk),
+            "proof_signature": hex(&sig),
+            "label_ciphertext": hex(b"opaque"),
+        }))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let enrolled: Value = serde_json::from_str(&body).unwrap();
+    let device_id = decode_hex_str(enrolled["device_id"].as_str().expect("device_id"));
+    (device_id, account_id)
+}
+
+/// A stored grant must come back sealed, and only to its own tenant.
+///
+/// This is the whole point of grant storage: before it existed the endpoint
+/// verified a grant and dropped it, so a second device had no way to obtain the
+/// tenant root key. The test seals a real key, files it, reads it back over
+/// HTTP and opens it with the device private key.
+#[tokio::test]
+async fn a_filed_root_key_grant_comes_back_sealed_to_its_device() {
+    let port = 38119u16;
+    let data = std::env::temp_dir().join(format!("shardx-e2e-grant-{}", std::process::id()));
+    let _guard = spawn_server(&data, port);
+    let cl = client();
+    wait_health(&cl, port).await;
+
+    let admin = token(&cl, port, "admin", "secret").await;
+    let user_id = admin_user_id(&cl, port, &admin).await;
+    let sk_a = Ed25519SigningKey::from_bytes(&[11u8; 32]);
+    let sk_b = Ed25519SigningKey::from_bytes(&[22u8; 32]);
+    seed(&data, &user_id, &sk_a, &sk_b).await;
+
+    let tenant_hex = hex(&TENANT_A);
+
+    // The recipient device holds an HPKE key pair; only its private half can
+    // open the grant.
+    let (device_hpke_sk, device_hpke_pk) = shared::grants::derive_keypair(&[0x66u8; 32]);
+    let device_sk = Ed25519SigningKey::from_bytes(&[0x44u8; 32]);
+    let device_hpke_pk: [u8; 32] = device_hpke_pk.as_slice().try_into().expect("hpke pk");
+    let (device_id, account_id) =
+        enroll(&cl, port, &admin, &TENANT_A, &device_sk, &device_hpke_pk).await;
+
+    // The tenant root key that custody is actually about. It never leaves this
+    // test in plaintext, and the server never sees it.
+    let trk: [u8; 32] = [0x9Au8; 32];
+    let scope = shared::grants::GrantScope {
+        replay_id: [0x31u8; 16],
+        tenant_id: TENANT_A,
+        server_instance_id: INSTANCE,
+        restore_epoch: 0,
+        root_key_id: shared::keys::root_key_id(&trk),
+        root_generation: 1,
+        subject_account_id: account_id.clone().try_into().expect("account id"),
+        subject_device_id: device_id.clone().try_into().expect("device id"),
+        recipient_hpke_key_id: shared::keys::hpke_key_id(&device_hpke_pk),
+    };
+
+    let sealed = shared::grants::seal_trk(&device_hpke_pk, &scope, &trk).expect("seal trk");
+
+    let record = grant_record(
+        &sk_a,
+        TENANT_A,
+        scope.replay_id,
+        &scope,
+        &sealed,
+        identity_key_id(&device_sk.verifying_key()),
+        [0x32u8; 16],
+        "FirstRootSelfGrant",
+    );
+
+    let filed = cl
+        .post(format!("{}/v2/tenant-root-key-grants", base(port)))
+        .bearer_auth(&admin)
+        .json(&json!({
+            "tenant_id": tenant_hex,
+            "record_hex": hex(&record),
+        }))
+        .send()
+        .await
+        .unwrap();
+    let filed_status = filed.status().as_u16();
+    let filed_body = filed.text().await.unwrap();
+    assert_eq!(filed_status, 201, "grant should be filed, got: {filed_body}");
+
+    // Read it back through the collection endpoint.
+    let listed_resp = cl
+        .get(format!(
+            "{}/v2/tenants/{}/devices/{}/root-key-grants",
+            base(port),
+            tenant_hex,
+            hex(&device_id)
+        ))
+        .bearer_auth(&admin)
+        .send()
+        .await
+        .unwrap();
+    let listed_status = listed_resp.status().as_u16();
+    let listed_body = listed_resp.text().await.unwrap();
+    assert_eq!(listed_status, 200, "listing grants failed: {listed_body}");
+    let listed: Value = serde_json::from_str(&listed_body).unwrap();
+
+    let grants = listed["grants"].as_array().expect("grants array");
+    assert_eq!(grants.len(), 1, "exactly the filed grant should come back");
+    let g = &grants[0];
+    assert_eq!(g["grant_variant"], "FirstRootSelfGrant");
+    assert_eq!(g["root_generation"], 1);
+
+    // The payload must survive storage byte-for-byte, or the device would hold
+    // a grant whose AEAD tag no longer checks out.
+    let got_encapped = decode_hex_str(g["hpke_encapped_key_hex"].as_str().unwrap());
+    let got_wrapped = decode_hex_str(g["hpke_wrapped_trk_hex"].as_str().unwrap());
+    assert_eq!(got_encapped, sealed.encapped_key_bytes);
+    assert_eq!(got_wrapped, sealed.ciphertext_bytes);
+
+    // The real assertion: the device recovers the tenant root key from what the
+    // server handed back. Comparing stored bytes alone would pass even if the
+    // grant were sealed to the wrong key.
+    let opened = shared::grants::open_trk(&device_hpke_sk, &scope, &got_encapped, &got_wrapped)
+        .expect("device should open its own grant");
+    assert_eq!(&opened[..], &trk[..], "recovered key must be the root key");
+
+    // Someone outside the tenant must not read these grants. Same class of flaw
+    // as the fleet endpoints: the path names a tenant, so authority has to come
+    // from the session instead. The seeded admin belongs to both tenants, so
+    // the check needs an account that belongs to neither.
+    let created = cl
+        .post(format!("{}/users", base(port)))
+        .bearer_auth(&admin)
+        .json(&json!({ "username": "outsider", "password": "outsider-pass", "role": "member" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        created.status().is_success(),
+        "could not create the outsider account: {}",
+        created.status()
+    );
+    let outsider = token(&cl, port, "outsider", "outsider-pass").await;
+
+    let cross = cl
+        .get(format!(
+            "{}/v2/tenants/{}/devices/{}/root-key-grants",
+            base(port),
+            tenant_hex,
+            hex(&device_id)
+        ))
+        .bearer_auth(&outsider)
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(
+        cross.status().as_u16(),
+        200,
+        "a non-member must not read a tenant's root key grants"
+    );
+}
+
+
+/// The replay ledger must accept root key grants, and refuse a real replay.
+///
+/// A regression guard for a silent failure: `record_table` once had a CHECK
+/// that omitted `v2_tenant_root_key_grants`, and because the claim uses
+/// `INSERT OR IGNORE`, the violation looked identical to a duplicate key. Every
+/// grant was answered "authorization record already used" while nothing was
+/// ever written -- so grants were both impossible to file and unprotected
+/// against actual replay.
+#[tokio::test]
+async fn a_root_key_grant_replay_id_is_claimed_exactly_once() {
+    let port = 38120u16;
+    let data = std::env::temp_dir().join(format!("shardx-e2e-grantreplay-{}", std::process::id()));
+    let _guard = spawn_server(&data, port);
+    let cl = client();
+    wait_health(&cl, port).await;
+
+    let admin = token(&cl, port, "admin", "secret").await;
+    let user_id = admin_user_id(&cl, port, &admin).await;
+    let sk_a = Ed25519SigningKey::from_bytes(&[11u8; 32]);
+    let sk_b = Ed25519SigningKey::from_bytes(&[22u8; 32]);
+    seed(&data, &user_id, &sk_a, &sk_b).await;
+
+    let tenant_hex = hex(&TENANT_A);
+    let (_sk, device_hpke_pk) = shared::grants::derive_keypair(&[0x77u8; 32]);
+    let device_hpke_pk: [u8; 32] = device_hpke_pk.as_slice().try_into().expect("hpke pk");
+    let device_sk = Ed25519SigningKey::from_bytes(&[0x45u8; 32]);
+    let (device_id, account_id) =
+        enroll(&cl, port, &admin, &TENANT_A, &device_sk, &device_hpke_pk).await;
+
+    let trk: [u8; 32] = [0x5Cu8; 32];
+    let scope = shared::grants::GrantScope {
+        replay_id: [0x41u8; 16],
+        tenant_id: TENANT_A,
+        server_instance_id: INSTANCE,
+        restore_epoch: 0,
+        root_key_id: shared::keys::root_key_id(&trk),
+        root_generation: 1,
+        subject_account_id: account_id.try_into().expect("account id"),
+        subject_device_id: device_id.try_into().expect("device id"),
+        recipient_hpke_key_id: shared::keys::hpke_key_id(&device_hpke_pk),
+    };
+    let sealed = shared::grants::seal_trk(&device_hpke_pk, &scope, &trk).expect("seal trk");
+    let record = grant_record(
+        &sk_a,
+        TENANT_A,
+        scope.replay_id,
+        &scope,
+        &sealed,
+        identity_key_id(&device_sk.verifying_key()),
+        [0x42u8; 16],
+        "CustodianIssued",
+    );
+
+    let file_once = || async {
+        let r = cl
+            .post(format!("{}/v2/tenant-root-key-grants", base(port)))
+            .bearer_auth(&admin)
+            .json(&json!({
+                "tenant_id": tenant_hex,
+                "record_hex": hex(&record),
+            }))
+            .send()
+            .await
+            .unwrap();
+        let status = r.status().as_u16();
+        (status, r.text().await.unwrap())
+    };
+
+    let (first, first_body) = file_once().await;
+    assert_eq!(first, 201, "the first filing should succeed: {first_body}");
+
+    // The second attempt is a genuine replay and must be refused as one -- and
+    // must not have stored a second copy of the grant.
+    let (second, _) = file_once().await;
+    assert_eq!(second, 409, "re-filing the same record must be a conflict");
+
+    let listed: Value = cl
+        .get(format!(
+            "{}/v2/tenants/{}/devices/{}/root-key-grants",
+            base(port),
+            tenant_hex,
+            hex(&scope.subject_device_id)
+        ))
+        .bearer_auth(&admin)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        listed["grants"].as_array().unwrap().len(),
+        1,
+        "a refused replay must not leave a second grant behind"
+    );
+}

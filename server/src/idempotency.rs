@@ -63,11 +63,36 @@ pub async fn consume_replay_id(
         .execute(pool)
         .await?;
 
-    Ok(if result.rows_affected() == 1 {
-        ReplayClaim::Fresh
+    if result.rows_affected() == 1 {
+        return Ok(ReplayClaim::Fresh);
+    }
+
+    // Zero rows means the insert was ignored, but OR IGNORE swallows every
+    // constraint failure, not just the duplicate primary key this path is
+    // testing for. Reporting "already used" without checking would turn a
+    // schema problem into a replay accusation about a record that was never
+    // stored -- which is exactly how a missing `record_table` CHECK value once
+    // made every root key grant look like a replay. Confirm the row is really
+    // there before blaming the caller.
+    let present = sqlx::query(
+        "SELECT 1 FROM v2_replay_ledger
+          WHERE tenant_id = ? AND payload_domain = ? AND replay_id = ? LIMIT 1",
+    )
+    .bind(tenant_id.as_slice())
+    .bind(&record.domain)
+    .bind(record.replay_id.as_slice())
+    .fetch_optional(pool)
+    .await?
+    .is_some();
+
+    if present {
+        Ok(ReplayClaim::AlreadyUsed)
     } else {
-        ReplayClaim::AlreadyUsed
-    })
+        Err(AppError::Internal(format!(
+            "replay ledger rejected a claim for `{}` without recording it",
+            table.as_table_name()
+        )))
+    }
 }
 
 /// Which authorization table a replay id belongs to.

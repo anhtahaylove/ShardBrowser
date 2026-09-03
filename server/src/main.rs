@@ -8,6 +8,7 @@ mod enrollment;
 mod error;
 mod extract;
 mod fleet;
+mod grants;
 mod idempotency;
 mod models;
 mod ratelimit;
