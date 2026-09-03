@@ -15,6 +15,9 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"></a>
+  <a href="https://github.com/ProxyShard/ShardBrowser/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/ProxyShard/ShardBrowser?style=flat-square&logo=github&label=release&color=blueviolet"></a>
+  <a href="https://github.com/ProxyShard/ShardBrowser/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/ProxyShard/ShardBrowser?style=flat-square&logo=github&label=stars&color=lightgrey"></a>
+  <a href="https://github.com/ProxyShard/ShardBrowser/commits"><img alt="Last commit" src="https://img.shields.io/github/last-commit/ProxyShard/ShardBrowser?style=flat-square&color=success"></a>
 </p>
 
 <p align="center">
@@ -25,11 +28,12 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ProxyShard/ShardBrowser/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/ProxyShard/ShardBrowser?style=flat-square&logo=github&label=Stars&color=lightgrey"></a>
-  <a href="https://github.com/ProxyShard/ShardBrowser/commits"><img alt="Last commit" src="https://img.shields.io/github/last-commit/ProxyShard/ShardBrowser?style=flat-square&color=success"></a>
-  <a href="https://pypi.org/project/shardx/"><img alt="PyPI downloads" src="https://img.shields.io/pypi/dm/shardx?style=flat-square&logo=pypi&logoColor=white&label=pypi&color=brightgreen"></a>
-  <a href="https://www.npmjs.com/package/@proxyshard/shardx"><img alt="npm downloads" src="https://img.shields.io/npm/dt/@proxyshard/shardx?style=flat-square&logo=npm&logoColor=white&label=npm&color=brightgreen"></a>
-  <a href="https://crates.io/crates/shardx"><img alt="crates.io downloads" src="https://img.shields.io/crates/d/shardx?style=flat-square&logo=rust&logoColor=white&label=crates.io&color=brightgreen"></a>
+  <a href="#what-it-is">Overview</a> ·
+  <a href="#launcher-features">Features</a> ·
+  <a href="#screenshots">Screenshots</a> ·
+  <a href="#comparison-with-other-anti-detect-browsers">Comparison</a> ·
+  <a href="#quick-start">Install</a> ·
+  <a href="#usage">Usage</a>
 </p>
 
 ShardX is built by the **[ProxyShard](https://proxyshard.com?utm_source=shardx&utm_medium=referral&utm_campaign=shardx-launcher)** team.
@@ -41,11 +45,21 @@ those capabilities. The launcher manages profiles, binds proxies and
 ships a patched **Chromium 152** build that applies fingerprint changes
 inside the browser engine.
 
-* **Site:**     [https://proxyshard.com](https://proxyshard.com?utm_source=shardx&utm_medium=referral&utm_campaign=shardx-launcher)
-* **Docs:**     [https://docs.proxyshard.com](https://docs.proxyshard.com?utm_source=shardx&utm_medium=referral&utm_campaign=shardx-launcher)
-* **Usage:**    [https://docs.proxyshard.com/eng/usage-instructions/shardx-browser](https://docs.proxyshard.com/eng/usage-instructions/shardx-browser?utm_source=shardx&utm_medium=referral&utm_campaign=shardx-launcher)
-* **UDP info:** [https://docs.proxyshard.com/eng/our-products/about-udp](https://docs.proxyshard.com/eng/our-products/about-udp?utm_source=shardx&utm_medium=referral&utm_campaign=shardx-launcher)
-* **p0f info:** [https://docs.proxyshard.com/eng/our-products/p0f-spoofing](https://docs.proxyshard.com/eng/our-products/p0f-spoofing?utm_source=shardx&utm_medium=referral&utm_campaign=shardx-launcher)
+<p align="center">
+  <a href="https://proxyshard.com?utm_source=shardx&utm_medium=referral&utm_campaign=shardx-launcher"><strong>Website</strong></a> ·
+  <a href="https://docs.proxyshard.com?utm_source=shardx&utm_medium=referral&utm_campaign=shardx-launcher"><strong>Documentation</strong></a> ·
+  <a href="https://docs.proxyshard.com/eng/usage-instructions/shardx-browser?utm_source=shardx&utm_medium=referral&utm_campaign=shardx-launcher"><strong>Browser guide</strong></a> ·
+  <a href="https://docs.proxyshard.com/eng/our-products/about-udp?utm_source=shardx&utm_medium=referral&utm_campaign=shardx-launcher"><strong>UDP relay</strong></a> ·
+  <a href="https://docs.proxyshard.com/eng/our-products/p0f-spoofing?utm_source=shardx&utm_medium=referral&utm_campaign=shardx-launcher"><strong>p0f spoofing</strong></a>
+</p>
+
+<table>
+  <tr>
+    <td width="33%" align="center"><strong>Native fingerprinting</strong><br><sub>Blink, V8 and the network stack</sub></td>
+    <td width="33%" align="center"><strong>Proxy-native networking</strong><br><sub>QUIC, HTTP/3 and WebRTC over SOCKS5 UDP</sub></td>
+    <td width="33%" align="center"><strong>Four control surfaces</strong><br><sub>Desktop UI, HTTP API, MCP and SDKs</sub></td>
+  </tr>
+</table>
 
 ShardX provides four ways to control the same profiles. They all use the
 same local state, so no additional synchronization is required:
@@ -64,11 +78,13 @@ same local state, so no additional synchronization is required:
 Configuration details are available in [Usage](#usage).
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/00-launcher-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/00-launcher-light.png">
-    <img src="docs/screenshots/00-launcher-light.png" alt="ShardX Launcher with active browser profiles" width="920">
-  </picture>
+  <kbd>
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/00-launcher-dark.png">
+      <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/00-launcher-light.png">
+      <img src="docs/screenshots/00-launcher-light.png" alt="ShardX Launcher with active browser profiles" width="920">
+    </picture>
+  </kbd>
 </p>
 
 ---
@@ -99,7 +115,7 @@ ShardX is free to use. ProxyShard proxies support end-to-end QUIC and
 WebRTC over SOCKS5 UDP relay. Other proxy providers can also be used,
 but full QUIC and WebRTC operation requires SOCKS5 UDP relay support.
 
-Current verification results:
+Verification results and test pages:
 
 | Test                                                            | Result                                                                   |
 |-----------------------------------------------------------------|--------------------------------------------------------------------------|
@@ -107,7 +123,7 @@ Current verification results:
 | [fingerprint.com](https://fingerprint.com/demo)                 | Bot / VPN / DevTools / browser-tampering all `Not detected`              |
 | [browserscan.net](https://www.browserscan.net)                  | Authenticity **100%**                                                    |
 | [pixelscan.net](https://pixelscan.net)                          | Fingerprint **consistent**, no proxy / automation detected               |
-| [fp.haru.gay](https://fp.haru.gay)                              | `isBot: false`, every sub-signal `false`                                 |
+| [deviceandbrowserinfo.com/are_you_a_bot](https://deviceandbrowserinfo.com/are_you_a_bot) | Browser fingerprinting and CDP bot-detection test          |
 | [antcpt.com/score_detector](https://antcpt.com/score_detector/) | reCAPTCHA v3 score **0.9**                                               |
 | [networktest.twilio.com](https://networktest.twilio.com)        | TURN UDP / TCP / TLS + Voice. All checks **Pass** with no real-IP leak    |
 
@@ -224,27 +240,36 @@ iframes, web workers, developer tools and headless mode.
 The QUIC handshake completes end to end through the SOCKS5 UDP relay.
 Twilio's UDP, TCP and TLS WebRTC tests pass without exposing the host IP.
 
-| browserleaks.com/quic: QUIC `True`, JA4 matches Chrome 152 | networktest.twilio.com: every probe `Pass`               |
+| [browserleaks.com/quic](https://browserleaks.com/quic): QUIC `True`, JA4 matches Chrome 152 | [networktest.twilio.com](https://networktest.twilio.com): every probe `Pass` |
 |-------------------------------------------------------------|------------------------------------------------------------|
-| ![QUIC](docs/screenshots/01-browserleaks-quic.jpg)          | ![Twilio](docs/screenshots/04-twilio-webrtc.jpg)           |
+| <kbd><img src="docs/screenshots/01-browserleaks-quic.jpg" alt="QUIC over SOCKS5 UDP relay" width="100%"></kbd> | <kbd><img src="docs/screenshots/04-twilio-webrtc.jpg" alt="Twilio WebRTC network test" width="100%"></kbd> |
 
 ### Bot / automation detection
 
-| fingerprint.com: Bot / VPN / DevTools / tampering `Not detected` | fp.haru.gay: `isBot: false`, every signal `false`     |
-|-------------------------------------------------------------------|---------------------------------------------------------|
-| ![FP](docs/screenshots/03-fingerprint-com.jpg)                    | ![Haru](docs/screenshots/07-haru-bot-detect.jpg)        |
+<p align="center">
+  <strong><a href="https://fingerprint.com/demo">fingerprint.com</a></strong><br>
+  <sub>Bot, VPN, DevTools and browser tampering are not detected</sub>
+</p>
+
+<p align="center">
+  <kbd><img src="docs/screenshots/03-fingerprint-com.jpg" alt="Fingerprint.com bot detection result" width="880"></kbd>
+</p>
+
+<p align="center">
+  <sub>Additional fingerprinting test: <a href="https://deviceandbrowserinfo.com/are_you_a_bot">deviceandbrowserinfo.com/are_you_a_bot</a></sub>
+</p>
 
 ### Fingerprint consistency
 
-| ProxyShard browser checker: no issues across 9 categories | pixelscan.net: Fingerprint **consistent**             |
+| **ProxyShard browser checker:** no issues across 9 categories | [pixelscan.net](https://pixelscan.net): Fingerprint **consistent** |
 |-------------------------------------------------------------------|---------------------------------------------------------|
-| ![ProxyShard](docs/screenshots/02-proxyshard-checker.jpg)         | ![Pixelscan](docs/screenshots/06-pixelscan.jpg)         |
+| <kbd><img src="docs/screenshots/02-proxyshard-checker.jpg" alt="ProxyShard browser checker" width="100%"></kbd> | <kbd><img src="docs/screenshots/06-pixelscan.jpg" alt="Pixelscan fingerprint consistency result" width="100%"></kbd> |
 
 ### Authenticity score
 
-| browserscan.net: Authenticity 100%, locale honoured     | antcpt.com: reCAPTCHA v3 score **0.9**                    |
+| [browserscan.net](https://www.browserscan.net): Authenticity 100%, locale honored | [antcpt.com](https://antcpt.com/score_detector/): reCAPTCHA v3 score **0.9** |
 |-----------------------------------------------------------|------------------------------------------------------------|
-| ![Browserscan](docs/screenshots/05-browserscan.jpg)       | ![reCAPTCHA](docs/screenshots/08-recaptcha-score.jpg)      |
+| <kbd><img src="docs/screenshots/05-browserscan.jpg" alt="Browserscan authenticity score" width="100%"></kbd> | <kbd><img src="docs/screenshots/08-recaptcha-score.jpg" alt="reCAPTCHA v3 score" width="100%"></kbd> |
 
 ---
 
@@ -272,8 +297,9 @@ the browser engine.
 ### Why this matters in practice
 
 Public browser checkers such as fingerprint.com, pixelscan.net,
-browserscan.net, fp.haru.gay and antcpt test only part of the browser
-fingerprint. An anti-detect browser can pass these checks while still
+browserscan.net, [deviceandbrowserinfo.com](https://deviceandbrowserinfo.com/are_you_a_bot)
+and antcpt test only part of the browser fingerprint. An anti-detect
+browser can pass these checks while still
 exposing inconsistent values on surfaces that are not tested there.
 
 Production anti-fraud systems inspect these additional surfaces.
