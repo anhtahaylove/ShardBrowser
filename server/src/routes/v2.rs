@@ -305,6 +305,14 @@ pub async fn present_tenant_root_key_grant(
     let verified = authz::verify_record(&record_bytes, authz::DOMAIN_TENANT_ROOT_KEY_GRANT, &ctx)
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
 
+    // Only a member may deposit a grant for this tenant. The record's signature
+    // proves an issuer wrote it, not that the caller is entitled to file it.
+    require_tenant_member(&app, tenant_id, &user).await?;
+
+    // Read the grant out of the signed fields before claiming the replay id, so
+    // a malformed record does not burn one.
+    let row = crate::grants::grant_row_from_record(&verified)?;
+
     match idempotency::consume_replay_id(
         &app.db,
         &tenant_id,
@@ -321,6 +329,20 @@ pub async fn present_tenant_root_key_grant(
             ))
         }
     }
+
+    // The grant is stored only after the replay id is claimed, so a retry of an
+    // already-filed record cannot write a second copy.
+    crate::grants::insert_grant(
+        &app.db,
+        &tenant_id,
+        &ctx.server_instance_id,
+        ctx.restore_epoch,
+        &verified,
+        &record_bytes,
+        &row,
+        &util::now_rfc3339(),
+    )
+    .await?;
 
     crate::audit::log(
         &app.db,
@@ -994,6 +1016,45 @@ pub async fn head_snapshot(
         "container_sha256": hex(&target.container_sha256),
         "manifest_hex": hex(&target.exact_signed_container_bytes),
     })))
+}
+
+/// List the root key grants issued to one device.
+///
+/// This is the collection half of custody: a device that was granted the tenant
+/// root key fetches the sealed grant here and opens it with its own HPKE
+/// private key. The server returns ciphertext it cannot read.
+pub async fn list_tenant_root_key_grants(
+    State(app): State<AppState>,
+    user: AuthUser,
+    axum::extract::Path((tenant_hex, device_hex)): axum::extract::Path<(String, String)>,
+) -> Result<axum::Json<serde_json::Value>, AppError> {
+    let tenant_id = parse_id16(&tenant_hex, "tenant_id")?;
+    let device_id = parse_id16(&device_hex, "device_id")?;
+
+    // Membership is checked against the authenticated user rather than the path,
+    // so a caller cannot read another tenant's grants by naming that tenant.
+    require_tenant_member(&app, tenant_id, &user).await?;
+
+    let grants = crate::grants::grants_for_device(&app.db, &tenant_id, &device_id).await?;
+
+    let items: Vec<_> = grants
+        .into_iter()
+        .map(|g| {
+            serde_json::json!({
+                "grant_variant": g.grant_variant,
+                "root_key_id": hex(&g.root_key_id),
+                "root_generation": g.root_generation,
+                "recipient_hpke_key_id": hex(&g.recipient_hpke_key_id),
+                "hpke_info_hex": hex(&g.hpke_info_bytes),
+                "hpke_encapped_key_hex": hex(&g.hpke_encapped_key_bytes),
+                "hpke_wrapped_trk_hex": hex(&g.hpke_wrapped_trk_bytes),
+                "signed_container_hex": hex(&g.exact_signed_container_bytes),
+                "created_at": g.created_at,
+            })
+        })
+        .collect();
+
+    Ok(axum::Json(serde_json::json!({ "grants": items })))
 }
 
 #[derive(Deserialize)]

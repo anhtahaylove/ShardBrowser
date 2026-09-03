@@ -94,15 +94,40 @@ the right model to keep.
 
 | Piece | State |
 | --- | --- |
-| `seal_trk` / `open_trk` | Implemented in `shared`, **no caller outside `.omx/spikes/`** |
-| `v2_tenant_root_key_grants` table | Exists; used **only** as a replay ledger |
-| `POST /v2/tenant-root-key-grants` | Verifies the signature, checks replay, and **discards the grant** — nothing is stored |
+| `seal_trk` / `open_trk` | Implemented in `shared`; exercised end to end by the grant tests |
+| `v2_tenant_root_key_grants` table | Stores filed grants |
+| `POST /v2/tenant-root-key-grants` | Verifies, claims the replay id, and **stores** the sealed grant |
+| `GET /v2/tenants/:tenant/devices/:device/root-key-grants` | Returns a device's sealed grants |
 | Root generation lifecycle | No table, no endpoints |
+| Grant issuance at enrollment | Not implemented — grants must be filed by an external custodian |
 | Recovery bundle | Not implemented |
 
-So the endpoint that looks like TRK distribution is an authorization check with
-no persistence behind it. A second device has no way to obtain the TRK, which
-is why sync falls back to a shared passphrase.
+Storage and collection now exist: a grant sealed to a device's HPKE key can be
+filed, read back, and opened by that device, and `v2_e2e.rs` proves the round
+trip by recovering the key from what the server returned. The server stores
+ciphertext it cannot read.
+
+What is still missing is everything that would *produce* those grants
+automatically. Nothing generates a TRK, nothing seals it to a newly enrolled
+device, and no generation lifecycle governs rotation. So sync still falls back
+to a shared passphrase: the transport for a root key exists, the ceremony that
+would use it does not.
+
+### A failure worth remembering
+
+`record_table` in `v2_replay_ledger` had a CHECK constraint listing only the
+device-approval and capability-grant tables. Root key grants claim their replay
+id from the same ledger, so every attempt violated it.
+
+The claim runs as `INSERT OR IGNORE ... changes()`, and OR IGNORE swallows a
+CHECK violation exactly like a duplicate primary key — zero rows affected. The
+endpoint read that as "already used" and answered `409`, so filing any grant
+looked like a replay of a record that had never been stored. Grants were both
+impossible to file and entirely unprotected against real replay.
+
+Migration `0005` widens the constraint, and `consume_replay_id` now confirms the
+row actually exists before reporting a replay, so a future constraint gap
+surfaces as an error instead of a false accusation.
 
 ## Recovery
 
@@ -123,8 +148,8 @@ assume the server can help. It cannot; it never sees a key.
 
 Roughly the sequence the constraints force:
 
-1. **Persist TRK grants.** Make `POST /v2/tenant-root-key-grants` store what it
-   already verifies. Without this nothing downstream is testable.
+1. ~~**Persist TRK grants.**~~ Done: grants are stored and collectable, and a
+   device can open its own grant. Issuance is still manual.
 2. **Root generation lifecycle.** Table plus create/activate/revoke, with the
    `FirstRootSelfGrant` uniqueness constraint the plan specifies.
 3. **Grant TRK at enrollment.** A custodian device seals the TRK to the new

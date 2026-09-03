@@ -40,6 +40,10 @@ pub fn router(state: AppState) -> Router {
             "/v2/tenant-root-key-grants",
             post(v2::present_tenant_root_key_grant),
         )
+        .route(
+            "/v2/tenants/:tenant_id/devices/:device_id/root-key-grants",
+            get(v2::list_tenant_root_key_grants),
+        )
         .route("/v2/operations", post(v2::begin_idempotent_operation))
         .route(
             "/v2/operations/complete",
