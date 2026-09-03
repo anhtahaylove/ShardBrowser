@@ -9,7 +9,12 @@ import type { ProxyEntry } from "../../../entities/proxy";
 import { proxySave } from "../../../entities/proxy";
 import { psActive, psSignatureSet } from "../../../entities/proxyshard";
 
-export function ProxyEditor({ initial, onClose }: { initial: ProxyEntry; onClose: () => void }) {
+export function ProxyEditor({ initial, onClose, onSaved }: {
+  initial: ProxyEntry;
+  onClose: () => void;
+  /** Hands back the saved entry, id included — the caller may want to bind it. */
+  onSaved?: (p: ProxyEntry) => void;
+}) {
   const [p, setP] = useState<ProxyEntry>(initial);
   // DC/ISP proxies imported from a ProxyShard order carry the order id in
   // notes — enables editing their p0f OS signature here.
@@ -32,8 +37,9 @@ export function ProxyEditor({ initial, onClose }: { initial: ProxyEntry; onClose
       .catch(() => {});
   }, [orderId]);
   const save = async () => {
+    if (!p.host.trim()) { toast.err("A proxy needs a host"); return; }
     try {
-      await proxySave(p);
+      const saved = await proxySave(p);
       // Apply the p0f signature only when it changed to a non-empty value.
       if (orderId && sig && sig !== curSig) {
         try {
@@ -42,6 +48,7 @@ export function ProxyEditor({ initial, onClose }: { initial: ProxyEntry; onClose
         } catch (e) { toast.err("p0f: " + String(e)); }
       }
       toast.ok(initial.id ? "Proxy saved" : "Proxy added");
+      onSaved?.(saved);
       onClose();
     } catch (e) { toast.err(String(e)); }
   };
@@ -56,7 +63,12 @@ export function ProxyEditor({ initial, onClose }: { initial: ProxyEntry; onClose
       onCancel={onClose}
     >
       <div className="flex flex-col gap-3 py-4">
-        <Field label="Name" value={p.name} onChange={(v: string) => setP({ ...p, name: v })} />
+        <Field
+          label="Name"
+          value={p.name}
+          onChange={(v: string) => setP({ ...p, name: v })}
+          placeholder={p.host ? `${p.host}:${p.port}` : "e.g. facebook — shown in the profile's proxy list"}
+        />
         <div className="grid grid-cols-2 gap-3">
           <Select
             label="Type"

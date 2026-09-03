@@ -209,8 +209,11 @@ pub async fn probe(entry: &ProxyEntry) -> Result<u128> {
 // ---- Bulk import ----
 //
 // Accepted: socks5://user:pass@host:port, user:pass@host:port, host:port:user:pass,
-//           host:port@user:pass, host:port. `#` lines and trailing `# country=X note=Y`
-//           supported. SOCKS5 default kind when scheme missing.
+//           host:port@user:pass, host:port. A trailing `#` is the proxy's name
+//           (`#facebook`); `country=X` and `note=Y` there are still read, for
+//           lines exported by older builds, but the country a proxy reports is
+//           filled in by its test. Whole-line `#` comments are skipped.
+//           SOCKS5 when no scheme given.
 
 /// Parse a single proxy line for inline (unsaved) use by the API.
 pub fn parse_single(line: &str) -> Option<ProxyEntry> {
@@ -268,19 +271,24 @@ fn parse_one(line: &str, default_kind: &ProxyKind) -> Option<ProxyEntry> {
     let port: u16 = port_s.parse().ok()?;
     let mut country = String::new();
     let mut notes = String::new();
+    // The comment is the name; `key=value` is only for lines older builds wrote.
+    let mut name_parts: Vec<&str> = Vec::new();
     if let Some(c) = comment {
         for kv in c.split_whitespace() {
             if let Some(v) = kv.strip_prefix("country=") {
                 country = v.to_string();
             } else if let Some(v) = kv.strip_prefix("note=") {
                 notes = v.to_string();
+            } else {
+                name_parts.push(kv.trim_start_matches('#'));
             }
         }
     }
+    let name = name_parts.join(" ");
     Some(ProxyEntry {
         // ID assigned now so pre-save test snapshots key under the kept uuid.
         id: uuid::Uuid::new_v4().to_string(),
-        name: format!("{host}:{port}"),
+        name: if name.is_empty() { format!("{host}:{port}") } else { name },
         kind,
         host: host.to_string(),
         port,

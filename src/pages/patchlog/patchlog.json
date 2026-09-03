@@ -1,0 +1,493 @@
+{
+  "starsRequired": 1000,
+  "repoUrl": "https://github.com/ProxyShard/ShardBrowser",
+  "releases": [
+    {
+      "version": "2.0.1",
+      "date": "2026-09-03",
+      "entries": [
+        {
+          "id": "ensemble",
+          "title": "Synchronised windows",
+          "lead": "You work in one window; every other window in the group repeats the same actions in its own profile.",
+          "locked": true,
+          "blocks": [
+            {
+              "type": "p",
+              "text": "Pointer, keystrokes, scrolling, opening and closing tabs, extension popups. It is not a recording played back: each window performs the action with its own motor profile, so the windows never move identically."
+            },
+            {
+              "type": "p",
+              "text": "There is no leader to appoint. Whichever window you are typing in is the one driving, because it is the one receiving real input. Switch windows and it follows."
+            },
+            {
+              "type": "p",
+              "text": "The fill helper is deliberately excluded. In a group every window fills the same form at the same moment with its own generated person, so mirroring those keystrokes would put one window's answers into everyone else's fields."
+            },
+            {
+              "type": "p",
+              "text": "Fixed: a window that came up zoomed, full-screen or minimised ignored the layout, because in those states the window state owns the geometry. It now leaves that state first. The chosen layout is also remembered, so a profile that finishes starting after the others is placed too."
+            },
+            {
+              "type": "p",
+              "text": "Fixed: a tab opened by a site — `target=_blank` or `window.open` — stayed behind in the other windows when it was closed. Such tabs are never broadcast, since every window opens its own from the same mirrored click, so there was no name to close by. They now get a name both sides work out independently, and the close carries the page address as a check, so a window that finds something else under that name leaves it alone."
+            }
+          ],
+          "scope": "browser"
+        },
+        {
+          "id": "human-type-browser",
+          "title": "Human typing in the browser",
+          "lead": "Right-click a field and the browser types into it the way a person does.",
+          "tag": "new",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "The context menu of any text field, search box or `contenteditable` gets two entries: **Human Type**, which types the clipboard, and **Fill with generated**, a submenu of eight values generated for this profile — name, surname, email, username, phone and the rest. Each entry shows the value it will type."
+            },
+            {
+              "type": "p",
+              "text": "The text is not set on the element and not pasted. It goes in key by key, through the same path a keyboard uses:"
+            },
+            {
+              "type": "list",
+              "items": [
+                "gaps between keystrokes vary instead of being a fixed delay",
+                "timing depends on the letter pair — `th` is faster than `qz`, as it is for a person",
+                "keys overlap: the next goes down before the previous comes up",
+                "a per-character bias that belongs to the profile and survives restarts",
+                "optional typos, made and corrected with a real backspace"
+              ]
+            },
+            {
+              "type": "p",
+              "text": "The pointer moves the same way, with overshoot and correction, and takes longer to reach a small target than a large one. Password fields are excluded."
+            },
+            {
+              "type": "note",
+              "text": "No JavaScript is injected. The whole path is C++ inside the browser process, so a page cannot detect a script that was never there."
+            }
+          ],
+          "scope": "browser"
+        },
+        {
+          "id": "human-type-cdp",
+          "title": "Human typing over CDP",
+          "lead": "The same typing and pointer engine, driven from a script.",
+          "tag": "new",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "The commands live in a `Motion` domain on the browser target. It does not appear in `/json/protocol` or `Schema.getDomains`, and the command names deliberately do not match those of other automation tools."
+            },
+            {
+              "type": "code",
+              "text": "Motion.createPointer  {x, y, paceScale?, seed?}\nMotion.glideTo        {x, y, targetWidth?}   → {durationMs}\nMotion.tap            {button?, clickCount?}\nMotion.enterText      {text, allowTypos?}    → {durationMs}\nMotion.destroyPointer"
+            },
+            {
+              "type": "p",
+              "text": "Create the pointer first: a session without one answers every other command with an error rather than guessing where the cursor is, since a guessed starting point gives the wrong duration and the wrong curve. Pass the element's real width as `targetWidth` — that is what makes the timing believable."
+            },
+            {
+              "type": "note",
+              "text": "Worked example in the README, section “Human input over CDP”."
+            }
+          ],
+          "scope": "browser"
+        },
+        {
+          "id": "shardx-camera",
+          "title": "Camera",
+          "lead": "The profile has a camera even on a machine that has none, and it shows the photo or video you pick.",
+          "tag": "new",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "The machine's camera list is replaced, not added to. A page never reaches the real camera — which matters because the profile's fingerprint already names a specific camera model, and handing over the host's would contradict it."
+            },
+            {
+              "type": "p",
+              "text": "Pick the file from the control left of the app menu while the browser is running. PNG, JPEG, MP4, MOV, WebM, Y4M and MJPEG are accepted, and the format is detected from the file's contents, so a wrong extension does not matter. Video loops, so a short clip is enough."
+            },
+            {
+              "type": "p",
+              "text": "The panel shows the first frame with a selection rectangle: drag inside it to move, drag a corner to resize, and the numbers beside it let you write a framing down and repeat it. The rectangle keeps the camera's aspect ratio, so the picture is never stretched or letterboxed. For a portrait or square photo there is a checkbox that fits the whole image instead and fills the space beside it."
+            },
+            {
+              "type": "p",
+              "text": "What a page gets is a camera, not a file:"
+            },
+            {
+              "type": "list",
+              "items": [
+                "the device name and id are the profile's, not the path to your file",
+                "a normal ladder of resolutions, not just the one the picture happens to be",
+                "pan, tilt and zoom crop the picture for real, and are reported as supported only when the model the profile claims has them",
+                "frames carry sensor noise, so no two are identical — a page comparing consecutive frames does not see a frozen image",
+                "frame timing has a millisecond or two of jitter, as real hardware does",
+                "the colour space is set"
+              ]
+            },
+            {
+              "type": "note",
+              "text": "With nothing picked the camera still works and shows a dark frame, rather than failing. A camera that enumerates and then never delivers is itself detectable."
+            }
+          ],
+          "scope": "browser"
+        },
+        {
+          "id": "helper",
+          "title": "Form filling helper",
+          "lead": "The browser finds the fields, offers them, and fills them on one button.",
+          "tag": "new",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "Enabled per profile. The browser watches the page, offers the fields it can fill, and on one press types them in one at a time. Generated identities are stable per profile: the profile is the account, and an account has one owner."
+            },
+            {
+              "type": "p",
+              "text": "Three sources are used, each answering one question:"
+            },
+            {
+              "type": "list",
+              "items": [
+                "**Autofill** — what a field is: a first name, a year of birth, a gender.",
+                "**The accessibility tree** — whether the element is still there, where, and whether it is shown. Read fresh several times over the first seconds of a step, and matched by element id rather than position, because two steps of one signup can occupy the same rectangle.",
+                "**Focus after the click** — whether the click landed. Nothing in the browser process knows what is painted on top of what, so if another element took the focus the field is skipped instead of typed into blind."
+              ]
+            },
+            {
+              "type": "p",
+              "text": "Drop-downs built from a `div` and a `ul`, which autofill cannot see, are found through the accessibility tree and filled by clicking the box and then the option."
+            },
+            {
+              "type": "p",
+              "text": "Fixed: a signup that swapped its step inside one document left the helper offering the previous step's fields, so filling put a name into the date row. Three causes: the old step stayed in autofill's cache, the old fields were laid out underneath the new ones at the same coordinates, and a step that starts hidden was parsed once at load with every field marked unfocusable and never re-read. The accessibility tree now settles all three."
+            },
+            {
+              "type": "p",
+              "text": "The offer also settles itself: the page is looked at several times over the first seconds of a step, so a half-parsed form corrects itself instead of waiting for you to touch something."
+            }
+          ],
+          "scope": "browser"
+        },
+        {
+          "id": "mcp-human",
+          "title": "Human input in MCP",
+          "lead": "The Motion domain wrapped so a model can aim at an element instead of a coordinate.",
+          "tag": "new",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "The bundled MCP server gains `human_click`, `human_move`, `human_fill` and `human_type`. They take the same selectors as the existing browser tools; the wrapper resolves the element, scrolls it into view and passes the core its coordinates together with the element's real width, which is what makes a small target take longer to reach."
+            },
+            {
+              "type": "code",
+              "text": "human_fill(profile_id, \"#email\", \"ada@example.com\")\nhuman_fill(profile_id, \"#email\", \"new@…\", clear: true)\nhuman_click(profile_id, \"button[type=submit]\")"
+            },
+            {
+              "type": "p",
+              "text": "`clear` selects the current value with a triple click rather than a keyboard shortcut, so the clearing is as human as the typing. Give `x` and `y` instead of a selector when the coordinates are already known. The calls take real time and report how long the move and the typing took."
+            }
+          ],
+          "scope": "browser"
+        },
+        {
+          "id": "profile-icon",
+          "title": "Per-profile window icon",
+          "lead": "Each profile's window shows its own name and colour.",
+          "tag": "new",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "In the Dock, the taskbar and Alt-Tab you see which profile you are switching to. The name is set as large as it fits, wrapping to at most three lines; a name too long to fit is trimmed with an ellipsis."
+            },
+            {
+              "type": "p",
+              "text": "The icon is shaped the way each system shapes its own: a squircle with a shadow on macOS, a full-bleed rounded square on Windows, an Adwaita outline on Linux."
+            },
+            {
+              "type": "note",
+              "text": "Nothing to set up. Rename a profile and its icon follows on the next launch."
+            }
+          ]
+        },
+        {
+          "id": "profile-colour",
+          "title": "Profile colour",
+          "lead": "One colour per profile, on its window icon and behind its name in the omnibox.",
+          "tag": "new",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "Pick it in the profile editor. The window icon takes it, and so does the pill carrying the profile's name in the omnibox, so the two never disagree about which profile you are looking at."
+            },
+            {
+              "type": "p",
+              "text": "Left on **Auto** the icon derives a colour from the name — the same profile always the same colour, and the thing you can still tell apart at 32 px — while the pill keeps the browser's own toolbar colour and follows the theme."
+            },
+            {
+              "type": "note",
+              "text": "`color` is a field on profile create and edit, so a scripted fleet can come out colour-coded."
+            }
+          ]
+        },
+        {
+          "id": "extensions",
+          "title": "Extension library",
+          "lead": "Add an extension once, then pick it per profile.",
+          "tag": "new",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "**Library → Extensions** → *From link*: give it a Web Store address and the extension downloads itself. Pasting just the id out of the address works too, as does a direct link to a `.crx` or `.zip`. A file or an unpacked folder can be added the same way."
+            },
+            {
+              "type": "p",
+              "text": "Each one shows its name, version, description and icon, read out of the extension itself — so what the grid shows is what the browser will load. In the profile editor they are chips: tick the ones this profile should run, and different profiles can carry different sets."
+            },
+            {
+              "type": "note",
+              "text": "Removing an extension from the library stops every profile loading it from its next start; profiles hold a reference, not a copy."
+            },
+            {
+              "type": "note",
+              "text": "Also over the API and MCP: `POST /extensions` takes the same link, and a profile's `extensions` is a field on create and edit."
+            }
+          ]
+        },
+        {
+          "id": "bookmarks",
+          "title": "Folder bookmarks",
+          "lead": "A site bound to a folder appears in the bookmarks bar of every profile in that folder.",
+          "tag": "new",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "**Library → Bookmarks**: add a site, pick the folder. Every profile in that folder gets it in a bookmarks-bar folder called **ShardX**, from its next launch. Bound to no folder means every profile."
+            },
+            {
+              "type": "p",
+              "text": "Only that folder is managed. Bookmarks saved inside a profile are left alone, and a site removed here disappears from the profiles on their next launch."
+            },
+            {
+              "type": "note",
+              "text": "Also over the API and MCP: `GET`/`POST /bookmarks`."
+            }
+          ]
+        },
+        {
+          "id": "trash",
+          "title": "Trash",
+          "lead": "A deleted profile is kept for 7 days and can be restored with its cookies and logins.",
+          "tag": "new",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "Deleting a profile now moves it to **Trash**, restorable for seven days. What comes back is the account — cookies, saved logins, site data, preferences, history and bookmarks — under the same id, so anything that referenced the profile still points at it."
+            },
+            {
+              "type": "p",
+              "text": "Caches are not kept, which is why a profile that took a gigabyte sits in the trash as a few megabytes. Deleting a folder together with its profiles goes through the trash too."
+            },
+            {
+              "type": "note",
+              "text": "After seven days it is gone. **Empty trash** does it sooner."
+            },
+            {
+              "type": "note",
+              "text": "Also over the API and MCP: `DELETE /profiles/{id}` archives, `GET /trash` lists, `POST /trash/{id}/restore` brings it back."
+            }
+          ]
+        },
+        {
+          "id": "data-location",
+          "title": "Profile data location",
+          "lead": "Move profiles, extensions and the trash to another folder or disk.",
+          "tag": "new",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "**Settings → Profile data location** → *Change…* and pick a folder on any disk. Moving shows a progress bar; nothing in the old folder is deleted until every file has arrived and been checked, so a failure part-way leaves you exactly where you were."
+            },
+            {
+              "type": "p",
+              "text": "Profiles cannot be launched while the move runs — including from the API, so a script cannot start a browser mid-move. Close every running profile first."
+            },
+            {
+              "type": "note",
+              "text": "A disk mounted read-only is refused before anything is copied, rather than half-way through."
+            }
+          ]
+        },
+        {
+          "id": "extra-args",
+          "title": "Extra launch arguments",
+          "lead": "Switches added to every profile launch.",
+          "tag": "new",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "**Settings → Extra launch arguments**, one per line or space-separated; quote a value containing spaces. They are applied last, so a switch here also overrides the launcher's own."
+            },
+            {
+              "type": "note",
+              "text": "Put anything that changes what a page can measure in the profile instead. A switch applied to every profile at once makes them all alike."
+            }
+          ]
+        },
+        {
+          "id": "proxy-names",
+          "title": "Proxy names",
+          "lead": "`host:port:user:pass #facebook` — what follows the hash is the proxy's name.",
+          "tag": "new",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "The name is shown first in the profile's proxy list and in the proxy table, with the address after it. Set it when creating or editing a proxy, or write it into the line you paste. Bulk import reads it and export writes it back."
+            },
+            {
+              "type": "note",
+              "text": "Leave the name empty and the field's placeholder shows the address it will fall back to. The country is not something you write down — the proxy test fills it in."
+            }
+          ]
+        },
+        {
+          "id": "proxy-distribute",
+          "title": "Distributing proxies",
+          "lead": "Select proxies, press Distribute, check the pairing, bind.",
+          "tag": "new",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "The dialog puts the two lists side by side and pairs them by position — proxy #1 to profile #1 — so you can check the pairing before binding. One proxy per profile: if the proxies run out, the remaining profiles are left alone rather than sharing an IP."
+            },
+            {
+              "type": "p",
+              "text": "It applies to profiles **without a proxy** by default. Switch it to all profiles to reassign existing ones; it shows how many bindings would be replaced before you confirm."
+            }
+          ]
+        },
+        {
+          "id": "editor-proxy",
+          "title": "Adding a proxy from the profile editor",
+          "lead": "Add and bind a proxy from the profile's own proxy list.",
+          "tag": "new",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "**Create new proxy** sits at the top of the profile's proxy list — the place you are already looking when you find the proxy you wanted is not there. Paste one line and it is read the way bulk import reads it: `host:port`, `host:port:user:pass`, `user:pass@host:port` or a `socks5://` URL, with a trailing `#name`."
+            },
+            {
+              "type": "p",
+              "text": "What was understood is shown before anything is saved. Saving adds it to the proxy list and binds it to the profile you are editing."
+            }
+          ]
+        },
+        {
+          "id": "list-work",
+          "title": "Row selection and filters",
+          "lead": "Shift-click selects a run of rows; filters narrow the profile list.",
+          "tag": "new",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "Shift-click spans from the last row you clicked to the one you shift-click, on both the profiles and the proxies table, and anywhere on the row rather than only the checkbox."
+            },
+            {
+              "type": "p",
+              "text": "The row you shift-click decides the direction: an unticked row ticks the whole run, a ticked one clears it. That is also how a run selected by mistake is undone."
+            },
+            {
+              "type": "p",
+              "text": "Profiles filter by whether they are running, by the country of the bound proxy and by whether there is a proxy at all. The button carries a count so you can see when a filter is hiding something."
+            }
+          ]
+        },
+        {
+          "id": "temp-noise",
+          "title": "Noise for temporary profiles",
+          "lead": "`POST /profiles/temporary` takes a noise block.",
+          "tag": "new",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "A temporary profile can now set noise per vector instead of taking the default, which is everything off:"
+            },
+            {
+              "type": "code",
+              "text": "POST /profiles/temporary\n{\n  \"platform\": \"Windows\",\n  \"proxy\": \"socks5://user:pass@host:1080\",\n  \"noise\": {\n    \"canvas\": true,\n    \"webgl\": { \"enabled\": true, \"intensity\": 0.0005 },\n    \"fonts\": true\n  }\n}"
+            },
+            {
+              "type": "p",
+              "text": "`true` turns a vector on with the strength the UI uses; a full block sets the details. A vector you leave out stays off. The same argument reaches the bundled MCP server as `create_temporary_profile`'s `noise`."
+            },
+            {
+              "type": "note",
+              "text": "Leave `seed` out. Two temporary profiles created a second apart still get different fingerprints."
+            }
+          ]
+        },
+        {
+          "id": "fixes",
+          "title": "Fixes",
+          "lead": "Two places where the launcher's lists were out of date.",
+          "tag": "fix",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "list",
+              "items": [
+                "**A proxy added on the Proxies page was missing from the profile editor** until the app was restarted. It appears immediately now, and a proxy bound by the distribute dialog shows up in the profiles table the same way.",
+                "**Country, region and city in the ProxyShard residential generator had no search.** They are searchable now, as is the location picker on the buy card."
+              ]
+            }
+          ]
+        },
+        {
+          "id": "engine-updates",
+          "title": "Engine update detection",
+          "lead": "A rebuilt engine now reaches you even when the Chromium version has not changed.",
+          "tag": "fix",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "The update check only compared Chromium versions, so a second engine build on the same version — new patches, same upstream, which is most releases — was never offered. Three things now say an engine has moved: the Chromium version, the build stamp the release carries, and the archive itself."
+            },
+            {
+              "type": "p",
+              "text": "A release can also state the launcher version it needs. When it wants a newer one than you are running, the engine update is held back and the launcher update is what you are told about instead — a browser the launcher cannot configure looks like a broken profile rather than a missed update."
+            }
+          ]
+        },
+        {
+          "id": "whats-new",
+          "title": "Patch log after an update",
+          "lead": "Opens automatically on the first run after an update.",
+          "tag": "new",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "Shown once per version. After that the app opens where it always did."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

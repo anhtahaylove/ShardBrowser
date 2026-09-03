@@ -2,7 +2,8 @@ import { useEffect } from "react";
 import { Topbar } from "../../shared/ui/Topbar";
 import { useStoreChanged } from "../../shared/hooks/useStoreChanged";
 import { useProxy } from "../../entities/proxy";
-import { ProxyEditor, ProxyBulkImporter, ProxyInfoPopover } from "../../features/manage-proxies";
+import { storeBus } from "../../shared/lib/storeBus";
+import { ProxyEditor, ProxyBulkImporter, ProxyInfoPopover, ProxyDistributeModal } from "../../features/manage-proxies";
 import { ProxyTable } from "../../widgets/ProxyTable/ProxyTable";
 import { ProxyToolbar } from "../../widgets/ProxyTable/ProxyToolbar";
 
@@ -18,6 +19,8 @@ export function ProxiesPage() {
   const infoFor = useProxy((s) => s.infoFor);
   const setInfoFor = useProxy((s) => s.setInfoFor);
   const snapshots = useProxy((s) => s.snapshots);
+  const distributeOpen = useProxy((s) => s.distributeOpen);
+  const setDistributeOpen = useProxy((s) => s.setDistributeOpen);
 
   useEffect(() => { init(); }, [init]);
   // Pick up proxies/profiles added via the automation API or MCP live.
@@ -31,8 +34,19 @@ export function ProxiesPage() {
         <ProxyToolbar />
       </div>
       <ProxyTable />
-      {editing && <ProxyEditor initial={editing} onClose={() => { setEditing(null); reload(); }} />}
-      {bulkOpen && <ProxyBulkImporter onClose={() => { setBulkOpen(false); reload(); }} />}
+      {editing && (
+        <ProxyEditor
+          initial={editing}
+          onClose={() => { setEditing(null); reload(); }}
+          onSaved={() => storeBus.emit("proxies")}
+        />
+      )}
+      {bulkOpen && (
+        <ProxyBulkImporter
+          onClose={() => { setBulkOpen(false); reload(); storeBus.emit("proxies"); }}
+        />
+      )}
+      {distributeOpen && <ProxyDistributeModal onClose={() => setDistributeOpen(false)} />}
       {infoFor && (
         <ProxyInfoPopover
           proxy={infoFor.proxy}

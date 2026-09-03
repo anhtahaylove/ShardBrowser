@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { Checkbox, cn } from "@proxyshard/shardx-ui-kit";
 import Badge from "../../shared/ui/Badge";
 import { PinIconApp } from "../../shared/icons";
@@ -25,11 +26,16 @@ export function ProfileRow({ profile, proxy, onMenu }: {
   const remove = useProfile((s) => s.remove);
   const expand = useProfile((s) => s.expand);
   const toggleSelect = useProfile((s) => s.toggleSelect);
+  const selectRangeTo = useProfile((s) => s.selectRangeTo);
   const setQuickEdit = useProfile((s) => s.setQuickEdit);
   const setFolderModal = useProfile((s) => s.setFolderModal);
   const setProfileFolder = useProfile((s) => s.setProfileFolder);
   const exportCookies = useProfile((s) => s.exportCookies);
   const importCookies = useProfile((s) => s.importCookies);
+
+  // Shift-presses are handled in mousedown only: a click on the checkbox's
+  // <label> reaches the row twice, and applying the range twice would undo it.
+  const shiftPress = useRef(false);
 
   // Per-profile action menu shared by right-click and the ⋮ button.
   const menu = (): ContextItem[] => [
@@ -58,6 +64,22 @@ export function ProfileRow({ profile, proxy, onMenu }: {
         p.pinned && "bg-[linear-gradient(90deg,var(--color-primary-alpha-10)_0%,transparent_30%)]",
       )}
       onContextMenu={(e) => onMenu(e, menu())}
+      // Buttons keep their own meaning; the expanded editor is text.
+      onMouseDown={(e) => {
+        const t = e.target as HTMLElement;
+        shiftPress.current =
+          e.button === 0 &&
+          e.shiftKey &&
+          !t.closest(".inline-editor") &&
+          !t.closest("button, a");
+        if (!shiftPress.current) return;
+        // Stops the text selection a shift-drag would otherwise begin, and the
+        // label activation that would reach the checkbox.
+        e.preventDefault();
+        selectRangeTo(p.id);
+      }}
+      // The press already did the work; the clicks it produces must not redo it.
+      onClick={(e) => { if (shiftPress.current) e.preventDefault(); }}
       draggable={!isExpanded}
       onDragStart={(e) => {
         e.dataTransfer.effectAllowed = "move";
@@ -88,9 +110,12 @@ export function ProfileRow({ profile, proxy, onMenu }: {
           />
         </div>
         <div>
-          <Checkbox checked={isSel} onChange={() => toggleSelect(p.id)} />
+          <Checkbox
+            checked={isSel}
+            onChange={() => { if (!shiftPress.current) toggleSelect(p.id); }}
+          />
         </div>
-        <div className="min-w-0 cursor-pointer overflow-hidden" onClick={() => expand(p.id)}>
+        <div className="min-w-0 cursor-pointer overflow-hidden" onClick={() => { if (!shiftPress.current) expand(p.id); }}>
           <div className="overflow-hidden text-ellipsis whitespace-nowrap text-label-xs text-text-strong-950">
             {p.pinned && (
               <span className="mr-1.5 inline-flex items-center align-middle text-primary-base" title="Pinned">
@@ -106,7 +131,11 @@ export function ProfileRow({ profile, proxy, onMenu }: {
             {isRunning ? "Running" : "Idle"}
           </Badge>
         </div>
-        <div className="cursor-pointer transition-colors hover:text-primary-base" onClick={() => setQuickEdit({ kind: "proxy", profile: p })} title="Change proxy">
+        <div
+          className="cursor-pointer transition-colors hover:text-primary-base"
+          onClick={() => { if (!shiftPress.current) setQuickEdit({ kind: "proxy", profile: p }); }}
+          title="Change proxy"
+        >
           {proxy ? (
             <div className="flex min-w-0 items-center gap-2 overflow-hidden">
               <Badge
@@ -131,7 +160,7 @@ export function ProfileRow({ profile, proxy, onMenu }: {
         <div
           className="min-w-0 cursor-pointer overflow-hidden text-ellipsis whitespace-nowrap text-paragraph-xs text-text-sub-600 transition-colors hover:text-primary-base"
           title={p.notes || "Click to edit notes"}
-          onClick={() => setQuickEdit({ kind: "notes", profile: p })}
+          onClick={() => { if (!shiftPress.current) setQuickEdit({ kind: "notes", profile: p }); }}
         >
           {p.notes || <span className="text-text-soft-400">—</span>}
         </div>

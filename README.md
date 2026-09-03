@@ -171,6 +171,28 @@ across iframes, web workers, devtools and headless inspection.
   natural-language profile orchestration.
 * **Cookie I/O** — import / export the profile's Chromium Cookies
   SQLite with v10 (mac / linux) and AES-GCM + DPAPI (win) decryption.
+* **Extension library** — paste a Web Store link (or just the
+  extension id) and the launcher downloads the `.crx` itself; a local
+  `.crx`, `.zip` or unpacked folder works too. Pick per profile. Name,
+  version, description and icon are read out of `manifest.json`
+  (including `__MSG_*__` through the default locale), so the grid
+  shows what the browser will load.
+* **Folder bookmarks** — a site bound to a folder lands in the
+  bookmarks bar of every profile in it, in a `ShardX` folder that is
+  rewritten each launch and leaves the operator's own alone.
+* **Per-profile window icon** — the profile's name on a
+  platform-shaped badge (macOS squircle + shadow, Windows full-bleed,
+  Linux Adwaita + outline), tinted by the profile's colour. The same
+  colour goes to the browser as `--shardx-profile-color`.
+* **Trash** — deleting a profile archives the account (cookies,
+  logins, web data, preferences, Local Storage, IndexedDB) and keeps
+  it restorable for 7 days; the caches are not archived, so a
+  gigabyte profile becomes a few megabytes.
+* **Movable data root** — put profiles, user-data, extensions and the
+  trash on any folder or disk; the move copies, verifies, then
+  deletes, with a progress bar, and refuses to launch while it runs.
+* **Extra launch arguments** — switches appended to every profile
+  launch, applied last so they can undo one of the launcher's own.
 * **Cross-platform** — macOS arm64, Windows x64, Linux x64; native
   traffic lights on mac, custom titlebar elsewhere.
 
@@ -396,9 +418,146 @@ curl -s -X POST "$BASE/profiles/win-rtx4060/stop" \
 ```
 
 Endpoints cover profiles (create / edit / delete / start / stop / list
-running), proxies (add / delete / list), fingerprints (generate, list
-library), folders, cookies (export / import) and a fingerprint
-generator — full list in the OpenAPI file.
+running), proxies (add / delete / list), extensions (add by Web Store
+link or file, list, remove), bookmarks (add / list / delete), the trash
+(list / restore / purge), fingerprints (generate, list library),
+folders, cookies (export / import) and a fingerprint generator — full
+list in the OpenAPI file.
+
+A profile's `color` and `extensions` are ordinary fields on create and
+edit, so a script can build a profile that starts with the extensions
+it needs and is recognisable in the window list:
+
+```bash
+curl -s -X POST "$BASE/extensions" \
+     -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+     -d '{"url":"https://chromewebstore.google.com/detail/rabby-wallet/acmacodkjbdgmoleebolmdjonilkdbch"}'
+# → {"id":"9f3c…","name":"Rabby Wallet","version":"0.94.6",…}
+
+curl -s -X POST "$BASE/profiles" \
+     -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+     -d '{"name":"kz-01","color":"#2FCB80","extensions":["9f3c…"],"fingerprint":{…}}'
+```
+
+#### Throwaway profiles with noise
+
+`POST /profiles/temporary` makes a profile that is hidden from the
+list and deleted when its browser closes. It takes a `noise` block, so
+a scripted run can decide per vector instead of taking the default
+(everything off):
+
+```bash
+curl -s -X POST "$BASE/profiles/temporary" \
+     -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+     -d '{
+           "platform": "Windows",
+           "proxy": "socks5://user:pass@host:1080",
+           "noise": {
+             "canvas": true,
+             "webgl": { "enabled": true, "intensity": 0.0005 },
+             "fonts": true
+           }
+         }'
+```
+
+Shorthand (`true`) and a full block are mixable, and a block is merged
+into the vector rather than replacing it — `{"webgl": {"intensity":
+0.001}}` leaves `enabled` alone. Turning `webgl` or `client_rects` on
+by shorthand also sets the strength the UI uses, since a vector
+enabled at zero strength does nothing. A `seed` of `0`, or none, still
+means "derive a stable one from the profile id", which is what keeps
+two temporary profiles created a second apart from sharing a
+fingerprint.
+
+#### Human input over CDP
+
+Once you hold a CDP endpoint, the patched core gives you a **`Motion`**
+domain: pointer movement and keystrokes produced by the same engine the
+browser's own *Human Type* menu item uses. Text is typed key by key
+through the browser's input path — not set on the element, not pasted,
+and with no injected script anywhere.
+
+The domain is concatenated into the chrome-level protocol, so it is
+reachable from the **browser** target and does not appear in
+`/json/protocol` or `Schema.getDomains`. That is deliberate: a client
+that knows the vocabulary can use it, and a page that enumerates the
+protocol learns nothing. For the same reason the names share nothing
+with how other products spell this — a domain whose vocabulary matches
+a known tool is a fingerprint of its own.
+
+| Command | Parameters | Returns |
+| --- | --- | --- |
+| `Motion.createPointer` | `x`, `y`, `paceScale?`, `seed?` | — |
+| `Motion.glideTo` | `x`, `y`, `targetWidth?` | `durationMs` |
+| `Motion.tap` | `button?`, `clickCount?` | — |
+| `Motion.enterText` | `text`, `allowTypos?` | `durationMs` |
+| `Motion.destroyPointer` | — | — |
+
+* Coordinates are **viewport CSS pixels**.
+* `targetWidth` is the element's real width. It feeds Fitts's law, so
+  passing it is what makes a small target take longer to reach than a
+  large one. Defaults to 32.
+* `paceScale` multiplies the profile's own speed; `1.0` keeps its pace.
+* `seed` overrides the profile's motor seed — leave it unset in
+  production, or every profile ends up moving identically.
+* `allowTypos` lets the profile's typo rate introduce a mistake and
+  correct it with a real backspace. Off by default, because it changes
+  the value that ends up in the field.
+* Call `createPointer` first. A session without a pointer answers every
+  other command with an error rather than inventing an origin: a
+  movement whose start is guessed produces the wrong duration and the
+  wrong curve.
+
+```python
+# pip install websockets
+import asyncio, json, websockets
+
+CDP = "ws://127.0.0.1:53217/devtools/browser/…"   # from /profiles/{id}/start
+
+async def main():
+    async with websockets.connect(CDP, max_size=None) as ws:
+        n = 0
+        async def call(method, params=None):
+            nonlocal n
+            n += 1
+            await ws.send(json.dumps({"id": n, "method": method,
+                                      "params": params or {}}))
+            while True:
+                msg = json.loads(await ws.recv())
+                if msg.get("id") == n:
+                    if "error" in msg:
+                        raise RuntimeError(msg["error"])
+                    return msg.get("result", {})
+
+        # Where the cursor starts. Not a movement.
+        await call("Motion.createPointer", {"x": 20, "y": 20})
+
+        # Aim at the field. Pass its real width.
+        r = await call("Motion.glideTo", {"x": 640, "y": 360,
+                                          "targetWidth": 220})
+        print("moved in", r["durationMs"], "ms")
+
+        await call("Motion.tap")                       # focus it
+        await call("Motion.enterText", {"text": "hello there"})
+        await call("Motion.destroyPointer")
+
+asyncio.run(main())
+```
+
+The same three calls in Node, over an existing puppeteer connection:
+
+```js
+const s = await browser.target().createCDPSession();
+await s.send("Motion.createPointer", { x: 20, y: 20 });
+await s.send("Motion.glideTo", { x: 640, y: 360, targetWidth: 220 });
+await s.send("Motion.tap");
+await s.send("Motion.enterText", { text: "hello there" });
+await s.send("Motion.destroyPointer");
+```
+
+Typing is real time — `enterText` returns only when the last key is up,
+and `durationMs` tells you how long it took. Budget for it the way you
+would for a person.
 
 ### 3. MCP server
 

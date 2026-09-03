@@ -15,6 +15,8 @@ use tokio::io::AsyncWriteExt;
 
 pub const PUB_BASE: &str = "https://pub-e57a7c60f6934eb09a6600bf2fc59cdc.r2.dev";
 pub const CHROMIUM_VERSION: &str = "152.0.7977.65";
+/// This SDK's own version, compared against the manifest's `min_sdk_version`.
+pub const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Version manifest (GitHub raw) — one tiny GET yields every archive's current
 /// etag, so we never poll R2/S3 (no per-archive HEAD).
 pub const MANIFEST_URL: &str =
@@ -130,6 +132,9 @@ struct Manifest {
     /// the on-disk version marker can't be read (e.g. Linux).
     #[serde(default)]
     installed_chromium_version: Option<String>,
+    /// Build stamp of the archive last extracted; fallback when it ships none.
+    #[serde(default)]
+    installed_engine_build: Option<String>,
 }
 
 pub struct Runtime {
@@ -273,6 +278,41 @@ impl Runtime {
             .or_else(|| self.installed_engine_version())
     }
 
+    /// Build stamp on disk: `<engine>/shardx-build` when the archive ships one,
+    /// else what was recorded at install time.
+    fn installed_engine_build(&self, local: &Manifest) -> Option<String> {
+        self.spec
+            .binary_subpath
+            .first()
+            .map(|dir| self.root.join(dir).join("shardx-build"))
+            .and_then(|p| fs::read_to_string(p).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| local.installed_engine_build.clone())
+    }
+
+    /// Chromium version, `engine_build`, or the archive hash — any one of them
+    /// means the engine moved. An unknown local value is not a mismatch.
+    fn engine_outdated(&self, local: &Manifest, remote: &RemoteManifest) -> bool {
+        let version_moved = remote
+            .chromium_version
+            .as_deref()
+            .is_some_and(|rv| self.effective_installed_version(local).as_deref() != Some(rv));
+        let differs = |have: Option<String>, want: Option<&str>| match (have, want) {
+            (Some(h), Some(w)) => !h.is_empty() && h != w,
+            _ => false,
+        };
+        let build_moved = differs(
+            self.installed_engine_build(local),
+            remote.engine_build.as_deref(),
+        );
+        let hash_moved = differs(
+            local.browser_etag.clone(),
+            remote.archives.get(&self.spec.browser.key).map(|s| s.as_str()),
+        );
+        version_moved || build_moved || hash_moved
+    }
+
     fn load_manifest(&self) -> Manifest {
         fs::read_to_string(self.manifest_path())
             .ok()
@@ -302,16 +342,25 @@ impl Runtime {
             (remote.grease_brand.clone(), remote.grease_version.clone());
         *self.tls.lock().unwrap() = remote.tls.clone();
 
-        // Re-download when the engine's on-disk version differs from the
-        // manifest's chromium version — VERSION-based, not etag, so it fires for
-        // users who updated the SDK but whose stored etag already matched. A None
-        // manifest (unreachable) must NOT force a re-download when installed.
-        let mut need_browser = force || !self.installed();
-        if !need_browser {
-            if let Some(rv) = remote.chromium_version.as_deref() {
-                need_browser = self.effective_installed_version(&local).as_deref() != Some(rv);
+        // Refused rather than installed: this SDK could not configure it.
+        if let Some(min) = remote.min_sdk_version.as_deref() {
+            if version_lt(SDK_VERSION, min) {
+                anyhow::bail!(
+                    "this engine build needs shardx {min} or newer — you are on {SDK_VERSION}; \
+                     upgrade the SDK first"
+                );
             }
         }
+        // Unknown is never a mismatch, so adopt a stamp once or the first bump
+        // never lands.
+        if self.installed()
+            && remote.engine_build.is_some()
+            && self.installed_engine_build(&local).is_none()
+        {
+            local.installed_engine_build = remote.engine_build.clone();
+        }
+        // A None manifest (unreachable) forces nothing.
+        let need_browser = force || !self.installed() || self.engine_outdated(&local, &remote);
         if need_browser {
             // Wipe the old engine tree first so a leftover `<old>.manifest` /
             // stale libs can't linger beside the new ones (that pinned the
@@ -324,6 +373,9 @@ impl Runtime {
                 .download_and_extract(&self.spec.browser, &self.root)
                 .await?;
             local.browser_etag = Some(etag);
+            if remote.engine_build.is_some() {
+                local.installed_engine_build = remote.engine_build.clone();
+            }
         }
 
         if let Some(wv) = self.spec.widevine.clone() {
@@ -465,6 +517,32 @@ struct RemoteManifest {
     grease_version: Option<String>,
     /// TLS overrides; only the keys present here are applied to a profile.
     tls: Option<serde_json::Value>,
+    /// Which build of the engine archive this is, apart from its Chromium
+    /// version. Not the manifest-wide `revision`, which also moves for a TLS
+    /// or GREASE edit.
+    engine_build: Option<String>,
+    /// Lowest SDK version this engine build can be driven by.
+    min_sdk_version: Option<String>,
+}
+
+/// Dotted-numeric compare; non-numeric parts count as 0.
+fn version_lt(a: &str, b: &str) -> bool {
+    let parts = |s: &str| -> Vec<u32> {
+        s.split(['.', '-', '+'])
+            .map(|p| p.parse::<u32>().unwrap_or(0))
+            .collect()
+    };
+    let (va, vb) = (parts(a), parts(b));
+    for i in 0..va.len().max(vb.len()) {
+        let (x, y) = (
+            va.get(i).copied().unwrap_or(0),
+            vb.get(i).copied().unwrap_or(0),
+        );
+        if x != y {
+            return x < y;
+        }
+    }
+    false
 }
 
 /// Fetch the version manifest (GitHub raw) — one request that yields every
@@ -493,6 +571,13 @@ async fn fetch_manifest() -> RemoteManifest {
             grease_brand: str_field("grease_brand"),
             grease_version: str_field("grease_version"),
             tls: v.get("tls").filter(|t| t.is_object()).cloned(),
+            // Written as a number or a string; both mean the same thing.
+            engine_build: v.get("engine_build").and_then(|b| match b {
+                serde_json::Value::String(s) => Some(s.clone()),
+                serde_json::Value::Number(n) => Some(n.to_string()),
+                _ => None,
+            }),
+            min_sdk_version: str_field("min_sdk_version"),
         })
     }
     inner().await.unwrap_or_default()

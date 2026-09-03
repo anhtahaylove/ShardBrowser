@@ -29,7 +29,9 @@ export function RenameProxyCell({ proxy }: { proxy: ProxyEntry }) {
       ) : (
         <span
           className="cursor-pointer text-label-xs text-text-strong-950 transition-colors hover:text-primary-base"
-          onClick={() => setDraft(proxy.name)}
+          // A shift-click on the row is a range selection, not a rename. The
+          // event is honest here — this is a span, not a checkbox's label.
+          onClick={(e) => { if (!e.shiftKey) setDraft(proxy.name); }}
           title="Click to rename"
         >
           {proxy.name || "—"}

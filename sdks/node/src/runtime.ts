@@ -13,6 +13,8 @@ import AdmZip from "adm-zip";
 
 export const PUB_BASE = "https://pub-e57a7c60f6934eb09a6600bf2fc59cdc.r2.dev";
 export const CHROMIUM_VERSION = "152.0.7977.65";
+/** This SDK's own version, compared against the manifest's `min_sdk_version`. */
+export const SDK_VERSION = "2.0.2";
 // Version manifest (GitHub raw) — one tiny GET yields every archive's current
 // etag, so we never poll R2/S3 (no per-archive HEAD). Changed archives are then
 // pulled from PUB_BASE.
@@ -82,6 +84,8 @@ interface Manifest {
    *  is detected by comparing this (or the on-disk version) to the manifest's
    *  chromium version — robust where the etag check failed. */
   installed_chromium_version?: string;
+  /** Build stamp of the archive last extracted; fallback when it ships none. */
+  installed_engine_build?: string;
 }
 
 export class Runtime {
@@ -170,6 +174,45 @@ export class Runtime {
     return local.installed_chromium_version ?? this.installedEngineVersion();
   }
 
+  /** Build stamp on disk: `<engine>/shardx-build` when the archive ships one,
+   *  else what was recorded at install time. */
+  private installedEngineBuild(local: Manifest): string | undefined {
+    try {
+      const stamp = readFileSync(
+        join(this.root, this.spec.binarySubpath[0], "shardx-build"), "utf8",
+      ).trim();
+      if (stamp) return stamp;
+    } catch { /* archive predates the stamp */ }
+    return local.installed_engine_build || undefined;
+  }
+
+  /** Dotted-numeric compare; non-numeric parts count as 0. */
+  private static versionLt(a: string, b: string): boolean {
+    const parts = (v: string) =>
+      v.split(/[.\-+]/).map((p) => (/^\d+$/.test(p) ? Number(p) : 0));
+    const pa = parts(a), pb = parts(b);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const x = pa[i] ?? 0, y = pb[i] ?? 0;
+      if (x !== y) return x < y;
+    }
+    return false;
+  }
+
+  /** Chromium version, `engine_build`, or the archive hash — any one of them
+   *  means the engine moved. An unknown local value is not a mismatch. */
+  private engineOutdated(
+    local: Manifest,
+    remote: { archives: Record<string, string>; chromiumVersion?: string; engineBuild?: string },
+  ): boolean {
+    if (remote.chromiumVersion !== undefined
+        && this.effectiveInstalledVersion(local) !== remote.chromiumVersion) {
+      return true;
+    }
+    const differs = (have?: string, want?: string) => !!have && !!want && have !== want;
+    if (differs(this.installedEngineBuild(local), remote.engineBuild)) return true;
+    return differs(local.browser_etag, remote.archives[this.spec.browser.key]);
+  }
+
   // ---- manifest ----
 
   private loadManifest(): Manifest {
@@ -193,20 +236,27 @@ export class Runtime {
     this._greaseVersion = remote.greaseVersion;
     this._tls = remote.tls;
 
-    // Re-download the engine when its on-disk version differs from the
-    // manifest's chromium version — VERSION-based, not etag, so it fires for
-    // users who updated the SDK but whose stored etag already matched. Manifest
-    // unreachable (undefined) → don't force a re-download when installed.
-    let needBrowser = force || !this.installed;
-    if (!needBrowser && remote.chromiumVersion !== undefined) {
-      needBrowser = this.effectiveInstalledVersion(local) !== remote.chromiumVersion;
+    // Refused rather than installed: this SDK could not configure it.
+    if (remote.minSdkVersion && Runtime.versionLt(SDK_VERSION, remote.minSdkVersion)) {
+      throw new Error(
+        `this engine build needs @proxyshard/shardx ${remote.minSdkVersion} or newer — `
+        + `you are on ${SDK_VERSION}; upgrade the SDK first`,
+      );
     }
+    // Unknown is never a mismatch, so adopt a stamp once or the first bump
+    // never lands.
+    if (this.installed && remote.engineBuild && !this.installedEngineBuild(local)) {
+      local.installed_engine_build = remote.engineBuild;
+    }
+    // Manifest unreachable → don't force a re-download.
+    const needBrowser = force || !this.installed || this.engineOutdated(local, remote);
     if (needBrowser) {
       // Wipe the old engine tree first so a leftover `<old>.manifest` / stale
       // libs can't linger beside the new ones (that pinned the detected version
       // → endless re-download). binarySubpath[0] is the engine root dir.
       rmSync(join(this.root, this.spec.binarySubpath[0]), { recursive: true, force: true });
       local.browser_etag = await this.downloadAndExtract(this.spec.browser, this.root);
+      if (remote.engineBuild) local.installed_engine_build = remote.engineBuild;
     }
     if (this.spec.widevine && (needBrowser || !local.widevine_etag)) {
       local.widevine_etag = await this.downloadAndExtract(this.spec.widevine, this.root);
@@ -238,15 +288,20 @@ export class Runtime {
   /** Fetch the version manifest (GitHub raw) — one request that yields every
    *  archive's current etag + the chromium version, replacing per-archive HEADs
    *  against R2/S3. Empty archives / undefined version when unreachable. */
-  private async fetchManifest(): Promise<{ archives: Record<string, string>; chromiumVersion?: string; greaseBrand?: string; greaseVersion?: string; tls?: Record<string, unknown> }> {
+  private async fetchManifest(): Promise<{ archives: Record<string, string>; chromiumVersion?: string; engineBuild?: string; minSdkVersion?: string; greaseBrand?: string; greaseVersion?: string; tls?: Record<string, unknown> }> {
     try {
       const r = await fetch(MANIFEST_URL);
       if (!r.ok) return { archives: {} };
-      const data = await r.json() as { archives?: Record<string, string>; chromium_version?: string; grease_brand?: string; grease_version?: string; tls?: Record<string, unknown> };
+      const data = await r.json() as { archives?: Record<string, string>; chromium_version?: string; engine_build?: string | number; min_sdk_version?: string; grease_brand?: string; grease_version?: string; tls?: Record<string, unknown> };
       const str = (v: unknown) => (typeof v === "string" ? v : undefined);
       return {
         archives: (data && typeof data.archives === "object" && data.archives) || {},
         chromiumVersion: str(data?.chromium_version),
+        // Written as a number or a string; both mean the same thing.
+        engineBuild: typeof data?.engine_build === "number"
+          ? String(data.engine_build)
+          : str(data?.engine_build),
+        minSdkVersion: str(data?.min_sdk_version),
         greaseBrand: str(data?.grease_brand),
         greaseVersion: str(data?.grease_version),
         tls: (data?.tls && typeof data.tls === "object" && !Array.isArray(data.tls))

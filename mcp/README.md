@@ -69,6 +69,13 @@ MCP_HTTP_PORT=40326 SHARDX_API=http://127.0.0.1:40325 SHARDX_TOKEN=… node inde
 - `start_profile(id, headless?)` → returns the CDP endpoint,
   `stop_profile(id)`, `list_running`
 - `list_proxies`, `add_proxy`, `delete_proxy`
+- `list_extensions`, `add_extension(url | path)`, `delete_extension` — a Web
+  Store link or a bare extension id is enough; the launcher downloads the
+  `.crx`. Pass the ids to `create_profile` / `edit_profile` as `extensions`.
+- `list_bookmarks`, `save_bookmark(url, title?, folder?)`, `delete_bookmark` —
+  bound to a folder they reach every profile in it on its next launch
+- `list_trash`, `restore_profile(id)`, `purge_profile(id)` — `delete_profile`
+  moves a profile here, restorable for 7 days
 - `list_fingerprints`, `list_folders`, `rename_folder`, `delete_folder`
 - `export_cookies`, `import_cookies`
 
@@ -93,6 +100,11 @@ headless) if it isn't running; actions target the profile's *active* tab:
   `browser_drag(from, to)`, `browser_mouse_click(x, y)`,
   `browser_scroll(selector? | dx/dy)`, `browser_scroll_to_bottom`,
   `browser_set_files(selector, paths)`
+- Human input (patched `Motion` domain — real pointer trajectories and
+  key-by-key typing, produced inside the browser process):
+  `human_click(selector | x,y)`, `human_move(selector | x,y)`,
+  `human_fill(selector, text, clear?)`, `human_type(text)`,
+  `human_release_pointer`
 - Capture: `browser_screenshot(full_page?)`,
   `browser_element_screenshot(selector)`, `browser_pdf` (headless),
   `browser_set_viewport(width, height)`
@@ -121,4 +133,34 @@ headless) if it isn't running; actions target the profile's *active* tab:
 2. `browser_navigate(profile_id, "https://…")` — starts the browser with
    CDP and opens the page.
 3. `browser_evaluate` / `browser_screenshot` / `browser_click` / `browser_fill`.
+
+### Human input
+
+`browser_click` and `browser_fill` go through Playwright: instant, and
+they look it. The `human_*` tools go through the patched core's `Motion`
+domain instead — the pointer travels a real trajectory whose duration
+obeys Fitts's law, and text is typed key by key with log-normal gaps,
+digraph-dependent timing and key overlap. Nothing is injected into the
+page to do it.
+
+They take the same selectors as everything else; the wrapper resolves the
+element, scrolls it into view, and hands the core the coordinates and the
+element's real width (which is what makes a small target take longer to
+reach than a large one). Give `x` and `y` instead of a selector when you
+already know where to go.
+
+```
+human_fill(profile_id, "#email", "ada@example.com")
+human_fill(profile_id, "#email", "new@example.com", clear: true)
+human_click(profile_id, "button[type=submit]")
+```
+
+`clear: true` selects the current value with a triple click rather than a
+keyboard shortcut, so the clearing is as human as the typing. `human_type`
+types into whatever has focus, for the cases where the focus is already
+where you want it.
+
+These calls take **real time** — `human_fill` returns when the last key is
+up, and reports how long the move and the typing took. Budget for it the
+way you would for a person.
 4. `stop_profile` when done (temporary profiles self-delete on close).

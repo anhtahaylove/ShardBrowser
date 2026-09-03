@@ -192,6 +192,8 @@ export function PsBuyCard() {
                   value={country}
                   onChange={setCountry}
                   placeholder="Pick a country"
+                  isSearchable
+                  searchPlaceholder="Search locations…"
                   options={(product?.locations ?? []).map((l) => ({ value: l, label: l }))}
                 />
               </label>

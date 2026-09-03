@@ -1,14 +1,16 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Button, Input, Select, Switch } from "@proxyshard/shardx-ui-kit";
+import { Button, Input, Select, Switch, Textarea } from "@proxyshard/shardx-ui-kit";
 import { DownloadIcon } from "../../shared/icons";
 import { Topbar } from "../../shared/ui/Topbar";
 import { CopyField } from "../../shared/ui/CopyField";
 import { toast } from "../../shared/model/toast";
 import { withUtm } from "../../shared/lib/utils";
 import type { Settings, ApiInfo } from "../../entities/settings";
+import { HELPER_KINDS } from "../../entities/settings";
 import { settingsGet, settingsSave, apiInfo, apiRegenerateToken, mcpDownload } from "../../entities/settings";
+import { DataRootCard } from "../../features/manage-profiles/ui/DataRootCard";
 
 function SettingsCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -25,6 +27,9 @@ export function SettingsPage() {
     theme: "dark",
     geo_checker: "ip-api.com",
     screen_resolution_mode: "fingerprint",
+    helper_enabled: true,
+    helper_triggers: [],
+    extra_args: "",
     api_enabled: true,
     api_port: 40325,
   });
@@ -90,6 +95,106 @@ export function SettingsPage() {
             { value: "fingerprint", label: "From fingerprint" },
             { value: "real", label: "Real (host monitor)" },
           ]}
+        />
+      </SettingsCard>
+
+      <SettingsCard title="Shard Helper">
+        <p className="m-0 mb-2 text-paragraph-xs text-text-soft-400">
+          Watches each page for fields a generated identity fits — names, email,
+          phone, date of birth — and offers to fill them. It only ever
+          <strong> offers</strong>: nothing is typed until you press the button
+          on the panel that appears. Values come from the profile's own language,
+          and go in through the same human typing the rest of the browser uses.
+          <br />
+          <strong>Never runs on a synchronised launch.</strong> In a group whatever
+          you type in one window is mirrored into the others already, so a helper
+          per window would find the same form ten times and offer ten prompts for
+          one page.
+        </p>
+        <div className="flex flex-col gap-3">
+          <Switch
+            label="Enable Shard Helper"
+            checked={s.helper_enabled ?? true}
+            onChange={(checked) => setS({ ...s, helper_enabled: checked })}
+          />
+          {(s.helper_enabled ?? true) && (
+            <div>
+              <div className="mb-1.5 text-label-xs text-text-sub-600">
+                React to
+              </div>
+              <p className="m-0 mb-2 text-paragraph-xs text-text-soft-400">
+                Nothing selected means every kind. Narrow it if the panel appears
+                on forms you do not care about — a login page with an email field
+                is still a form.
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {HELPER_KINDS.map((k) => {
+                  const picked = (s.helper_triggers ?? []).includes(k.value);
+                  return (
+                    <button
+                      key={k.value}
+                      type="button"
+                      onClick={() => {
+                        const cur = s.helper_triggers ?? [];
+                        setS({
+                          ...s,
+                          helper_triggers: picked
+                            ? cur.filter((x) => x !== k.value)
+                            : [...cur, k.value],
+                        });
+                      }}
+                      className={`rounded-6 px-2 py-1 text-paragraph-xs ring-1 ring-inset transition-colors ${
+                        picked
+                          ? "bg-primary-alpha-10 text-primary-base ring-primary-alpha-24"
+                          : "text-text-sub-600 ring-stroke-soft-200 hover:bg-bg-weak-50"
+                      }`}
+                    >
+                      {k.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      </SettingsCard>
+
+      <SettingsCard title="Profile camera">
+        <p className="m-0 mb-2 text-paragraph-xs text-text-soft-400">
+          The profile gets ShardX's camera instead of the machine's, and shows the
+          picture or clip you pick from the control left of the browser's app menu.
+          <strong> Leave this on.</strong> The profile's fingerprint already names a
+          particular camera, so handing a page the host's real one contradicts the
+          profile and identifies the machine behind every profile on it.
+        </p>
+        <Switch
+          label="Substitute the camera"
+          checked={s.camera_enabled ?? true}
+          onChange={(checked) => setS({ ...s, camera_enabled: checked })}
+        />
+      </SettingsCard>
+
+      <SettingsCard title="Profile data location">
+        <DataRootCard />
+      </SettingsCard>
+
+      <SettingsCard title="Extra launch arguments">
+        <p className="m-0 mb-2 text-paragraph-xs text-text-soft-400">
+          Appended to every profile launch, one per line or space-separated.
+          They go on <strong>last</strong>, so a switch repeated here is the one the
+          engine sees — which is also how you get to undo one of the launcher's own.
+          Quote a value with spaces.
+          <br />
+          Anything that changes what a page can measure belongs in the profile, not
+          here: a switch applied to every profile at once makes them all alike, which
+          is the opposite of what a profile is for.
+        </p>
+        <Textarea
+          rows={3}
+          className="mono"
+          value={s.extra_args ?? ""}
+          onChange={(e) => setS({ ...s, extra_args: e.target.value })}
+          placeholder={"--disable-background-timer-throttling\n--window-size=1280,800"}
         />
       </SettingsCard>
 

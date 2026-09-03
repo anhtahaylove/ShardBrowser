@@ -15,6 +15,10 @@ export type ProfileMeta = {
   /// the engine exits — for the currently-running session add `running[id]`
   /// (Date.now() - sessionStartTs) on top.
   total_runtime_ms: number;
+  /// Icon accent, "#rrggbb"; null = derived from the name, as the browser does.
+  color: string | null;
+  /// Extension ids from the library, loaded at launch.
+  extensions: string[];
 };
 
 export type ProfileForm = {
@@ -22,6 +26,10 @@ export type ProfileForm = {
   name: string;
   notes: string;
   proxy_id: string | null;
+  /// "" = derive from the name, which is what the browser does on its own.
+  color: string;
+  /// Extension ids from the library.
+  extensions: string[];
 
   gpu_preset_id: string;
   user_agent: string;

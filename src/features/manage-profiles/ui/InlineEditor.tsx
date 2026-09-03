@@ -6,6 +6,9 @@ import { Pair } from "../../../shared/ui/Pair";
 import { PortList } from "../../../shared/ui/PortList";
 import { CSSelect } from "../../../shared/ui/CSSelect";
 import { SelectField } from "../../../shared/ui/SelectField";
+import { ColorSwatches } from "../../../shared/ui/ColorSwatches";
+import { ExtensionPicker } from "./ExtensionPicker";
+import { ProxySelect } from "./ProxySelect";
 import { HOST_OS } from "../../../shared/lib/utils";
 import {
   AUTO_TZ, TIMEZONES, LOCALES,
@@ -138,19 +141,19 @@ export function InlineEditor({
           </div>
 
           <label className="flex flex-col gap-1">
-            <CSSelect
-              value={f.proxy_id ?? ""}
-              title="Proxy"
-              onChange={(v) => u("proxy_id", v ? v : null)}
-              options={[
-                { value: "", label: "— direct connection —" },
-                ...proxies.map((px) => ({
-                  value: px.id,
-                  label: `${px.name || `${px.host}:${px.port}`} · ${px.country || px.kind}`,
-                })),
-              ]}
+            <span className="text-label-base font-medium text-text-strong-900">Proxy</span>
+            <ProxySelect
+              value={f.proxy_id}
+              proxies={proxies}
+              onChange={(id) => u("proxy_id", id)}
             />
           </label>
+
+          <ColorSwatches
+            label="Colour"
+            value={f.color}
+            onChange={(v) => u("color", v)}
+          />
         </div>
 
         {/* ----- col 2: locale + noise ----- */}
@@ -257,6 +260,14 @@ export function InlineEditor({
             <SelectField label="Speakers" value={f.media_audio_out} onChange={(v) => u("media_audio_out", v)} options={MEDIA_COUNT_OPTIONS} />
             <SelectField label="Webcam" value={f.media_video_in} onChange={(v) => u("media_video_in", v)} options={MEDIA_COUNT_OPTIONS} />
           </div>
+
+          <div className="mt-2.5">
+            <SectionHeading>Extensions</SectionHeading>
+          </div>
+          <ExtensionPicker
+            value={f.extensions}
+            onChange={(v) => u("extensions", v)}
+          />
 
           <Textarea
             label="Notes"

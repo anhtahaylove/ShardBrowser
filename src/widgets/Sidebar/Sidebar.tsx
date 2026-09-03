@@ -9,6 +9,10 @@ import {
   NavShopIcon,
   NavFingerprintsIcon,
   NavSettingsIcon,
+  NavPatchLogIcon,
+  NavExtensionsIcon,
+  NavBookmarksIcon,
+  NavTrashIcon,
   CopyIcon,
   DocsIcon,
   ShardLogo,
@@ -82,11 +86,19 @@ export function Sidebar() {
     },
     {
       label: "Library",
-      items: [{ id: "fingerprints", label: "Fingerprints", svg: <NavFingerprintsIcon className="size-[18px]" /> }],
+      items: [
+        { id: "fingerprints", label: "Fingerprints", svg: <NavFingerprintsIcon className="size-[18px]" /> },
+        { id: "extensions", label: "Extensions", svg: <NavExtensionsIcon className="size-[18px]" /> },
+        { id: "bookmarks", label: "Bookmarks", svg: <NavBookmarksIcon className="size-[18px]" /> },
+      ],
     },
     {
       label: "System",
-      items: [{ id: "settings", label: "Settings", svg: <NavSettingsIcon className="size-[18px]" /> }],
+      items: [
+        { id: "trash", label: "Trash", svg: <NavTrashIcon className="size-[18px]" /> },
+        { id: "patchlog", label: "Patch log", svg: <NavPatchLogIcon className="size-[18px]" /> },
+        { id: "settings", label: "Settings", svg: <NavSettingsIcon className="size-[18px]" /> },
+      ],
     },
   ];
 

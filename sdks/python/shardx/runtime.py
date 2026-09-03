@@ -20,6 +20,8 @@ import httpx
 
 PUB_BASE = "https://pub-e57a7c60f6934eb09a6600bf2fc59cdc.r2.dev"
 CHROMIUM_VERSION = "152.0.7977.65"
+# This SDK's own version, compared against the manifest's `min_sdk_version`.
+SDK_VERSION = "2.0.2"
 # Version manifest (GitHub raw) — one tiny GET tells us every archive's current
 # etag, so we never poll R2/S3 (no per-archive HEAD). Updated archives are then
 # pulled from PUB_BASE only when their etag changed.
@@ -256,6 +258,17 @@ class Runtime:
         except OSError:
             return None
 
+    def _installed_engine_build(self, local: dict) -> Optional[str]:
+        """Build stamp on disk: `<engine>/shardx-build` when the archive ships
+        one, else what was recorded at install time."""
+        try:
+            stamp = (self.root / self._spec.binary_subpath[0] / "shardx-build").read_text().strip()
+            if stamp:
+                return stamp
+        except OSError:
+            pass
+        return local.get("installed_engine_build") or None
+
     def _effective_installed_version(self, local: dict) -> Optional[str]:
         """Effective installed version. Trusts the version recorded at install
         time (authoritative — written only after a successful extract) over
@@ -276,6 +289,37 @@ class Runtime:
 
     # ---- install ----
 
+    @staticmethod
+    def _version_lt(a: str, b: str) -> bool:
+        """Dotted-numeric compare; non-numeric parts count as 0."""
+        def parts(v: str) -> list:
+            out = []
+            for chunk in v.replace("-", ".").replace("+", ".").split("."):
+                out.append(int(chunk) if chunk.isdigit() else 0)
+            return out
+        pa, pb = parts(a), parts(b)
+        for i in range(max(len(pa), len(pb))):
+            x = pa[i] if i < len(pa) else 0
+            y = pb[i] if i < len(pb) else 0
+            if x != y:
+                return x < y
+        return False
+
+    def _engine_outdated(self, local: dict, manifest: dict) -> bool:
+        """Chromium version, `engine_build`, or the archive hash — any one of
+        them means the engine moved. An unknown local value is not a mismatch."""
+        remote_ver = manifest.get("chromium_version")
+        if remote_ver and self._effective_installed_version(local) != remote_ver:
+            return True
+
+        def differs(have, want) -> bool:
+            return bool(have) and bool(want) and have != want
+
+        if differs(self._installed_engine_build(local), manifest.get("engine_build")):
+            return True
+        archives = manifest.get("archives") if isinstance(manifest.get("archives"), dict) else {}
+        return differs(local.get("browser_etag"), archives.get(self._spec.browser.key))
+
     def install(self, force: bool = False) -> None:
         """Idempotent — re-checks remote etag, skips when nothing changed.
         Within a single process, subsequent calls are no-ops unless `force=True`.
@@ -291,13 +335,20 @@ class Runtime:
         self._grease_version = manifest.get("grease_version") or None
         remote_tls = manifest.get("tls")
         self._tls = remote_tls if isinstance(remote_tls, dict) else None
-        # Browser. Re-download when the engine's on-disk version differs from
-        # the manifest's chromium version — VERSION-based, not etag, so it fires
-        # for users who updated the SDK but whose stored etag already matched.
-        # A None manifest (unreachable) must NOT force a re-download when installed.
-        need_browser = force or not self.installed
-        if not need_browser and manifest.get("chromium_version"):
-            need_browser = self._effective_installed_version(local) != manifest["chromium_version"]
+        # Refused rather than installed: this SDK could not configure it.
+        min_sdk = manifest.get("min_sdk_version")
+        if min_sdk and self._version_lt(SDK_VERSION, str(min_sdk)):
+            raise RuntimeError(
+                f"this engine build needs shardx {min_sdk} or newer — "
+                f"you are on {SDK_VERSION}; upgrade the SDK first"
+            )
+        # Unknown is never a mismatch, so adopt a stamp once or the first bump
+        # never lands.
+        if self.installed and manifest.get("engine_build") \
+                and not self._installed_engine_build(local):
+            local["installed_engine_build"] = manifest["engine_build"]
+        # A None manifest (unreachable) must NOT force a re-download.
+        need_browser = force or not self.installed or self._engine_outdated(local, manifest)
         if need_browser:
             # Wipe the old engine tree first so a leftover `<old>.manifest` /
             # stale libs can't linger beside the new ones (that pinned the
@@ -305,6 +356,8 @@ class Runtime:
             # engine root dir.
             shutil.rmtree(self.root / self._spec.binary_subpath[0], ignore_errors=True)
             local["browser_etag"] = self._download_and_extract(self._spec.browser, self.root)
+            if manifest.get("engine_build"):
+                local["installed_engine_build"] = manifest["engine_build"]
         # Widevine — only re-pull when browser changed (versions must match).
         if self._spec.widevine and (need_browser or not local.get("widevine_etag")):
             local["widevine_etag"] = self._download_and_extract(self._spec.widevine, self.root)

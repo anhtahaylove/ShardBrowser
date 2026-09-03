@@ -5,13 +5,14 @@ import { toast } from "../../../shared/lib/toast";
 import { confirmModal } from "../../../shared/lib/confirm";
 import { clip } from "../../../shared/lib/clipboard";
 import { readTextFile } from "../../../shared/lib/utils";
+import { storeBus } from "../../../shared/lib/storeBus";
 import { proxyList, type ProxyEntry } from "../../proxy";
 import { fingerprintList, type FingerprintEntry } from "../../fingerprint";
 import type { ProfileMeta, ProfileForm } from "../model/types";
 import {
   profileList, profileGet, profileSave, profileDelete, profileClone,
   profileSetPin, profileSetFolder, profileBindProxy, profileImport,
-  profileCreateFromTemplate, processList, processKill, launch,
+  profileCreateFromTemplate, processList, processKill, launch, syncLaunch,
   folderDelete, cookiesExportToFile, cookiesImport,
 } from "../model/api";
 import { defaultForm, fromStored, toStored } from "../model/form";
@@ -25,6 +26,17 @@ const loadFolderRegistry = (): string[] => {
 
 export type QuickEditTarget = { kind: "proxy" | "notes"; profile: ProfileMeta };
 export type FolderModalTarget = { profileId: string | null };
+
+/** Narrows the list beyond the folder tab and the search box. */
+export type ProfileFilters = {
+  status: "all" | "running" | "idle";
+  /** Country code of the bound proxy, or "" for any. */
+  country: string;
+  /** "bound" = has a proxy, "direct" = none. */
+  proxy: "all" | "bound" | "direct";
+};
+
+export const emptyFilters = (): ProfileFilters => ({ status: "all", country: "", proxy: "all" });
 
 export type ProfileStore = {
   status: "idle" | "loading" | "ready" | "error";
@@ -55,6 +67,9 @@ export type ProfileStore = {
   dropTarget: string | null;
   templatePickerOpen: boolean;
   quickEdit: QuickEditTarget | null;
+  filters: ProfileFilters;
+  /// Row the last plain click landed on; a shift-click selects the run from it.
+  anchorId: string | null;
 
   init: () => Promise<void>;
   reload: () => Promise<void>;
@@ -67,12 +82,16 @@ export type ProfileStore = {
   setTemplatePickerOpen: (open: boolean) => void;
   setQuickEdit: (target: QuickEditTarget | null) => void;
   setFolderModal: (target: FolderModalTarget | null) => void;
+  setFilters: (f: Partial<ProfileFilters>) => void;
+  clearFilters: () => void;
 
   rememberFolder: (f: string) => void;
   forgetFolder: (f: string) => void;
 
   selectProfiles: (isChecked: boolean, profiles: ProfileMeta[]) => void;
   toggleSelect: (id: string) => void;
+  /** Shift-click: selects every row between the anchor and `id`. */
+  selectRangeTo: (id: string) => void;
   clearSelected: () => void;
 
   expand: (id: string) => Promise<void>;
@@ -92,6 +111,10 @@ export type ProfileStore = {
   createFromTemplate: (tplId: string) => Promise<void>;
 
   bulkLaunch: () => Promise<void>;
+  /** Launches the selection as one synchronised group. */
+  bulkLaunchSynced: () => Promise<void>;
+  /** Group currently being synchronised, or null. */
+  syncGroup: string | null;
   bulkStop: () => Promise<void>;
   bulkDelete: () => Promise<void>;
   bulkExport: () => Promise<void>;
@@ -119,6 +142,8 @@ export const useProfile = create<ProfileStore>((set, get) => ({
   dropTarget: null,
   templatePickerOpen: false,
   quickEdit: null,
+  filters: emptyFilters(),
+  anchorId: null,
 
   init: async () => {
     if (get().status === "loading" || get().status === "ready") return;
@@ -128,6 +153,10 @@ export const useProfile = create<ProfileStore>((set, get) => ({
         profileList(), proxyList(), fingerprintList(),
       ]);
       set({ profiles, proxies, fingerprints, status: "ready" });
+      // A proxy added on the Proxies page has to reach the editor's select, and
+      // a proxy bound there — by the distribute dialog — has to reach the table.
+      storeBus.on("proxies", () => { void get().reload(); });
+      storeBus.on("profiles", () => { void get().reload(); });
     } catch (e) {
       set({ status: "error", error: (e as Error).message });
       toast.err(String(e));
@@ -175,6 +204,8 @@ export const useProfile = create<ProfileStore>((set, get) => ({
   setTemplatePickerOpen: (templatePickerOpen) => set({ templatePickerOpen }),
   setQuickEdit: (quickEdit) => set({ quickEdit }),
   setFolderModal: (folderModal) => set({ folderModal }),
+  setFilters: (f) => set({ filters: { ...get().filters, ...f } }),
+  clearFilters: () => set({ filters: emptyFilters() }),
 
   rememberFolder: (f) => {
     const next = get().folderRegistry.includes(f)
@@ -201,9 +232,28 @@ export const useProfile = create<ProfileStore>((set, get) => ({
   toggleSelect: (id) => {
     const next = new Set(get().selected);
     if (next.has(id)) next.delete(id); else next.add(id);
+    set({ selected: next, anchorId: id });
+  },
+  // Ordered as the table paints it. The clicked row decides the direction: a
+  // ticked one clears the run, an unticked one selects it.
+  selectRangeTo: (id) => {
+    const order = visibleIds(get());
+    const to = order.indexOf(id);
+    if (to < 0) return;
+    const anchor = get().anchorId;
+    // Only a still-ticked anchor has a run to extend; spanning back over a
+    // cleared one would put its tick straight back.
+    const from = anchor && get().selected.has(anchor) ? order.indexOf(anchor) : -1;
+    if (from < 0) { get().toggleSelect(id); return; }
+    const [lo, hi] = from <= to ? [from, to] : [to, from];
+    const removing = get().selected.has(id);
+    const next = new Set(get().selected);
+    for (let i = lo; i <= hi; i++) {
+      if (removing) next.delete(order[i]); else next.add(order[i]);
+    }
     set({ selected: next });
   },
-  clearSelected: () => set({ selected: new Set<string>() }),
+  clearSelected: () => set({ selected: new Set<string>(), anchorId: null }),
 
   expand: async (id) => {
     if (get().expanded === id) { set({ expanded: null, draft: null }); return; }
@@ -229,6 +279,7 @@ export const useProfile = create<ProfileStore>((set, get) => ({
       }
       set({ expanded: null, draft: null });
       get().reload();
+      storeBus.emit("profiles");
       toast.ok(draft.id ? "Profile saved" : `Created "${saved.name}"`);
     } catch (e) { toast.err(String(e)); }
   },
@@ -257,9 +308,16 @@ export const useProfile = create<ProfileStore>((set, get) => ({
   },
 
   remove: async (id) => {
-    if ((await confirmModal({ title: "Delete profile", message: "Delete this profile? Its user-data dir is wiped too.", danger: true })) !== true) return;
-    await profileDelete(id);
-    get().reload();
+    if ((await confirmModal({
+      title: "Delete profile",
+      message: "Move this profile to the trash? It can be restored there for 7 days.",
+      danger: true,
+    })) !== true) return;
+    try {
+      await profileDelete(id);
+      get().reload();
+      storeBus.emit("profiles");
+    } catch (e) { toast.err(String(e)); }
   },
 
   cloneProfile: async (id) => {
@@ -316,6 +374,7 @@ export const useProfile = create<ProfileStore>((set, get) => ({
       await profileSetFolder(id, f);
       if (f) get().rememberFolder(f);
       get().reload();
+      storeBus.emit("profiles");
     } catch (e) { toast.err(String(e)); }
   },
 
@@ -371,6 +430,23 @@ export const useProfile = create<ProfileStore>((set, get) => ({
     } catch (e) { toast.err(String(e)); }
   },
 
+  syncGroup: null,
+
+  bulkLaunchSynced: async () => {
+    const ids = [...get().selected];
+    if (ids.length < 2) return;
+    // Per launch, not fixed: two fleets must not share session files.
+    const group = `fleet-${Date.now().toString(36)}`;
+    try {
+      const name = await syncLaunch(ids, group);
+      set({ syncGroup: name });
+      get().clearSelected();
+      toast.ok(`Synchronising ${ids.length} profiles`);
+    } catch (e) {
+      toast.err(String(e));
+    }
+  },
+
   bulkLaunch: async () => {
     const { selected, running } = get();
     for (const id of selected) {
@@ -390,13 +466,18 @@ export const useProfile = create<ProfileStore>((set, get) => ({
   bulkDelete: async () => {
     const ids = [...get().selected];
     if (ids.length === 0) return;
-    if ((await confirmModal({ title: "Delete profiles", message: `Delete ${ids.length} profile${ids.length === 1 ? "" : "s"}? This wipes their user-data dirs too.`, danger: true })) !== true) return;
+    if ((await confirmModal({
+      title: "Delete profiles",
+      message: `Move ${ids.length} profile${ids.length === 1 ? "" : "s"} to the trash? They can be restored there for 7 days.`,
+      danger: true,
+    })) !== true) return;
     for (const id of ids) {
       try { await profileDelete(id); } catch (e) { toast.err(String(e)); }
     }
     get().clearSelected();
     get().reload();
-    toast.ok(`Deleted ${ids.length}`);
+    storeBus.emit("profiles");
+    toast.ok(`Moved ${ids.length} to the trash`);
   },
 
   // Dump selected profile FingerprintConfigs as a JSON array to clipboard.
@@ -423,3 +504,39 @@ export const useProfile = create<ProfileStore>((set, get) => ({
     } catch (e) { toast.err("Import failed: " + String(e)); }
   },
 }));
+
+/// The ids in the order the table paints them — a range covers what is visible.
+function visibleIds(s: ProfileStore): string[] {
+  return applyProfileFilters(
+    s.profiles, s.proxies, s.search, s.folder, s.filters, s.running,
+  ).map((p) => p.id);
+}
+
+/// Shared with `useVisibleProfiles` so the rows on screen and the rows a range
+/// covers cannot drift apart.
+export function applyProfileFilters(
+  profiles: ProfileMeta[],
+  proxies: ProxyEntry[],
+  search: string,
+  folder: string,
+  filters: ProfileFilters,
+  running: Record<string, number> = {},
+): ProfileMeta[] {
+  const q = search.trim().toLowerCase();
+  const byId = new Map(proxies.map((p) => [p.id, p]));
+  return profiles.filter((p) => {
+    if (folder !== "all" && p.folder !== folder) return false;
+    if (q && !p.name.toLowerCase().includes(q) && !p.notes.toLowerCase().includes(q)) return false;
+    if (filters.proxy === "bound" && !p.proxy_id) return false;
+    if (filters.proxy === "direct" && p.proxy_id) return false;
+    if (filters.country) {
+      const cc = p.proxy_id ? byId.get(p.proxy_id)?.country ?? "" : "";
+      if (cc.toUpperCase() !== filters.country.toUpperCase()) return false;
+    }
+    if (filters.status !== "all") {
+      const isRunning = !!running[p.id];
+      if ((filters.status === "running") !== isRunning) return false;
+    }
+    return true;
+  });
+}

@@ -13,3 +13,6 @@ export { BulkActionsBar } from "./ui/BulkActionsBar";
 export { NewProfileButton } from "./ui/NewProfileButton";
 export { ImportProfilesButton } from "./ui/ImportProfilesButton";
 export { FromTemplateButton } from "./ui/FromTemplateButton";
+export { ExtensionPicker } from "./ui/ExtensionPicker";
+export { ProxySelect } from "./ui/ProxySelect";
+export { ProfileFilterBar } from "./ui/ProfileFilterBar";

@@ -8,6 +8,8 @@ export const defaultForm = (): ProfileForm => ({
   name: "",
   notes: "",
   proxy_id: null,
+  color: "",
+  extensions: [],
 
   // Empty until snapped to gpusForOs[0] by useEffect.
   gpu_preset_id: "",
@@ -49,6 +51,8 @@ export function fromStored(stored: any): ProfileForm {
   f.proxy_id = stored?._meta?.proxy_id ?? null;
   f.name = stored?.name ?? "";
   f.notes = stored?.notes ?? "";
+  f.color = stored?._meta?.color ?? "";
+  f.extensions = Array.isArray(stored?._meta?.extensions) ? stored._meta.extensions : [];
   // Empty for legacy profiles; snapped by useEffect.
   f.gpu_preset_id = stored?._meta?.gpu_preset_id ?? "";
   f.user_agent = stored?.navigator?.user_agent ?? f.user_agent;
@@ -95,6 +99,9 @@ export function toStored(f: ProfileForm, lib: FingerprintEntry | null): any {
     proxy_id: f.proxy_id,
     last_launched_at: null,
     gpu_preset_id: f.gpu_preset_id,
+    // Absent, not empty: that is what "derive it" means on disk.
+    ...(f.color ? { color: f.color } : {}),
+    extensions: f.extensions,
   };
   base.name = f.name || "untitled";
   base.notes = f.notes;

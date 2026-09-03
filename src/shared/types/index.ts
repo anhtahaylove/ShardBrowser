@@ -1,5 +1,14 @@
 export type Theme = "dark" | "light";
-export type Section = "browsers" | "proxies" | "proxyshard" | "fingerprints" | "settings";
+export type Section =
+  | "browsers"
+  | "proxies"
+  | "proxyshard"
+  | "fingerprints"
+  | "extensions"
+  | "bookmarks"
+  | "trash"
+  | "patchlog"
+  | "settings";
 
 export type ToastItem = { id: number; kind: "ok" | "err" | "info"; text: string };
 
@@ -40,6 +49,10 @@ export type RtStatus = {
   update_available: boolean;
   spec: RtSpec | null;
   fingerprints_installed: boolean;
+  /** The published engine wants a newer launcher; no engine update is offered. */
+  needs_newer_launcher: boolean;
+  min_launcher_version: string | null;
+  launcher_version: string;
 };
 export type RtProgress = {
   label: string;

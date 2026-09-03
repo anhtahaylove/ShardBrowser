@@ -31,6 +31,20 @@ export function fmtUptime(ms: number): string {
   return `${sec}s`;
 }
 
+/// Byte count as "4.2 MB". Base 1024, which is what a file manager shows.
+export function fmtBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+  const v = n / 1024 ** i;
+  return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+}
+
+/// Whole days from now until a unix-second instant; 0 once it has passed.
+export function daysUntil(unixSecs: number): number {
+  return Math.max(0, Math.ceil((unixSecs * 1000 - Date.now()) / 86_400_000));
+}
+
 // Single UTM tag appended to every outbound proxyshard.com link.
 export const UTM_QS = "utm_source=shardx&utm_medium=referral&utm_campaign=shardx-launcher";
 export const withUtm = (url: string) => url + (url.includes("?") ? "&" : "?") + UTM_QS;

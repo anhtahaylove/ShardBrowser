@@ -1,31 +1,15 @@
 import { useMemo } from "react";
-import { useProxy } from "./useProxy";
+import { filterProxies, useProxy } from "./useProxy";
 
 /// Search-filtered proxies, matching name/host/port/country/notes/user + geo snapshot.
 export function useFilteredProxies() {
     const proxies = useProxy((s) => s.proxies);
     const snapshots = useProxy((s) => s.snapshots);
     const search = useProxy((s) => s.search);
-    return useMemo(() => {
-        const q = search.trim().toLowerCase();
-        if (!q) return proxies;
-        return proxies.filter((p) => {
-            const ip = (snapshots[p.id]?.ip ?? "").toLowerCase();
-            const city = (snapshots[p.id]?.city ?? "").toLowerCase();
-            const isp = (snapshots[p.id]?.isp ?? "").toLowerCase();
-            return (
-                p.name.toLowerCase().includes(q) ||
-                p.host.toLowerCase().includes(q) ||
-                String(p.port).includes(q) ||
-                p.country.toLowerCase().includes(q) ||
-                p.notes.toLowerCase().includes(q) ||
-                p.username.toLowerCase().includes(q) ||
-                ip.includes(q) ||
-                city.includes(q) ||
-                isp.includes(q)
-            );
-        });
-    }, [proxies, snapshots, search]);
+    return useMemo(
+        () => filterProxies(proxies, snapshots, search),
+        [proxies, snapshots, search],
+    );
 }
 
 /// proxy_id → bound-profile count (O(n) tally; n is small).

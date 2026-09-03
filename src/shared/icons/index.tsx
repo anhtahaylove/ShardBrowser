@@ -38,6 +38,17 @@ import {
   PlayIcon as HugePlayIcon,
   StopIcon as HugeStopIcon,
   MoreVerticalIcon,
+  Link04Icon,
+  PauseIcon as HugePauseIcon,
+  SparklesIcon,
+  StarIcon,
+  LockIcon,
+  PuzzleIcon,
+  Bookmark02Icon,
+  Delete03Icon,
+  ArchiveRestoreIcon,
+  FilterIcon as HugeFilterIcon,
+  Cancel01Icon,
 } from "@hugeicons/core-free-icons";
 import type { ComponentProps } from "react";
 
@@ -56,6 +67,10 @@ export const NavShopIcon = make(ShoppingCart01Icon);
 export const NavFingerprintsIcon = make(FingerPrintIcon);
 export const NavSettingsIcon = make(Settings01Icon);
 export const DocsIcon = make(BookOpen01Icon);
+export const NavPatchLogIcon = make(SparklesIcon);
+export const NavExtensionsIcon = make(PuzzleIcon);
+export const NavBookmarksIcon = make(Bookmark02Icon);
+export const NavTrashIcon = make(Delete03Icon);
 
 /* ── OS logos ── */
 export const AppleOsIcon = make(AppleIcon);
@@ -78,6 +93,8 @@ export const RefreshIcon = make(ArrowReloadHorizontalIcon);
 export const AddIcon = make(PlusSignIcon);
 export const FolderIcon = make(Folder01Icon);
 export const InfoIcon = make(InformationCircleIcon);
+export const StarOutlineIcon = make(StarIcon);
+export const LockedIcon = make(LockIcon);
 export const ChevronDownIcon = make(ArrowDown01Icon);
 export const DeleteIcon = make(Delete02Icon);
 export const GlobeIcon = make(Globe02Icon);
@@ -87,6 +104,11 @@ export const PinIconApp = make(PinIcon);
 export const PlayIcon = make(HugePlayIcon);
 export const StopIcon = make(HugeStopIcon);
 export const MoreIcon = make(MoreVerticalIcon);
+export const SyncIcon = make(Link04Icon);
+export const RestoreIcon = make(ArchiveRestoreIcon);
+export const FilterIcon = make(HugeFilterIcon);
+export const CloseIcon = make(Cancel01Icon);
+export const PauseIcon = make(HugePauseIcon);
 
 export function ShardLogo() {
   return (

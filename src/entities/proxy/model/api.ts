@@ -2,7 +2,20 @@ import { invoke } from "@tauri-apps/api/core";
 import type { ProxyEntry, ProxyTestSnapshot } from "./types";
 
 export const proxyList = () => invoke<ProxyEntry[]>("proxy_list");
-export const proxySave = (entry: ProxyEntry) => invoke("proxy_save", { entry });
+export const proxySave = (entry: ProxyEntry) => invoke<ProxyEntry>("proxy_save", { entry });
+
+/** A blank entry for the "new proxy" dialog. */
+export const emptyProxy = (): ProxyEntry => ({
+  id: "",
+  name: "",
+  kind: "socks5",
+  host: "",
+  port: 1080,
+  username: "",
+  password: "",
+  country: "",
+  notes: "",
+});
 export const proxyDelete = (id: string) => invoke("proxy_delete", { id });
 export const proxyFullTest = (entry: ProxyEntry) => invoke<ProxyTestSnapshot>("proxy_full_test", { entry });
 export const proxyLastTest = (id: string) => invoke<ProxyTestSnapshot | null>("proxy_last_test", { id });

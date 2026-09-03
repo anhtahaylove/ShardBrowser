@@ -186,6 +186,8 @@ export function PsResiGenerator({ type, onClose }: { type: ResiType; onClose: ()
             title={"Country"}
             onChange={setCountry}
             placeholder="Any"
+            isSearchable
+            searchPlaceholder="Search countries…"
             options={[{ value: "", label: "Any" }, ...countries.map((c) => ({ value: c.code, label: `${c.name} (${c.code})` }))]}
           />
           <label className="flex flex-col gap-1">
@@ -204,6 +206,8 @@ export function PsResiGenerator({ type, onClose }: { type: ResiType; onClose: ()
             title={"Region"}
             onChange={setRegion}
             placeholder={country ? "Any" : "Pick country first"}
+            isSearchable
+            searchPlaceholder="Search regions…"
             options={[{ value: "", label: "Any" }, ...regions.map((r) => ({ value: r.code, label: r.name }))]}
           />
 
@@ -212,6 +216,8 @@ export function PsResiGenerator({ type, onClose }: { type: ResiType; onClose: ()
             title={"City"}
             onChange={setCity}
             placeholder={region ? "Any" : "Pick region first"}
+            isSearchable
+            searchPlaceholder="Search cities…"
             options={[{ value: "", label: "Any" }, ...cities.map((c) => ({ value: c.code, label: c.name }))]}
           />
           {

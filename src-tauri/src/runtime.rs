@@ -15,7 +15,7 @@ const MANIFEST_URL: &str =
     "https://raw.githubusercontent.com/ProxyShard/ShardBrowser/main/runtime.json";
 const LAUNCHER_RELEASE_REPO: &str = "ProxyShard/ShardBrowser";
 /// Chromium version baked into the current bundle (used for Mac Framework path).
-const CHROMIUM_VERSION: &str = "152.0.7977.65";
+pub const CHROMIUM_VERSION: &str = "152.0.7977.65";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ArchiveSpec {
@@ -130,6 +130,10 @@ struct Manifest {
     /// current `applied_chromium_version`. No bump-the-constant ceremony.
     #[serde(default)]
     applied_signature: Option<String>,
+    /// Build stamp of the archive currently extracted; the fallback for
+    /// archives that carry no `shardx-build` file.
+    #[serde(default)]
+    installed_engine_build: Option<String>,
     /// Chromium version of the engine binary currently extracted on disk.
     /// The engine update is detected by comparing THIS to the manifest's
     /// `chromium_version` — robust where the etag check failed (e.g. a user who
@@ -194,6 +198,18 @@ fn installed_engine_version() -> Option<String> {
 /// from a previous version (a leftover `<old>.manifest` made Windows re-download
 /// forever). On-disk detection is the fallback for legacy installs that predate
 /// `installed_chromium_version`.
+/// Build stamp on disk: `<engine>/shardx-build` when the archive ships one,
+/// else what was recorded at install time.
+fn installed_engine_build(local: &Manifest) -> Option<String> {
+    let from_disk = runtime_dir()
+        .ok()
+        .map(|base| base.join(engine_root_dir()).join("shardx-build"))
+        .and_then(|p| fs::read_to_string(p).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    from_disk.or_else(|| local.installed_engine_build.clone())
+}
+
 fn effective_installed_version(local: &Manifest) -> Option<String> {
     local
         .installed_chromium_version
@@ -226,6 +242,12 @@ pub struct RuntimeStatus {
     pub spec: Option<PlatformSpec>,
     /// True once the fingerprint library bundle has been extracted.
     pub fingerprints_installed: bool,
+    /// The published engine wants a newer launcher than this one. No engine
+    /// update is offered while this is true — update the app first.
+    pub needs_newer_launcher: bool,
+    /// What the manifest asks for, when it asks for anything.
+    pub min_launcher_version: Option<String>,
+    pub launcher_version: String,
 }
 
 #[derive(Default)]
@@ -245,6 +267,13 @@ struct RemoteManifest {
     /// previous release's list under the new user agent is a JA4 mismatch a
     /// detector reads straight out of `ja4_r`.
     tls: Option<serde_json::Value>,
+    /// Which build of the engine archive this is, apart from its Chromium
+    /// version. Not the manifest-wide `revision`, which also moves for a TLS
+    /// or GREASE edit — those want a migration, not a fresh download.
+    engine_build: Option<String>,
+    /// Lowest launcher version this engine build can be driven by; absent means
+    /// any. An older launcher gets a browser it cannot configure.
+    min_launcher_version: Option<String>,
 }
 
 /// Fetch the version manifest (GitHub raw) — one request yielding every
@@ -273,6 +302,13 @@ async fn fetch_manifest() -> RemoteManifest {
             grease_brand: str_field("grease_brand"),
             grease_version: str_field("grease_version"),
             tls: v.get("tls").filter(|t| t.is_object()).cloned(),
+            // Written as a number or a string; both mean the same thing.
+            engine_build: v.get("engine_build").and_then(|b| match b {
+                serde_json::Value::String(s) => Some(s.clone()),
+                serde_json::Value::Number(n) => Some(n.to_string()),
+                _ => None,
+            }),
+            min_launcher_version: str_field("min_launcher_version"),
         })
     }
     inner().await.unwrap_or_default()
@@ -433,24 +469,84 @@ pub async fn ensure_profiles_migrated() {
     let _ = save_manifest(&local);
 }
 
+/// Dotted-numeric comparison. Non-numeric parts compare as 0, which is what
+/// makes "2.0.2-rc1" sort with "2.0.2" rather than below every release.
+fn version_lt(a: &str, b: &str) -> bool {
+    let part = |s: &str| -> Vec<u32> {
+        s.split(['.', '-', '+'])
+            .map(|p| p.parse::<u32>().unwrap_or(0))
+            .collect()
+    };
+    let (va, vb) = (part(a), part(b));
+    for i in 0..va.len().max(vb.len()) {
+        let (x, y) = (va.get(i).copied().unwrap_or(0), vb.get(i).copied().unwrap_or(0));
+        if x != y {
+            return x < y;
+        }
+    }
+    false
+}
+
+/// This launcher's own version, as published.
+fn launcher_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+/// Whether this launcher is new enough for the engine build the manifest
+/// describes.
+fn engine_needs_newer_launcher(m: &RemoteManifest) -> bool {
+    m.min_launcher_version
+        .as_deref()
+        .is_some_and(|min| version_lt(launcher_version(), min))
+}
+
+/// Whether the published engine differs from the one on disk: Chromium version,
+/// `engine_build`, or the archive hash. Any one of them is enough, and an
+/// unknown local value is not a mismatch.
+fn engine_outdated(local: &Manifest, remote: &RemoteManifest, browser_key: &str) -> bool {
+    let version_moved = remote
+        .chromium_version
+        .as_deref()
+        .is_some_and(|rv| effective_installed_version(local).as_deref() != Some(rv));
+    let differs = |have: Option<String>, want: Option<&str>| match (have, want) {
+        (Some(h), Some(w)) => !h.is_empty() && h != w,
+        _ => false,
+    };
+    let build_moved = differs(installed_engine_build(local), remote.engine_build.as_deref());
+    let hash_moved = differs(
+        local.browser_etag.clone(),
+        remote.archives.get(browser_key).map(|s| s.as_str()),
+    );
+    version_moved || build_moved || hash_moved
+}
+
 #[tauri::command]
 pub async fn runtime_status() -> Result<RuntimeStatus, String> {
     let spec = host_spec();
     let installed = binary_path().map(|p| p.exists()).unwrap_or(false);
-    let m = load_manifest();
+    let mut m = load_manifest();
     let manifest = fetch_manifest().await;
     let remote = spec
         .as_ref()
         .and_then(|s| manifest.archives.get(&s.browser.key).cloned());
-    // Update is detected by VERSION (engine on disk vs manifest's
-    // chromium_version), not by etag — robust for users whose stored etag
-    // already matched but whose binary never actually updated. Manifest
-    // unreachable (chromium_version None) → assume up to date.
+    // Manifest unreachable → everything reads None and we assume up to date.
+    let needs_newer_launcher = engine_needs_newer_launcher(&manifest);
+
+    // An engine installed before build stamps has none recorded, and unknown is
+    // never a mismatch — so adopt one once, or the first bump never lands.
+    if installed && manifest.engine_build.is_some() && installed_engine_build(&m).is_none() {
+        let mut adopt = m.clone();
+        adopt.installed_engine_build = manifest.engine_build.clone();
+        if save_manifest(&adopt).is_ok() {
+            m = adopt;
+        }
+    }
+
     let update_available = installed
-        && manifest
-            .chromium_version
-            .as_deref()
-            .is_some_and(|rv| effective_installed_version(&m).as_deref() != Some(rv));
+        && !needs_newer_launcher
+        && spec
+            .as_ref()
+            .is_some_and(|s| engine_outdated(&m, &manifest, &s.browser.key));
     // Stamp present AND dir has ≥1 .json (catches user-nuked dir).
     let fingerprints_installed = m.fingerprints_etag.is_some()
         && crate::store::fingerprints_dir()
@@ -473,6 +569,9 @@ pub async fn runtime_status() -> Result<RuntimeStatus, String> {
         update_available,
         spec,
         fingerprints_installed,
+        needs_newer_launcher,
+        min_launcher_version: manifest.min_launcher_version,
+        launcher_version: launcher_version().to_string(),
     })
 }
 
@@ -486,18 +585,18 @@ pub async fn runtime_install(window: Window, force: bool) -> Result<RuntimeStatu
     let local = load_manifest();
     let manifest = fetch_manifest().await;
 
-    // Re-download the engine when its on-disk version differs from the
-    // manifest's chromium_version (or when missing / forced). VERSION-based,
-    // not etag — so the update actually fires for already-installed users on a
-    // bump. Manifest unreachable (None) → don't force a re-download.
-    let need_browser = if force || !installed_now {
-        true
-    } else {
-        match &manifest.chromium_version {
-            Some(rv) => effective_installed_version(&local).as_deref() != Some(rv.as_str()),
-            None => false,
-        }
-    };
+    // Refused rather than installed: this build could not configure it.
+    if engine_needs_newer_launcher(&manifest) {
+        return Err(format!(
+            "This engine build needs ShardX Launcher {} or newer — you are on {}. Update the launcher first.",
+            manifest.min_launcher_version.as_deref().unwrap_or("?"),
+            launcher_version(),
+        ));
+    }
+
+    // Manifest unreachable → don't force a re-download.
+    let need_browser =
+        force || !installed_now || engine_outdated(&local, &manifest, &spec.browser.key);
     let browser_etag = if need_browser {
         // Wipe the old engine tree first. The archive extracts *over* the
         // existing dir but never deletes files the new version dropped — most
@@ -571,6 +670,12 @@ pub async fn runtime_install(window: Window, force: bool) -> Result<RuntimeStatu
         // it off disk, which is what let a leftover `<old>.manifest` keep the
         // version "stuck" and re-download every launch.
         installed_chromium_version: Some(target_ver),
+        // Carried through when nothing was downloaded.
+        installed_engine_build: if need_browser {
+            manifest.engine_build.clone()
+        } else {
+            local.installed_engine_build.clone()
+        },
     })
     .map_err(|e| e.to_string())?;
 

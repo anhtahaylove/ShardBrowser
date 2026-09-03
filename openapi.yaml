@@ -100,6 +100,9 @@ tags:
   - name: Profiles
   - name: Folders
   - name: Proxies
+  - name: Extensions
+  - name: Bookmarks
+  - name: Trash
 
 paths:
   /health:
@@ -250,7 +253,7 @@ paths:
                     type: boolean
                     description: Whether an inline proxy string was attached.
         "400":
-          description: Unparseable proxy string.
+          description: Unparseable proxy string, or an unknown noise vector.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -286,12 +289,20 @@ paths:
     delete:
       tags: [Profiles]
       summary: Delete a profile
-      description: Removes the profile config and its user-data-dir.
+      description: |
+        Moves the profile to the trash, where it stays restorable for 7 days
+        before it is swept. What is archived is the account — cookies, logins,
+        web data, preferences, Local Storage, IndexedDB — not the caches, so
+        the archive is a fraction of the user-data dir. The original config and
+        user-data dir are removed once the archive is written.
+
+        Temporary profiles are torn down by the process tracker when their
+        browser closes and never reach the trash.
       parameters:
         - $ref: "#/components/parameters/ProfileId"
       responses:
         "200":
-          description: Deleted.
+          description: Moved to the trash.
           content:
             application/json:
               schema:
@@ -299,6 +310,10 @@ paths:
                 properties:
                   deleted: { type: boolean, example: true }
                   id: { type: string, format: uuid }
+                  trashed:
+                    type: boolean
+                    example: true
+                    description: Restorable from the launcher's Trash for 7 days.
         "401": { $ref: "#/components/responses/Unauthorized" }
         "500":
           description: Deletion failed.
@@ -670,6 +685,218 @@ paths:
                   id: { type: string }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /extensions:
+    get:
+      tags: [Extensions]
+      summary: List the extension library
+      description: |
+        Extensions available to profiles. The `id` of each is what
+        `POST /profiles` and `PATCH /profiles/{id}` take in `extensions`.
+
+        Icons are omitted here: a data URL runs to hundreds of kilobytes and a
+        listing of thirty would be mostly base64. `POST /extensions` returns
+        the icon for the one it just added.
+      responses:
+        "200":
+          description: The library.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Extension" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [Extensions]
+      summary: Add an extension
+      description: |
+        Give either `url` or `path`.
+
+        `url` takes a Chrome Web Store page, a bare 32-character extension id,
+        or a direct link to a `.crx` / `.zip`; the launcher resolves the store
+        page to the download itself. `path` takes a local `.crx`, `.zip`, or an
+        unpacked folder on the machine running the launcher.
+
+        Name, version, description and icon come out of the extension's own
+        `manifest.json` — including `__MSG_*__` placeholders, resolved against
+        its default locale.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AddExtensionRequest" }
+      responses:
+        "200":
+          description: Added; `icon` is populated on this response.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Extension" }
+        "400":
+          description: Neither `url` nor `path` given, the link is not an extension, or the store has no such id.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /extensions/{id}:
+    delete:
+      tags: [Extensions]
+      summary: Remove an extension
+      description: |
+        Profiles hold ids, not copies, so any profile naming this extension
+        stops loading it from its next launch. Their stored list is left as it
+        is — re-adding the extension does not restore the binding.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Removed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted: { type: boolean, example: true }
+                  id: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /bookmarks:
+    get:
+      tags: [Bookmarks]
+      summary: List folder bookmarks
+      responses:
+        "200":
+          description: Every bookmark, across folders.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Bookmark" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [Bookmarks]
+      summary: Add or update a bookmark
+      description: |
+        With `id` it updates that bookmark; without, it creates one.
+
+        A bookmark bound to a folder appears in the bookmarks bar of every
+        profile in that folder, inside a folder called **ShardX**; `folder: ""`
+        means every profile. Only that folder is managed, so bookmarks the
+        operator saved inside a profile are untouched.
+
+        Applied when a profile next launches — the file is written just before
+        the browser reads it, so a running profile does not see the change.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BookmarkRequest" }
+      responses:
+        "200":
+          description: The saved bookmark.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Bookmark" }
+        "400":
+          description: No URL given.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /bookmarks/{id}:
+    delete:
+      tags: [Bookmarks]
+      summary: Delete a bookmark
+      description: It leaves its profiles on their next launch.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted: { type: boolean, example: true }
+                  id: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /trash:
+    get:
+      tags: [Trash]
+      summary: List deleted profiles
+      description: |
+        Profiles `DELETE /profiles/{id}` archived, newest first, each with the
+        instant it stops being restorable. The sweep runs at launcher startup.
+      responses:
+        "200":
+          description: The trash.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TrashEntry" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /trash/{id}/restore:
+    post:
+      tags: [Trash]
+      summary: Restore a deleted profile
+      description: |
+        Puts the profile back under its **own id**, so a script, a bookmark
+        folder or a proxy binding that referenced it still points at it. The
+        archive is removed once the profile is back.
+
+        What returns is the account — cookies, logins, web data, preferences,
+        history, bookmarks, Local Storage, IndexedDB. Caches were never
+        archived and are rebuilt on the next launch.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: The restored profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileMeta" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: Nothing in the trash under that id.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /trash/{id}:
+    delete:
+      tags: [Trash]
+      summary: Delete a trashed profile for good
+      description: Irreversible — the archive is the only remaining copy.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Purged.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  purged: { type: boolean, example: true }
+                  id: { type: string, format: uuid }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -830,6 +1057,20 @@ components:
         folder:
           type: string
           description: Folder tag (ignored on /folders/{folder}/profiles, which wins).
+        color:
+          type: string
+          description: |
+            Accent for the profile's window icon and for the pill carrying its
+            name in the omnibox. Omit it and the icon derives a colour from the
+            name while the pill keeps the browser's own toolbar colour.
+          example: "#2FCB80"
+        extensions:
+          type: array
+          items: { type: string }
+          description: |
+            Extension-library ids (`GET /extensions`), loaded at launch. An id
+            the library does not hold is a 400 rather than a profile that
+            silently starts without it.
         fingerprint:
           allOf: [{ $ref: "#/components/schemas/Fingerprint" }]
           description: Stored verbatim. Get one from /fingerprint/new and edit as needed.
@@ -845,6 +1086,13 @@ components:
         proxy:
           type: string
           description: Proxy string — stored (deduped) + full-tested, then bound.
+        color:
+          type: string
+          description: '`#rrggbb`; "" goes back to the name-derived colour.'
+        extensions:
+          type: array
+          items: { type: string }
+          description: Replaces the whole list; `[]` loads none.
         fingerprint:
           allOf: [{ $ref: "#/components/schemas/Fingerprint" }]
           description: When present, REPLACES the stored fingerprint verbatim.
@@ -864,6 +1112,117 @@ components:
           description: Inline proxy string (not saved to the store).
         name: { type: string }
         folder: { type: string }
+        noise:
+          type: object
+          description: |
+            Per-vector fingerprint noise. Vectors left out keep their default
+            (off). Two forms, mixable in one request:
+
+              * shorthand — `{"canvas": true, "webgl": true}`; turning `webgl`
+                or `client_rects` on this way also gives it the strength the UI
+                uses, since a vector enabled at zero strength does nothing
+              * full block — `{"canvas": {"enabled": true, "seed": 42}}`, the
+                same shape `GET /profiles/{id}` hands back
+
+            Fields are merged into the vector rather than replacing it, so
+            `{"webgl": {"intensity": 0.001}}` leaves `enabled` alone. A `seed`
+            of `0` (or omitted) still means "derive a stable one from the
+            profile id", which is what keeps two temporary profiles from
+            sharing a fingerprint.
+          additionalProperties:
+            oneOf:
+              - type: boolean
+              - type: object
+                properties:
+                  enabled: { type: boolean }
+                  seed: { type: integer, format: int64 }
+                  intensity: { type: number, description: "`webgl` only." }
+                  max_offset: { type: number, description: "`client_rects` only." }
+          properties:
+            canvas: {}
+            webgl: {}
+            audio: {}
+            client_rects: {}
+            sensors: {}
+            fonts: {}
+          example:
+            canvas: true
+            webgl: { enabled: true, intensity: 0.0005 }
+            fonts: true
+
+    Extension:
+      type: object
+      properties:
+        id: { type: string, description: Pass this in a profile's `extensions`. }
+        name: { type: string }
+        version: { type: string }
+        description: { type: string }
+        size_bytes: { type: integer, format: int64 }
+        added_at: { type: string, description: "`@<unix_secs>`." }
+        icon:
+          type: string
+          nullable: true
+          description: |
+            Largest icon the manifest declares, as a `data:` URL. Null on the
+            listing endpoint and on extensions that ship none.
+
+    AddExtensionRequest:
+      type: object
+      description: Exactly one of `url` or `path`.
+      properties:
+        url:
+          type: string
+          description: |
+            A Chrome Web Store page, a bare 32-character extension id, or a
+            direct link to a `.crx` / `.zip`.
+          example: https://chromewebstore.google.com/detail/rabby-wallet/acmacodkjbdgmoleebolmdjonilkdbch
+        path:
+          type: string
+          description: A local `.crx`, `.zip` or unpacked folder on the launcher's machine.
+
+    Bookmark:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        url: { type: string }
+        folder:
+          type: string
+          description: Launcher folder; empty means every profile.
+
+    BookmarkRequest:
+      type: object
+      required: [url]
+      properties:
+        id:
+          type: string
+          description: Present updates that bookmark; absent creates one.
+        url:
+          type: string
+          description: A bare host is fine — `https://` is added.
+          example: facebook.com/ads/manager
+        title:
+          type: string
+          description: Blank uses the address itself.
+        folder:
+          type: string
+          description: Empty (or absent) means every profile.
+
+    TrashEntry:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        folder: { type: string }
+        deleted_at: { type: integer, format: int64, description: Unix seconds. }
+        expires_at:
+          type: integer
+          format: int64
+          description: Unix seconds; the startup sweep removes anything past it.
+        size_bytes:
+          type: integer
+          format: int64
+          description: The archive, which holds the account and not the caches.
 
     ProfileMeta:
       type: object
@@ -877,6 +1236,16 @@ components:
         created_at: { type: string, nullable: true }
         pinned: { type: boolean }
         folder: { type: string }
+        color:
+          type: string
+          nullable: true
+          description: |
+            Icon accent as `#rrggbb`; `null` means it is derived from the name,
+            which is what the browser does when nothing is chosen.
+        extensions:
+          type: array
+          items: { type: string }
+          description: Extension-library ids loaded at launch.
 
     ProfileListItem:
       allOf:
