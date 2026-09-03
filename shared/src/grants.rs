@@ -250,6 +250,45 @@ pub fn seal_trk(
     })
 }
 
+/// Open a grant using the exact HPKE info bytes the issuer sealed under.
+///
+/// A collecting device holds the stored grant, not the scope that produced it:
+/// the server persists `hpke_info_bytes` but not every scope field, so
+/// reconstructing a `GrantScope` client-side is not possible. The info bytes
+/// are the binding that matters -- they commit to the whole scope, and the AAD
+/// commits to them -- so opening against them verifies the same coupling
+/// without needing the scope struct.
+pub fn open_trk_with_info(
+    recipient_sk_bytes: &[u8],
+    hpke_info_bytes: &[u8],
+    encapped_key_bytes: &[u8],
+    ciphertext: &[u8],
+) -> Result<Zeroizing<[u8; TRK_LEN]>, GrantError> {
+    let sk = <Kem as KemTrait>::PrivateKey::from_bytes(recipient_sk_bytes)
+        .map_err(|_| GrantError::BadKeyMaterial)?;
+    let encapped = <Kem as KemTrait>::EncappedKey::from_bytes(encapped_key_bytes)
+        .map_err(|_| GrantError::BadKeyMaterial)?;
+
+    let aad = root_grant_aad(hpke_info_bytes);
+
+    let pt = hpke::single_shot_open::<Aead, Kdf, Kem>(
+        &OpModeR::Base,
+        &sk,
+        &encapped,
+        hpke_info_bytes,
+        ciphertext,
+        &aad,
+    )
+    .map_err(|_| GrantError::HpkeFailure)?;
+
+    if pt.len() != TRK_LEN {
+        return Err(GrantError::BadTrkLength);
+    }
+    let mut trk = Zeroizing::new([0u8; TRK_LEN]);
+    trk.copy_from_slice(&pt);
+    Ok(trk)
+}
+
 /// Open a sealed grant with the recipient device's HPKE private key.
 ///
 /// The `info` and AAD are re-derived from the caller-supplied scope rather than
@@ -636,5 +675,51 @@ mod tests {
         )
         .expect("open");
         assert_eq!(opened.len(), TRK_LEN);
+    }
+
+    /// The info-based open path must accept exactly what the scope-based path
+    /// produces. If these ever diverge, a collecting device would fail to open
+    /// a grant that was sealed correctly.
+    #[test]
+    fn open_with_info_matches_open_with_scope() {
+        let mut scope = GrantScope {
+            replay_id: fixture_bytes("replay"),
+            tenant_id: fixture_bytes("tenant"),
+            server_instance_id: fixture_bytes("instance"),
+            restore_epoch: 7,
+            root_key_id: fixture_bytes("rootkey"),
+            root_generation: 3,
+            subject_account_id: fixture_bytes("account"),
+            subject_device_id: fixture_bytes("device"),
+            recipient_hpke_key_id: [0u8; 32], // replaced below with the real id
+        };
+        let seed: [u8; 32] = fixture_bytes("hpke-seed");
+        let (sk, pk) = derive_keypair(&seed);
+        // seal_trk refuses a scope whose recipient id does not match the key,
+        // so the scope must name the real one.
+        scope.recipient_hpke_key_id = crate::keys::hpke_key_id(&pk);
+        let trk: [u8; TRK_LEN] = fixture_bytes("trk");
+
+        let sealed = seal_trk(&pk, &scope, &trk).expect("seal");
+
+        let via_scope = open_trk(&sk, &scope, &sealed.encapped_key_bytes, &sealed.ciphertext_bytes)
+            .expect("open via scope");
+        let info = root_grant_info(&scope);
+        assert_eq!(info, sealed.hpke_info_bytes, "sealed record must carry the same info");
+        let via_info = open_trk_with_info(&sk, &info, &sealed.encapped_key_bytes, &sealed.ciphertext_bytes)
+            .expect("open via info");
+
+        assert_eq!(&via_scope[..], &trk[..]);
+        assert_eq!(&via_info[..], &via_scope[..]);
+
+        // Tampered info must fail, proving the info bytes are really binding
+        // and not just an opaque parameter.
+        let mut bad = info.clone();
+        let last = bad.len() - 1;
+        bad[last] ^= 0x01;
+        assert!(
+            open_trk_with_info(&sk, &bad, &sealed.encapped_key_bytes, &sealed.ciphertext_bytes).is_err(),
+            "altered info must not open the grant"
+        );
     }
 }

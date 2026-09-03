@@ -147,6 +147,23 @@ Migration `0005` widens the constraint, and `consume_replay_id` now confirms the
 row actually exists before reporting a replay, so a future constraint gap
 surfaces as an error instead of a false accusation.
 
+## Device custody collection
+
+Enrollment generates an HPKE keypair, registers the public half with the
+server, and now keeps the private half in `team.json` as `hpke_key_seed`.
+Before this, the private half was discarded at the end of enrollment, so a
+grant sealed to a device could never be opened by it: the custody chain broke
+at the last step.
+
+`team_collect_custody` fetches the grants issued to this device and opens each
+one with that key. It reports counts, never the key itself -- where a recovered
+root key should live is the storage question below, and handing it to the UI
+would answer it badly.
+
+Devices enrolled before the seed was persisted report
+`can_receive_custody: false` and are told to re-enrol, rather than silently
+failing to decrypt.
+
 ## Recovery
 
 The design's recovery path is a *recovery bundle*: the TRK wrapped under a
