@@ -280,6 +280,20 @@ jobs:
           fi
           cp -v "$src" "staging/shardx-team-server-${{ matrix.label }}$ext"
 
+      - name: Verify the team server binary was collected
+        shell: bash
+        run: |
+          # The publish job checks the merged set, but that job is skipped on a
+          # dry run, so a packaging break would only surface during a real
+          # release. Check here too, where every dry run reaches it.
+          set -euo pipefail
+          found=$(find staging -name 'shardx-team-server-*' | head -n 1)
+          if [ -z "$found" ]; then
+            echo "No server binary in staging for ${{ matrix.label }}." >&2
+            ls -la staging >&2
+            exit 1
+          fi
+          echo "Server binary staged: $found"
       - name: Upload updater-signed build artifacts
         uses: actions/upload-artifact@v7
         with:
