@@ -1403,6 +1403,7 @@ fn team_set_connection(
     if server_changed {
         c.device_id.clear();
         c.signing_key_seed.clear();
+        c.hpke_key_seed.clear();
     }
 
     team_config::save(&c).map_err(|e| e.to_string())?;
@@ -1470,6 +1471,11 @@ async fn team_enroll_device(label: String) -> Result<team_config::TeamStatus, St
     // this id. Storing it here is what lets sync run without a second call.
     c.account_id = enrolled.account_id;
     c.signing_key_seed = seed.iter().map(|b| format!("{b:02x}")).collect();
+    // Without the HPKE seed the device can never open a root key grant sealed
+    // to it: the public half is registered with the server, but the private
+    // half only exists here. Discarding it would make enrollment permanently
+    // unable to receive custody.
+    c.hpke_key_seed = hpke_seed.iter().map(|b| format!("{b:02x}")).collect();
     c.hpke_key_seed = hpke_seed.iter().map(|b| format!("{b:02x}")).collect();
     team_config::save(&c).map_err(|e| e.to_string())?;
 
@@ -1710,6 +1716,68 @@ async fn ps_set_tag(id: i64, tag: String) -> Result<Value, String> {
     .map_err(|e| e.to_string())
 }
 
+/// Collect the root key grants issued to this device and report what opened.
+///
+/// The tenant root key itself is never returned to the caller: this reports
+/// whether custody is in place, not the key. A grant that fails to open is
+/// reported rather than skipped, because silently ignoring it would hide a
+/// device that cannot actually decrypt anything.
+#[tauri::command]
+async fn team_collect_custody() -> Result<serde_json::Value, String> {
+    let c = team_config::load().map_err(|e| e.to_string())?;
+    if !c.can_sync() {
+        return Err("this device is not enrolled for fleet operations".into());
+    }
+    let seed = c.hpke_seed().map_err(|e| e.to_string())?;
+    let (device_sk, _pk) = shardx_core::grants::derive_keypair(&seed);
+
+    let client =
+        fleet_client::FleetClient::new(&c.server_url, &c.token).map_err(|e| e.to_string())?;
+    let grants = client
+        .root_key_grants(&c.tenant_id, &c.device_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut opened = 0usize;
+    let mut failed = 0usize;
+    let mut newest_generation: Option<i64> = None;
+    for g in &grants {
+        let info = hex_bytes(&g.hpke_info_hex)?;
+        let encapped = hex_bytes(&g.hpke_encapped_key_hex)?;
+        let wrapped = hex_bytes(&g.hpke_wrapped_trk_hex)?;
+        match shardx_core::grants::open_trk_with_info(&device_sk, &info, &encapped, &wrapped) {
+            Ok(_trk) => {
+                // The key is dropped here: it is zeroized on drop, and holding
+                // it would mean deciding where to store it, which is the
+                // custody question this command does not answer.
+                opened += 1;
+                newest_generation = Some(match newest_generation {
+                    Some(n) if n >= g.root_generation => n,
+                    _ => g.root_generation,
+                });
+            }
+            Err(_) => failed += 1,
+        }
+    }
+
+    Ok(serde_json::json!({
+        "grants": grants.len(),
+        "opened": opened,
+        "failed": failed,
+        "newest_generation": newest_generation,
+    }))
+}
+
+/// Decode a hex string from the server into bytes.
+fn hex_bytes(s: &str) -> Result<Vec<u8>, String> {
+    if !s.len().is_multiple_of(2) {
+        return Err("malformed hex from server".into());
+    }
+    (0..s.len() / 2)
+        .map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(|e| e.to_string()))
+        .collect()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// Bring the main window back from the tray / minimized state and focus it.
 fn show_main_window(app: &tauri::AppHandle) {
@@ -1814,6 +1882,7 @@ pub fn run() {
             profile_save,
             profile_delete,
             team_status,
+            team_collect_custody,
             team_set_connection,
             team_test_connection,
             team_enroll_device,

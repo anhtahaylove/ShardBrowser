@@ -331,6 +331,33 @@ impl FleetClient {
         Ok(out)
     }
 
+    /// Fetch the root key grants issued to this device, newest generation first.
+    ///
+    /// The server stores grants it cannot read: every one is HPKE-sealed to a
+    /// device public key. Collecting is therefore safe to do over the wire,
+    /// but useless without the matching private half held locally.
+    pub async fn root_key_grants(
+        &self,
+        tenant_id: &str,
+        device_id: &str,
+    ) -> Result<Vec<RootKeyGrant>> {
+        let res = self
+            .http
+            .get(self.url(&format!(
+                "/v2/tenants/{tenant_id}/devices/{device_id}/root-key-grants"
+            )))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .context("request root key grants")?;
+        let body: RootKeyGrantsResponse = Self::ok_or_err(res, "root key grants")
+            .await?
+            .json()
+            .await
+            .context("decode root key grants")?;
+        Ok(body.grants)
+    }
+
     /// Lease, stage, and publish a sealed container. Returns the new version.
     ///
     /// The lease is released on every path, including failure: an upload that
@@ -567,6 +594,23 @@ fn decode_hex16(s: &str, field: &str) -> Result<[u8; 16]> {
 
 fn random_id_bytes() -> [u8; 16] {
     *uuid::Uuid::new_v4().as_bytes()
+}
+
+/// One grant as the server hands it back.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RootKeyGrant {
+    pub grant_variant: String,
+    pub root_key_id: String,
+    pub root_generation: i64,
+    pub recipient_hpke_key_id: String,
+    pub hpke_info_hex: String,
+    pub hpke_encapped_key_hex: String,
+    pub hpke_wrapped_trk_hex: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RootKeyGrantsResponse {
+    grants: Vec<RootKeyGrant>,
 }
 
 pub fn random_id_hex() -> String {

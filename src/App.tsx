@@ -5838,6 +5838,7 @@ type TeamStatus = {
   has_token: boolean;
   is_enrolled: boolean;
   can_sync: boolean;
+  can_receive_custody: boolean;
 };
 
 function SettingsView() {
@@ -6291,6 +6292,13 @@ function SettingsView() {
           <div className="settings-note">
             This device is enrolled as <code>{team.device_id}</code>. Changing the
             server URL or tenant clears the enrollment.
+            {!team.can_receive_custody && (
+              <div style={{ marginTop: 6 }}>
+                This device was enrolled before key custody was supported, so it
+                cannot open a root key grant issued to it. Re-enrol it to take
+                part in key custody.
+              </div>
+            )}
           </div>
         ) : (
           <>
