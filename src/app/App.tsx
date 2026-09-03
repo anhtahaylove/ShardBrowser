@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { TitleBar } from "../widgets/TitleBar/TitleBar";
 import { Sidebar } from "../widgets/Sidebar/Sidebar";
 import { FirstRunGate } from "../widgets/FirstRunGate/FirstRunGate";
@@ -16,9 +17,12 @@ import { TrashPage } from "../pages/trash";
 import { SettingsPage } from "../pages/settings";
 import { PatchLogPage } from "../pages/patchlog";
 import { useNav } from "../shared/model/navigation";
+import { trackSection } from "../shared/lib/analytics";
 
 export function App() {
   const section = useNav((s) => s.section);
+
+  useEffect(() => { void trackSection(section); }, [section]);
 
   return (
     <>

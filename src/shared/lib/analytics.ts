@@ -1,17 +1,20 @@
 import { getVersion } from "@tauri-apps/api/app";
 
 // Launcher-window analytics only: never the panels, never a profile's browser.
+//
+// The hit is built and sent here rather than by gtag.js. A release window runs
+// on `tauri://localhost`, where the remote script does not send — and it needs
+// no cookie, no secure context and no third-party script to work.
 
 /** GA4 Web data stream. A measurement id is public by design. */
 const MEASUREMENT_ID = "G-PLHRZ45072";
-
+const ENDPOINT = "https://www.google-analytics.com/g/collect";
 /** Reported as the page: GA4 would otherwise log `tauri://localhost`. */
 const APP_URL = "https://launcher.proxyshard.com/";
 
 const CLIENT_ID_KEY = "shardx-analytics-client-id";
 
-/** One id per install. Not gtag's `_ga` cookie — it does not survive a
- *  restart on a custom-scheme origin, so every launch would be a new user. */
+/** One id per install; without it every launch would count as a new user. */
 function clientId(): string {
   try {
     const stored = localStorage.getItem(CLIENT_ID_KEY);
@@ -20,15 +23,12 @@ function clientId(): string {
     localStorage.setItem(CLIENT_ID_KEY, fresh);
     return fresh;
   } catch {
-    // Private mode or blocked storage: still count the session, just without
-    // being able to recognise it next time.
     return randomId();
   }
 }
 
 /// `crypto.randomUUID` needs a secure context, which a custom-scheme window is
-/// not guaranteed to be. Falling back keeps a blocked call from taking the
-/// whole module down with an unhandled rejection.
+/// not guaranteed to be.
 function randomId(): string {
   try {
     if (typeof crypto?.randomUUID === "function") return crypto.randomUUID();
@@ -44,71 +44,92 @@ function hostOs(): string {
   return "unknown";
 }
 
-let started = false;
-
-/** Why the last init did what it did; readable as `__shardxAnalytics`. */
+/** Why the last send did what it did; readable as `__shardxAnalytics`. */
 type Status = { sent: boolean; reason: string; client_id?: string; version?: string };
 
 function report(status: Status): void {
   (window as any).__shardxAnalytics = status;
-  if (status.sent) console.info("[analytics] reporting", status);
-  else console.info("[analytics] not reporting:", status.reason);
+  console.info("[analytics]", status);
 }
 
-/** Loads gtag once, unless analytics are off or no measurement id is set. */
-export async function initAnalytics(): Promise<void> {
-  if (started) return;
-  started = true;
-  if (!MEASUREMENT_ID) { report({ sent: false, reason: "no measurement id set" }); return; }
+let version = "unknown";
+let session = "";
+let ready: Promise<void> | null = null;
+/** First hit of the session carries `_ss`; the rest carry time since the last. */
+let first = true;
+let lastHit = 0;
+/** Last section sent, and when — StrictMode mounts an effect twice in dev. */
+let lastSection = "";
+let lastSectionAt = 0;
+
+export function initAnalytics(): Promise<void> {
+  if (!ready) {
+    ready = (async () => {
+      version = await getVersion().catch(() => "dev");
+      session = String(Math.floor(Date.now() / 1000));
+    })().catch((e) => {
+      // Never an unhandled rejection: analytics must not break the window.
+      report({ sent: false, reason: `failed: ${String(e)}` });
+    });
+  }
+  return ready;
+}
+
+/** Which part of the launcher is on screen. Sections only — nothing a profile
+ *  visits is ever seen here, let alone reported. */
+export async function trackSection(section: string): Promise<void> {
+  const now = Date.now();
+  if (section === lastSection && now - lastSectionAt < 1000) return;
+  lastSection = section;
+  lastSectionAt = now;
+  await initAnalytics();
+  await send("page_view", {}, section);
+}
+
+/** One event. `sct`/`seg` are what make GA4 count a user rather than just an event. */
+export async function send(
+  name: string,
+  params: Record<string, string | number> = {},
+  section = "",
+): Promise<void> {
+  if (!MEASUREMENT_ID || !session) return;
+  const cid = clientId();
+  const now = Date.now();
+  // Engagement time since the previous hit; without it GA reports sessions as
+  // zero-length however long the app was open.
+  const engaged = first ? 0 : Math.min(now - lastHit, 30 * 60 * 1000);
+  const isFirst = first;
+  // Flipped before the request, not after: two hits in flight at once would
+  // otherwise both call themselves the first of the session.
+  first = false;
+  lastHit = now;
+  const q = new URLSearchParams({
+    v: "2",
+    tid: MEASUREMENT_ID,
+    cid,
+    sid: session,
+    sct: "1",
+    seg: "1",
+    _s: "1",
+    _p: String(Date.now()),
+    // No advertising in this app, so nothing here should feed one.
+    npa: "1",
+    en: name,
+    dl: section ? `${APP_URL}${section}` : APP_URL,
+    dt: section ? `ShardX Launcher — ${section}` : "ShardX Launcher",
+    ul: (navigator.language || "en").toLowerCase(),
+    sr: `${screen.width}x${screen.height}`,
+    "ep.app_version": version,
+    "ep.os": hostOs(),
+    "ep.env": import.meta.env.DEV ? "dev" : "prod",
+    ...(isFirst ? { _ss: "1", _fv: "1" } : { _et: String(engaged) }),
+  });
+  for (const [k, v] of Object.entries(params)) q.set(`ep.${k}`, String(v));
 
   try {
-    await load();
+    await fetch(`${ENDPOINT}?${q}`, { method: "POST", mode: "no-cors", keepalive: true });
+    report({ sent: true, reason: `${name}${section ? ` ${section}` : ""}`, client_id: cid, version });
   } catch (e) {
-    // Never an unhandled rejection: analytics that can break the window on
-    // its way up is worse than analytics that is missing.
-    report({ sent: false, reason: `failed: ${String(e)}` });
+    report({ sent: false, reason: `network: ${String(e)}`, client_id: cid, version });
   }
-}
-
-async function load(): Promise<void> {
-  const version = await getVersion().catch(() => "dev");
-  const dev = import.meta.env.DEV;
-
-  const w = window as any;
-  w.dataLayer = w.dataLayer || [];
-  w.gtag = function gtag() { w.dataLayer.push(arguments); };
-  w.gtag("js", new Date());
-  // No advertising in this app, so nothing here should feed one.
-  w.gtag("consent", "default", {
-    ad_storage: "denied",
-    ad_user_data: "denied",
-    ad_personalization: "denied",
-  });
-  const cid = clientId();
-  w.gtag("config", MEASUREMENT_ID, {
-    client_id: cid,
-    app_version: version,
-    os: hostOs(),
-    // Kept apart from real installs so a dev run can be filtered out of the
-    // numbers. It still shows in Realtime, which is where it gets checked.
-    env: dev ? "dev" : "prod",
-    page_location: APP_URL,
-    page_title: "ShardX Launcher",
-    send_page_view: true,
-  });
-
-  const el = document.createElement("script");
-  el.async = true;
-  el.src = `https://www.googletagmanager.com/gtag/js?id=${MEASUREMENT_ID}`;
-  el.onerror = () =>
-    report({ sent: false, reason: "googletagmanager.com did not load — blocked or offline" });
-  document.head.appendChild(el);
-
-  report({ sent: true, reason: "gtag requested", client_id: cid, version });
-}
-
-/** One event; a no-op when gtag never loaded, so call sites need no guard. */
-export function track(name: string, params: Record<string, unknown> = {}): void {
-  const gtag = (window as any).gtag;
-  if (typeof gtag === "function") gtag("event", name, params);
 }
