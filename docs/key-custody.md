@@ -98,7 +98,7 @@ the right model to keep.
 | `v2_tenant_root_key_grants` table | Stores filed grants |
 | `POST /v2/tenant-root-key-grants` | Verifies, claims the replay id, and **stores** the sealed grant |
 | `GET /v2/tenants/:tenant/devices/:device/root-key-grants` | Returns a device's sealed grants |
-| Root generation lifecycle | No table, no endpoints |
+| Root generation lifecycle | `v2_root_key_generations` plus begin/activate/read endpoints (bootstrap only; no rotation) |
 | Grant issuance at enrollment | Not implemented — grants must be filed by an external custodian |
 | Recovery bundle | Not implemented |
 
@@ -107,11 +107,29 @@ filed, read back, and opened by that device, and `v2_e2e.rs` proves the round
 trip by recovering the key from what the server returned. The server stores
 ciphertext it cannot read.
 
-What is still missing is everything that would *produce* those grants
-automatically. Nothing generates a TRK, nothing seals it to a newly enrolled
-device, and no generation lifecycle governs rotation. So sync still falls back
-to a shared passphrase: the transport for a root key exists, the ceremony that
-would use it does not.
+A grant now has to name a generation that exists, and wrap the key that
+generation committed to. Before this, the generation number in a grant was
+decoration: a grant could name any number and seal any key, and the mismatch
+would only surface later as a backup nobody could open.
+
+The bootstrap is three steps. A tenant begins a generation in `PREPARING`,
+sending only the root key's identifier — the key itself is generated on the
+device and never transmitted, which is what keeps the server unable to read
+anything sealed under it. The first device files a `FirstRootSelfGrant`, which
+is accepted only while the generation is preparing and only once per tenant.
+The generation becomes `ACTIVE` only after the holder confirms it can unwrap
+what it filed.
+
+Activation is deliberately separate from filing. Filing proves a grant was
+written; it does not prove anyone can open it. A tenant that activated on filing
+could seal itself under a key it had already lost, and that failure is
+unrecoverable by construction — the server cannot help, because it never sees a
+key.
+
+What is still missing is everything that would *produce* grants automatically.
+Nothing seals a TRK to a newly enrolled device, and no rotation or recovery
+ceremony exists. So sync still falls back to a shared passphrase: the transport
+and the bootstrap for a root key exist, the issuance ceremony does not.
 
 ### A failure worth remembering
 
