@@ -1634,6 +1634,7 @@ async fn a_grant_for_an_unknown_generation_is_refused() {
     let data = std::env::temp_dir().join(format!("shardx-e2e-nogen-{}", std::process::id()));
     let _guard = spawn_server(&data, port);
     let cl = client();
+    wait_health(&cl, port).await;
 
     let admin = token(&cl, port, "admin", "secret").await;
     let user_id = admin_user_id(&cl, port, &admin).await;
@@ -1704,6 +1705,7 @@ async fn a_second_first_root_self_grant_is_refused() {
     let data = std::env::temp_dir().join(format!("shardx-e2e-twoself-{}", std::process::id()));
     let _guard = spawn_server(&data, port);
     let cl = client();
+    wait_health(&cl, port).await;
 
     let admin = token(&cl, port, "admin", "secret").await;
     let user_id = admin_user_id(&cl, port, &admin).await;
@@ -1784,6 +1786,7 @@ async fn a_generation_cannot_activate_without_a_grant() {
     let data = std::env::temp_dir().join(format!("shardx-e2e-noact-{}", std::process::id()));
     let _guard = spawn_server(&data, port);
     let cl = client();
+    wait_health(&cl, port).await;
 
     let admin = token(&cl, port, "admin", "secret").await;
     let user_id = admin_user_id(&cl, port, &admin).await;
@@ -1841,6 +1844,7 @@ async fn an_outsider_cannot_begin_a_generation() {
     let data = std::env::temp_dir().join(format!("shardx-e2e-genout-{}", std::process::id()));
     let _guard = spawn_server(&data, port);
     let cl = client();
+    wait_health(&cl, port).await;
 
     let admin = token(&cl, port, "admin", "secret").await;
     let user_id = admin_user_id(&cl, port, &admin).await;
@@ -1894,6 +1898,7 @@ async fn a_grant_wrapping_a_different_key_than_its_generation_is_refused() {
     let data = std::env::temp_dir().join(format!("shardx-e2e-wrongkey-{}", std::process::id()));
     let _guard = spawn_server(&data, port);
     let cl = client();
+    wait_health(&cl, port).await;
 
     let admin = token(&cl, port, "admin", "secret").await;
     let user_id = admin_user_id(&cl, port, &admin).await;

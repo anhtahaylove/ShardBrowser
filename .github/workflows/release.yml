@@ -259,6 +259,27 @@ jobs:
           fi
           cp -v "$src" "staging/ShardX-Launcher-portable-${{ matrix.label }}.exe"
 
+      - name: Build the team server
+        shell: bash
+        run: cargo build --release --locked --target ${{ matrix.target }} --manifest-path server/Cargo.toml
+
+      - name: Collect the team server binary
+        shell: bash
+        run: |
+          # The grant and generation endpoints live in the server, not the
+          # Launcher. Without shipping it, those features are source-only and a
+          # release cannot actually deliver them.
+          rel="server/target/${{ matrix.target }}/release"
+          ext=""
+          if [ "${{ runner.os }}" = "Windows" ]; then ext=".exe"; fi
+          src="$rel/shardx-team-server$ext"
+          if [ ! -f "$src" ]; then
+            echo "team server binary not found at $src" >&2
+            ls -la "$rel" >&2 || true
+            exit 1
+          fi
+          cp -v "$src" "staging/shardx-team-server-${{ matrix.label }}$ext"
+
       - name: Upload updater-signed build artifacts
         uses: actions/upload-artifact@v7
         with:
