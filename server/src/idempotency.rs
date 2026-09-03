@@ -185,8 +185,19 @@ pub async fn begin_operation(
     .bind(idempotency_key.as_slice())
     .bind(server_instance_id.as_slice())
     .bind(restore_epoch as i64)
-    .fetch_one(pool)
-    .await?;
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| {
+        // The claim was ignored but no row exists, so the insert was dropped
+        // for a reason other than a duplicate key -- a constraint violation.
+        // Reporting that as a replayed operation would blame the caller for a
+        // server-side schema fault, which is how the root key grant ledger bug
+        // stayed hidden.
+        AppError::Internal(
+            "operation ledger: claim was rejected but no row exists (constraint violation?)"
+                .into(),
+        )
+    })?;
 
     // Same key, different body: the client is misusing the key, and neither
     // answering nor re-executing is safe.

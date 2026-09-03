@@ -1439,3 +1439,82 @@ async fn a_root_key_grant_replay_id_is_claimed_exactly_once() {
         "a refused replay must not leave a second grant behind"
     );
 }
+
+
+/// An unknown grant variant is refused with a clear error.
+///
+/// `grant_variant` is the one CHECK-constrained column fed from a signed
+/// client record, so it is the place the ledger's swallowed-constraint bug
+/// could recur. The rejection must name the field rather than surface as a
+/// database fault or, worse, be absorbed into a misleading replay answer.
+#[tokio::test]
+async fn an_unknown_grant_variant_is_refused_before_it_reaches_the_database() {
+    let port = 38121u16;
+    let data = std::env::temp_dir().join(format!("shardx-e2e-variant-{}", std::process::id()));
+    let _guard = spawn_server(&data, port);
+    let cl = client();
+    wait_health(&cl, port).await;
+
+    let admin = token(&cl, port, "admin", "secret").await;
+    let user_id = admin_user_id(&cl, port, &admin).await;
+    let sk_a = Ed25519SigningKey::from_bytes(&[11u8; 32]);
+    let sk_b = Ed25519SigningKey::from_bytes(&[22u8; 32]);
+    seed(&data, &user_id, &sk_a, &sk_b).await;
+
+    let device_sk = Ed25519SigningKey::from_bytes(&[0x77u8; 32]);
+    let ikm: [u8; 32] = [0x78u8; 32];
+    let (_device_hpke_sk, device_hpke_pk) = shared::grants::derive_keypair(&ikm);
+    let hpke_pk32: [u8; 32] = device_hpke_pk.as_slice().try_into().unwrap();
+
+    let (device_id, account_id) =
+        enroll(&cl, port, &admin, &TENANT_A, &device_sk, &hpke_pk32).await;
+
+    let trk: [u8; 32] = [0x79u8; 32];
+    let scope = shared::grants::GrantScope {
+        replay_id: [0x7Au8; 16],
+        tenant_id: TENANT_A,
+        server_instance_id: INSTANCE,
+        restore_epoch: 0,
+        root_key_id: shared::keys::root_key_id(&trk),
+        root_generation: 1,
+        subject_account_id: account_id.clone().try_into().expect("account id"),
+        subject_device_id: device_id.clone().try_into().expect("device id"),
+        recipient_hpke_key_id: shared::keys::hpke_key_id(&device_hpke_pk),
+    };
+    let sealed = shared::grants::seal_trk(&device_hpke_pk, &scope, &trk).expect("seal");
+
+    // Signed by a trusted issuer, so the signature is valid and only the
+    // variant is wrong. Anything less would not reach the check under test.
+    let record = grant_record(
+        &sk_a,
+        TENANT_A,
+        scope.replay_id,
+        &scope,
+        &sealed,
+        identity_key_id(&device_sk.verifying_key()),
+        [0x7Bu8; 16],
+        "SomethingElse",
+    );
+
+    let res = cl
+        .post(format!("{}/v2/tenant-root-key-grants", base(port)))
+        .bearer_auth(&admin)
+        .json(&json!({
+            "tenant_id": hex(&TENANT_A),
+            "record_hex": hex(&record),
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let status = res.status().as_u16();
+    let body = res.text().await.unwrap();
+    assert_eq!(
+        status, 400,
+        "an unknown grant variant should be a client error, got: {body}"
+    );
+    assert!(
+        body.contains("grant_variant"),
+        "the error should name the offending field, got: {body}"
+    );
+}
