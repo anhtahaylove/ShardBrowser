@@ -62,6 +62,8 @@ pub enum GrantError {
     HpkeFailure,
     /// The opened plaintext was not a well-formed TRK.
     BadTrkLength,
+    /// The opened plaintext was not a well-formed fleet key.
+    BadFkekLength,
     /// A grant field did not match the expected value.
     FieldMismatch(&'static str),
 }
@@ -72,6 +74,7 @@ impl std::fmt::Display for GrantError {
             GrantError::BadKeyMaterial => write!(f, "invalid HPKE key material"),
             GrantError::HpkeFailure => write!(f, "HPKE operation failed"),
             GrantError::BadTrkLength => write!(f, "unwrapped tenant root key has wrong length"),
+            GrantError::BadFkekLength => write!(f, "unwrapped fleet key has wrong length"),
             GrantError::FieldMismatch(field) => write!(f, "grant field mismatch: {field}"),
         }
     }
@@ -157,7 +160,7 @@ pub struct SealedGrant {
 /// means the OS entropy source is unavailable; that is not recoverable and must
 /// never fall back to a weaker source, so it panics rather than degrading
 /// silently.
-struct OsRng;
+pub(crate) struct OsRng;
 
 impl hpke::rand_core::TryRng for OsRng {
     type Error = core::convert::Infallible;

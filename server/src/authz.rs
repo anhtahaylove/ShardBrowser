@@ -21,6 +21,10 @@ pub const DOMAIN_DEVICE_APPROVAL: &str = "shardx.authorization.device-approval.v
 pub const DOMAIN_CAPABILITY_GRANT: &str = "shardx.authorization.capability-grant.v2";
 /// Domain separator for tenant root key grants.
 pub const DOMAIN_TENANT_ROOT_KEY_GRANT: &str = "shardx.authorization.tenant-root-key-grant.v2";
+
+/// Fleet key grant records. Distinct from the root domain so a root grant
+/// can never be verified as a fleet grant, or the reverse.
+pub const DOMAIN_FLEET_KEY_GRANT: &str = "shardx.authorization.fleet-key-grant.v2";
 /// Domain separator for snapshot manifests.
 ///
 /// Publishing a version is its own authorized action: reusing a capability
