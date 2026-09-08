@@ -29,7 +29,7 @@ test("stdio server exposes the versioned ShardX tool contract", async () => {
     // bump fails this test for no reason, which trains people to edit it
     // without reading what it guards.
     assert.equal(version, pkg.version);
-    assert.equal(tools.length, 96);
+    assert.equal(tools.length, 110);
     for (const name of [
       "health_check",
       "startup_status",
@@ -42,6 +42,13 @@ test("stdio server exposes the versioned ShardX tool contract", async () => {
       "challenge_status",
       "verification_checkpoint",
       "wait_for_human_verification",
+      // Merged from upstream v2: human-timing input and the library/trash tools.
+      "human_click",
+      "human_type",
+      "list_extensions",
+      "list_bookmarks",
+      "list_trash",
+      "restore_profile",
     ]) {
       assert(names.has(name), `missing MCP tool: ${name}`);
     }

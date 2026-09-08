@@ -217,6 +217,73 @@ async function waitForVerification(profileId, page, initialChallenge, timeoutMs,
 const loc = (page, selector) => page.locator(selector).first();
 const TIMEOUT = 15000;
 
+// ---------- Motion: human pointer and keystrokes ----------
+//
+// The `Motion` domain lives on the BROWSER target, so it needs a browser-level
+// CDP session. These wrappers only turn a selector into the coordinates it wants.
+
+const motion = new Map(); // profile_id → { browser, session, pointer }
+
+async function motionFor(profileId, opts) {
+  const b = await browserFor(profileId, opts);
+  const cur = motion.get(profileId);
+  if (cur && cur.browser === b && b.isConnected()) return cur;
+  const m = { browser: b, session: await b.newBrowserCDPSession(), pointer: false };
+  motion.set(profileId, m);
+  return m;
+}
+
+// Resting cursor position. Never the target — a glide starting on top of what
+// it aims at has no trajectory and no duration.
+async function ensurePointer(m, page) {
+  if (m.pointer) return;
+  const [w, h] = await page
+    .evaluate(() => [window.innerWidth, window.innerHeight])
+    .catch(() => [1280, 800]);
+  await m.session.send("Motion.createPointer", {
+    x: Math.round(w * 0.15),
+    y: Math.round(h * 0.8),
+  });
+  m.pointer = true;
+}
+
+// Selector → viewport point. Scrolled into view first; `width` travels along
+// because it feeds Fitts's law in the core.
+async function targetOf(page, selector, { timeout = TIMEOUT, dx, dy } = {}) {
+  const l = loc(page, selector);
+  await l.waitFor({ state: "visible", timeout });
+  await l.scrollIntoViewIfNeeded({ timeout });
+  const box = await l.boundingBox({ timeout });
+  if (!box) throw new Error(`element is not rendered, so it has no coordinates: ${selector}`);
+  return {
+    x: Math.round(box.x + (typeof dx === "number" ? dx : box.width / 2)),
+    y: Math.round(box.y + (typeof dy === "number" ? dy : box.height / 2)),
+    width: Math.round(box.width),
+    height: Math.round(box.height),
+  };
+}
+
+// Either a selector or an explicit point, resolved the same way.
+async function pointOf(page, { selector, x, y, offset_x, offset_y }) {
+  if (selector) {
+    return targetOf(page, selector, { dx: offset_x, dy: offset_y });
+  }
+  if (typeof x !== "number" || typeof y !== "number") {
+    throw new Error("give either a selector or both x and y");
+  }
+  return { x: Math.round(x), y: Math.round(y), width: 32, height: 32 };
+}
+
+async function glide(m, page, target) {
+  await ensurePointer(m, page);
+  const r = await m.session.send("Motion.glideTo", {
+    x: target.x,
+    y: target.y,
+    targetWidth: target.width,
+  });
+  return r?.durationMs ?? 0;
+}
+
 // ---------- helpers ----------
 
 const text = (v) => ({
@@ -853,17 +920,21 @@ server.tool(
     proxy: z.string().optional(),
     proxy_id: z.string().optional(),
     platform: z.enum(["Windows", "macOS", "Linux"]).optional(),
+    // Icon and omnibox-pill accent. Omit to derive it from the name.
+    color: z.string().optional(),
+    // Extension-library ids; see list_extensions.
+    extensions: z.array(z.string()).optional(),
     fingerprint: z.any().optional(),
     launch: z.record(z.any()).optional(),
   },
-  async ({ name, notes, folder, proxy, proxy_id, platform, fingerprint, launch }) => {
+  async ({ name, notes, folder, proxy, proxy_id, platform, color, extensions, fingerprint, launch }) => {
     if (!fingerprint) {
       const fp = await api(platform ? `/fingerprint/new/${platform}` : "/fingerprint/new");
       fingerprint = fp.fingerprint;
     }
     if (launch) fingerprint.launch = launch;
     const path = folder ? `/folders/${encodeURIComponent(folder)}/profiles` : "/profiles";
-    const body = { name, notes, proxy, proxy_id, fingerprint };
+    const body = { name, notes, proxy, proxy_id, color, extensions, fingerprint };
     if (folder) delete body.folder; // folder comes from the path
     return text(await api(path, { method: "POST", body }));
   },
@@ -871,7 +942,7 @@ server.tool(
 
 server.tool(
   "create_temporary_profile",
-  "Create a TEMPORARY profile (hidden from the list, auto-deleted on close). Random/specified fingerprint, optional inline proxy string.",
+  "Create a TEMPORARY profile (hidden from the list, auto-deleted on close). Random/specified fingerprint, optional inline proxy string and noise.",
   {
     fingerprint_id: z.string().optional(),
     platform: z.enum(["Windows", "macOS", "Linux"]).optional(),
@@ -880,13 +951,28 @@ server.tool(
     launch: z.record(z.any()).optional(),
     name: z.string().optional(),
     folder: z.string().optional(),
+    // `{canvas: true}` or a full block; omitted vectors stay off.
+    noise: z
+      .record(
+        z.enum(["canvas", "webgl", "audio", "client_rects", "sensors", "fonts"]),
+        z.union([
+          z.boolean(),
+          z.object({
+            enabled: z.boolean().optional(),
+            seed: z.number().int().optional(),
+            intensity: z.number().optional(),
+            max_offset: z.number().optional(),
+          }),
+        ]),
+      )
+      .optional(),
   },
   async (args) => text(await api("/profiles/temporary", { method: "POST", body: args })),
 );
 
 server.tool(
   "edit_profile",
-  "Edit a profile. Only provided fields change; `fingerprint` replaces it verbatim; folder:'' unfiles; proxy_id:'' unbinds.",
+  "Edit a profile. Only provided fields change; `fingerprint` replaces it verbatim; folder:'' unfiles; proxy_id:'' unbinds; color:'' goes back to the name-derived one; `extensions` replaces the whole list.",
   {
     id: z.string(),
     name: z.string().optional(),
@@ -894,6 +980,8 @@ server.tool(
     folder: z.string().optional(),
     proxy_id: z.string().optional(),
     proxy: z.string().optional(),
+    color: z.string().optional(),
+    extensions: z.array(z.string()).optional(),
     fingerprint: z.any().optional(),
   },
   async ({ id, ...body }) => text(await api(`/profiles/${id}`, { method: "PATCH", body })),
@@ -901,7 +989,7 @@ server.tool(
 
 server.tool(
   "delete_profile",
-  "Delete a profile (config + user-data-dir).",
+  "Move a profile to the trash, restorable for 7 days (see list_trash / restore_profile).",
   { id: z.string() },
   async ({ id }) => text(await api(`/profiles/${id}`, { method: "DELETE" })),
 );
@@ -926,6 +1014,7 @@ server.tool(
   async ({ id }) => {
     const b = browsers.get(id);
     if (b) { try { await b.close(); } catch {} browsers.delete(id); }
+    motion.delete(id);
     return text(await api(`/profiles/${id}/stop`, { method: "POST" }));
   },
 );
@@ -1018,6 +1107,80 @@ server.tool(
   "Delete a stored proxy by id.",
   { id: z.string() },
   async ({ id }) => text(await api(`/proxies/${id}`, { method: "DELETE" })),
+);
+
+// ---- extensions ----
+
+server.tool(
+  "list_extensions",
+  "Extensions in the library, with ids to pass to create_profile / edit_profile.",
+  {},
+  async () => text(await api("/extensions")),
+);
+
+server.tool(
+  "add_extension",
+  "Add an extension. `url` takes a Web Store page, a bare extension id, or a direct .crx/.zip link — the launcher downloads it. `path` takes a local file or unpacked folder.",
+  { url: z.string().optional(), path: z.string().optional() },
+  async (args) => text(await api("/extensions", { method: "POST", body: args })),
+);
+
+server.tool(
+  "delete_extension",
+  "Remove an extension from the library. Profiles that named it stop loading it on their next start.",
+  { id: z.string() },
+  async ({ id }) => text(await api(`/extensions/${id}`, { method: "DELETE" })),
+);
+
+// ---- bookmarks ----
+
+server.tool(
+  "list_bookmarks",
+  "Folder-scoped bookmarks pushed into profiles.",
+  {},
+  async () => text(await api("/bookmarks")),
+);
+
+server.tool(
+  "save_bookmark",
+  "Add or update a bookmark. Bound to a folder it reaches every profile in it; folder '' means every profile. Applied on each profile's next launch.",
+  {
+    id: z.string().optional(),
+    url: z.string(),
+    title: z.string().optional(),
+    folder: z.string().optional(),
+  },
+  async (args) => text(await api("/bookmarks", { method: "POST", body: args })),
+);
+
+server.tool(
+  "delete_bookmark",
+  "Delete a bookmark; it leaves its profiles on their next launch.",
+  { id: z.string() },
+  async ({ id }) => text(await api(`/bookmarks/${id}`, { method: "DELETE" })),
+);
+
+// ---- trash ----
+
+server.tool(
+  "list_trash",
+  "Deleted profiles still restorable, with the day each one expires.",
+  {},
+  async () => text(await api("/trash")),
+);
+
+server.tool(
+  "restore_profile",
+  "Bring a deleted profile back under its own id, with its cookies and logins.",
+  { id: z.string() },
+  async ({ id }) => text(await api(`/trash/${id}/restore`, { method: "POST" })),
+);
+
+server.tool(
+  "purge_profile",
+  "Delete a trashed profile for good. There is nothing after this.",
+  { id: z.string() },
+  async ({ id }) => text(await api(`/trash/${id}`, { method: "DELETE" })),
 );
 
 server.tool(
@@ -1893,6 +2056,121 @@ server.tool(
     });
     await client.detach().catch(() => {});
     return text({ offline: !!offline, latency_ms: latency_ms ?? 0, download_kbps: download_kbps ?? 0, upload_kbps: upload_kbps ?? 0 });
+  },
+);
+
+// ---- human input (Motion domain) ----
+//
+// Prefer over browser_click / browser_type where a site watches how input
+// arrives. They cost real time, which is the point.
+
+server.tool(
+  "human_move",
+  "Move the pointer to an element (or a point) along a human trajectory. Give either selector or x+y.",
+  {
+    profile_id: z.string(),
+    selector: z.string().optional(),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    offset_x: z.number().optional(),
+    offset_y: z.number().optional(),
+  },
+  async ({ profile_id, selector, x, y, offset_x, offset_y }) => {
+    const page = await pageFor(profile_id);
+    const m = await motionFor(profile_id);
+    const t = await pointOf(page, { selector, x, y, offset_x, offset_y });
+    const ms = await glide(m, page, t);
+    return text({ x: t.x, y: t.y, duration_ms: ms });
+  },
+);
+
+server.tool(
+  "human_click",
+  "Move to an element (or a point) and click it the way a person does. Give either selector or x+y.",
+  {
+    profile_id: z.string(),
+    selector: z.string().optional(),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    offset_x: z.number().optional(),
+    offset_y: z.number().optional(),
+    button: z.enum(["left", "middle", "right"]).optional(),
+    click_count: z.number().int().min(1).max(3).optional(),
+  },
+  async ({ profile_id, selector, x, y, offset_x, offset_y, button, click_count }) => {
+    const page = await pageFor(profile_id);
+    const m = await motionFor(profile_id);
+    const t = await pointOf(page, { selector, x, y, offset_x, offset_y });
+    const ms = await glide(m, page, t);
+    await m.session.send("Motion.tap", {
+      button: button ?? "left",
+      clickCount: click_count ?? 1,
+    });
+    return text({ clicked: selector ?? `${t.x},${t.y}`, duration_ms: ms });
+  },
+);
+
+server.tool(
+  "human_type",
+  "Type text into whatever currently has focus, key by key with human timing. Use human_fill to focus a field first.",
+  {
+    profile_id: z.string(),
+    text: z.string(),
+    allow_typos: z.boolean().optional(),
+  },
+  async ({ profile_id, text: value, allow_typos }) => {
+    const page = await pageFor(profile_id);
+    const m = await motionFor(profile_id);
+    await ensurePointer(m, page);
+    const r = await m.session.send("Motion.enterText", {
+      text: value,
+      allowTypos: !!allow_typos,
+    });
+    return text({ typed: value.length, duration_ms: r?.durationMs ?? 0 });
+  },
+);
+
+server.tool(
+  "human_fill",
+  "Click a field and type into it, both humanly. The one to reach for on a form.",
+  {
+    profile_id: z.string(),
+    selector: z.string(),
+    text: z.string(),
+    // Triple-clicks to select first; without it the text is appended.
+    clear: z.boolean().optional(),
+    allow_typos: z.boolean().optional(),
+  },
+  async ({ profile_id, selector, text: value, clear, allow_typos }) => {
+    const page = await pageFor(profile_id);
+    const m = await motionFor(profile_id);
+    const t = await targetOf(page, selector);
+    const moved = await glide(m, page, t);
+    await m.session.send("Motion.tap", { button: "left", clickCount: clear ? 3 : 1 });
+    const r = await m.session.send("Motion.enterText", {
+      text: value,
+      allowTypos: !!allow_typos,
+    });
+    return text({
+      filled: selector,
+      at: `${t.x},${t.y}`,
+      move_ms: moved,
+      type_ms: r?.durationMs ?? 0,
+    });
+  },
+);
+
+server.tool(
+  "human_release_pointer",
+  "Drop this profile's pointer. Rarely needed — the next human_* call makes a new one.",
+  { profile_id: z.string() },
+  async ({ profile_id }) => {
+    const m = motion.get(profile_id);
+    if (m?.pointer) {
+      await m.session.send("Motion.destroyPointer").catch(() => {});
+      m.pointer = false;
+    }
+    return text("pointer released");
   },
 );
 

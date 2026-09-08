@@ -1,4 +1,5 @@
 use crate::{
+    bookmarks, extensions,
     process::{self, Tracker},
     profile, proxy, settings, store,
 };
@@ -51,6 +52,19 @@ pub async fn launch_profile(
     profile_id: &str,
     enable_cdp: bool,
     headless: bool,
+) -> Result<LaunchOutcome> {
+    launch_profile_synced(profile_id, enable_cdp, headless, None, 0, "").await
+}
+
+/// As `launch_profile`, but joins the browser to a synchronisation group:
+/// every profile launched under the same `sync_group` mirrors input.
+pub async fn launch_profile_synced(
+    profile_id: &str,
+    enable_cdp: bool,
+    headless: bool,
+    sync_group: Option<&str>,
+    bus_port: u16,
+    bus_token: &str,
 ) -> Result<LaunchOutcome> {
     let launch_claim = profile::begin_profile_launch(profile_id)?;
     let bin = resolve_binary()?;
@@ -112,17 +126,66 @@ pub async fn launch_profile(
     let mut cmd = tokio::process::Command::new(&bin);
     cmd.arg(format!("--fingerprint-profile={}", fp_file.display()));
     cmd.arg(format!("--user-data-dir={}", udd.display()));
+
+    // Per-profile window icon. A failure here is cosmetic, never fatal.
+    let color = stored.meta.color.clone().filter(|c| !c.trim().is_empty());
+    match crate::runtime::runtime_dir().and_then(|dir| {
+        // Display name lives in the config, not in _meta; id as fallback.
+        let name = stored
+            .config
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(profile_id);
+        crate::profile_icon::ensure_icon(&dir, name, color.as_deref())
+    }) {
+        Ok(path) => {
+            cmd.arg(format!("--shardx-profile-icon={}", path.display()));
+        }
+        Err(e) => {
+            eprintln!("[launcher] profile icon unavailable: {e:#}");
+        }
+    }
+    // Same accent behind the profile-name pill in the omnibox, so the icon and
+    // the window never disagree about a profile's colour. Left off for "auto":
+    // the pill then keeps the toolbar colour, which is the browser's own
+    // default and follows the theme.
+    if let Some(c) = color.as_deref() {
+        cmd.arg(format!("--shardx-profile-pill-color={c}"));
+    }
     cmd.arg("--no-first-run");
 
     for arg in &launch_options.args {
         cmd.arg(arg);
     }
-    if !launch_options.extension_dirs.is_empty() {
-        let joined = join_comma_paths(&launch_options.extension_dirs);
+    // Extensions come from two places: explicit launch options (ours) and the
+    // extension library (upstream). Chromium loads only what
+    // --disable-extensions-except allows, so both lists go in together.
+    let mut ext_paths: Vec<String> = launch_options
+        .extension_dirs
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect();
+    ext_paths.extend(
+        stored
+            .meta
+            .extensions
+            .iter()
+            .filter_map(|id| extensions::load_path(id))
+            .map(|p| p.display().to_string()),
+    );
+    if !ext_paths.is_empty() {
+        let joined = ext_paths.join(",");
         cmd.arg(format!("--disable-extensions-except={joined}"));
         cmd.arg(format!("--load-extension={joined}"));
     }
 
+    // Folder bookmarks, written before the browser reads the file.
+    match bookmarks::apply_to_profile(&udd, &stored.meta.folder) {
+        Ok(n) if n > 0 => eprintln!("[launcher] {n} folder bookmark(s) applied"),
+        Ok(_) => {}
+        Err(e) => eprintln!("[launcher] bookmarks skipped: {e}"),
+    }
     // Disable WebGPU when profile omits `webgpu` (matches real Linux Chrome).
     let webgpu_present = raw
         .get("webgpu")
@@ -210,6 +273,27 @@ pub async fn launch_profile(
         cmd.arg("--shardx-real-screen");
     }
 
+    // The bus is the process's link to the launcher, not the group's — the page
+    // helper reports over it on launches that belong to no group at all.
+    if bus_port != 0 {
+        cmd.arg(format!("--shardx-bus=127.0.0.1:{bus_port}"));
+        cmd.arg(format!("--shardx-bus-token={bus_token}"));
+        cmd.arg(format!("--shardx-sync-profile={profile_id}"));
+    }
+    if let Some(group) = sync_group {
+        cmd.arg(format!("--shardx-sync-group={group}"));
+    }
+    if s.helper_enabled {
+        // In a group too: the fill travels as a command, not as input, so each
+        // window fills with its own generated person.
+        cmd.arg("--shardx-helper");
+    }
+    if s.camera_enabled {
+        // No value — the picture is chosen in the running browser. Without the
+        // switch the machine's own camera answers.
+        cmd.arg("--shardx-camera");
+    }
+
     // CDP: port=0 makes Chrome pick free port and write DevToolsActivePort.
     if enable_cdp {
         let _ = std::fs::remove_file(udd.join("DevToolsActivePort"));
@@ -219,6 +303,11 @@ pub async fn launch_profile(
 
     if headless {
         cmd.arg("--headless=new");
+    }
+
+    // Operator's own switches, last so they win a repeat.
+    for a in settings::parse_extra_args(&s.extra_args) {
+        cmd.arg(a);
     }
 
     cmd.stdout(Stdio::null()).stderr(Stdio::null());
@@ -382,16 +471,6 @@ const SAFE_LAUNCH_SWITCHES: &[&str] = &[
     "window-position",
     "window-size",
 ];
-
-fn join_comma_paths(paths: &[PathBuf]) -> String {
-    paths
-        .iter()
-        .map(|p| p.display().to_string())
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-
 
 /// Poll `<udd>/DevToolsActivePort` for ~6s; line 1 = port, line 2 = ws path.
 async fn read_devtools_endpoint(udd: &Path) -> Option<process::CdpInfo> {

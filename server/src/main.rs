@@ -8,6 +8,8 @@ mod enrollment;
 mod error;
 mod extract;
 mod fleet;
+mod fleet_generations;
+mod fleet_grants;
 mod generations;
 mod grants;
 mod idempotency;

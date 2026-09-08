@@ -76,7 +76,7 @@ test("desktop-wide actions, theme, and launch errors remain visible", async ({ p
   const profileNameText = page.locator(".cell-name .name-main", { hasText: profileName }).first();
   await expect(profileNameText).toBeVisible();
   await expect.poll(() => profileNameText.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.getByRole("button", { name: "Switch to light theme" }).click();
+  await page.getByRole("tab", { name: "Light" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await page.getByRole("button", { name: `Start profile ${profileName}` }).click();
   await expect(page.locator(".launch-error-inline")).toContainText("fixture browser launch failed");
@@ -105,7 +105,7 @@ test("legacy custom-font metadata survives an ordinary profile edit but stays hi
 test("invalid profile names are rejected before profile persistence", async ({ page }) => {
   await gotoMocked(page);
 
-  await page.getByRole("button", { name: "+ New profile" }).click();
+  await page.getByRole("button", { name: "New profile" }).click();
   await page.getByLabel("Profile name").fill("bad/name");
   await page.getByRole("button", { name: "Create profile" }).click();
 
@@ -237,7 +237,7 @@ test("macOS uses Cmd+K and Escape clears then blurs search", async ({ page }) =>
 test("CSSelect supports Arrow, Enter, Space, and Escape without saving", async ({ page }) => {
   await gotoMocked(page);
 
-  await page.getByRole("button", { name: "+ New profile" }).click();
+  await page.getByRole("button", { name: "New profile" }).click();
   const proxySelect = page.locator("label").filter({ has: page.getByText("Proxy", { exact: true }) }).getByRole("combobox").first();
   await proxySelect.focus();
   await proxySelect.press("ArrowDown");

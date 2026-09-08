@@ -358,6 +358,32 @@ impl FleetClient {
         Ok(body.grants)
     }
 
+    /// Fleet key grants filed for this device.
+    ///
+    /// The fleet key is what actually opens profile snapshots, so this is the
+    /// call that lets an enrolled device read what its fleet has pushed.
+    pub async fn fleet_key_grants(
+        &self,
+        tenant_id: &str,
+        device_id: &str,
+    ) -> Result<Vec<FleetKeyGrant>> {
+        let res = self
+            .http
+            .get(self.url(&format!(
+                "/v2/tenants/{tenant_id}/devices/{device_id}/fleet-key-grants"
+            )))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .context("request fleet key grants")?;
+        let body: FleetKeyGrantsResponse = Self::ok_or_err(res, "fleet key grants")
+            .await?
+            .json()
+            .await
+            .context("decode fleet key grants")?;
+        Ok(body.grants)
+    }
+
     /// Lease, stage, and publish a sealed container. Returns the new version.
     ///
     /// The lease is released on every path, including failure: an upload that
@@ -611,6 +637,24 @@ pub struct RootKeyGrant {
 #[derive(Debug, serde::Deserialize)]
 struct RootKeyGrantsResponse {
     grants: Vec<RootKeyGrant>,
+}
+
+/// A fleet key grant as the server returns it.
+#[derive(Debug, serde::Deserialize)]
+pub struct FleetKeyGrant {
+    pub grant_variant: String,
+    pub fleet_id: String,
+    pub fkek_key_id: String,
+    pub fleet_generation: i64,
+    pub recipient_hpke_key_id: String,
+    pub hpke_info_hex: String,
+    pub hpke_encapped_key_hex: String,
+    pub hpke_wrapped_fkek_hex: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct FleetKeyGrantsResponse {
+    grants: Vec<FleetKeyGrant>,
 }
 
 pub fn random_id_hex() -> String {

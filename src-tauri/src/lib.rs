@@ -1,13 +1,18 @@
 // ShardX Launcher — Tauri backend.
 
+mod profile_icon;
 mod api;
 mod backup_cmd;
+mod bookmarks;
 mod codex_mcp;
 mod cookies;
+mod extensions;
 mod fingerprints;
 pub mod fleet_client;
+mod fleet_keys;
 mod launch;
 mod mcp_setup;
+mod migrate;
 mod process;
 mod profile;
 mod proxy;
@@ -18,6 +23,8 @@ mod runtime;
 mod settings;
 mod startup;
 mod store;
+mod sync_bus;
+mod trash;
 mod updater;
 
 use serde_json::Value;
@@ -772,14 +779,132 @@ pub(crate) fn persist_profile_core_claimed(
         pinned: stored.meta.pinned,
         folder: stored.meta.folder,
         total_runtime_ms: stored.meta.total_runtime_ms,
+        color: stored.meta.color,
+        extensions: stored.meta.extensions,
     })
 }
 
+/// Into the trash for a week; only the files carrying the account are kept.
 #[tauri::command]
 fn profile_delete(id: String) -> Result<(), String> {
     let _claim = profile::begin_user_mutation([&id], "delete this profile")
         .map_err(|error| error.to_string())?;
-    profile::delete(&id).map_err(|e| e.to_string())
+    trash::move_to_trash(&id).map(|_| ()).map_err(|e| e.to_string())
+}
+
+// ---- Trash ----
+
+#[tauri::command]
+fn trash_list() -> Result<Vec<trash::TrashEntry>, String> {
+    trash::list().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn trash_restore(id: String) -> Result<profile::ProfileMeta, String> {
+    trash::restore(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn trash_purge(id: String) -> Result<(), String> {
+    trash::purge(&id).map_err(|e| e.to_string())
+}
+
+/// Empties the trash for good; returns how many went.
+#[tauri::command]
+fn trash_empty() -> Result<usize, String> {
+    let entries = trash::list().map_err(|e| e.to_string())?;
+    let n = entries.len();
+    for e in entries {
+        trash::purge(&e.id).map_err(|e| e.to_string())?;
+    }
+    Ok(n)
+}
+
+// ---- Extensions ----
+
+#[tauri::command]
+fn extension_list() -> Result<Vec<extensions::ExtensionEntry>, String> {
+    extensions::list().map_err(|e| e.to_string())
+}
+
+/// Returns what went in, so one bad file in a multi-select loses only itself.
+#[tauri::command]
+fn extension_import(paths: Vec<String>) -> Result<Vec<extensions::ExtensionEntry>, String> {
+    let mut out = Vec::new();
+    let mut errs = Vec::new();
+    for p in &paths {
+        match extensions::import(std::path::Path::new(p)) {
+            Ok(e) => out.push(e),
+            Err(e) => errs.push(format!("{p}: {e}")),
+        }
+    }
+    if out.is_empty() && !errs.is_empty() {
+        return Err(errs.join("; "));
+    }
+    Ok(out)
+}
+
+/// Import from a Web Store link, a bare extension id, or a direct .crx / .zip
+/// URL — the launcher fetches the file itself.
+#[tauri::command]
+async fn extension_import_url(url: String) -> Result<extensions::ExtensionEntry, String> {
+    extensions::import_url(&url).await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+fn extension_delete(id: String) -> Result<(), String> {
+    extensions::delete(&id).map_err(|e| e.to_string())
+}
+
+// ---- Bookmarks ----
+
+#[tauri::command]
+fn bookmark_list() -> Result<Vec<bookmarks::Bookmark>, String> {
+    bookmarks::list().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn bookmark_save(entry: bookmarks::Bookmark) -> Result<bookmarks::Bookmark, String> {
+    bookmarks::save(entry).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn bookmark_delete(id: String) -> Result<(), String> {
+    bookmarks::delete(&id).map_err(|e| e.to_string())
+}
+
+// ---- Data root ----
+
+#[derive(serde::Serialize)]
+struct DataRootInfo {
+    path: String,
+    /// False while the data still lives in the config dir.
+    custom: bool,
+    migrating: bool,
+}
+
+#[tauri::command]
+fn data_root_get() -> Result<DataRootInfo, String> {
+    let s = settings::load().map_err(|e| e.to_string())?;
+    let path = store::data_root().map_err(|e| e.to_string())?;
+    Ok(DataRootInfo {
+        path: path.display().to_string(),
+        custom: s.data_root.is_some(),
+        migrating: migrate::in_progress(),
+    })
+}
+
+/// Progress goes out as `data-migration` events; nothing launches until done.
+#[tauri::command]
+async fn data_root_migrate(app: tauri::AppHandle, path: String) -> Result<u64, String> {
+    if !process::Tracker::shared().running().is_empty() {
+        return Err("close every running profile first".into());
+    }
+    let dst = std::path::PathBuf::from(&path);
+    tauri::async_runtime::spawn_blocking(move || migrate::run(&app, &dst))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1267,11 +1392,239 @@ fn proxy_bulk_save(entries: Vec<proxy::ProxyEntry>) -> Result<usize, String> {
 
 #[tauri::command]
 async fn launch(profile_id: String) -> Result<u32, String> {
-    // UI launches: no CDP, headed.
-    launch::launch_profile(&profile_id, false, false)
+    // UI launches: no CDP, headed. The bus goes along even with no group so the
+    // page helper has somewhere to report.
+    if migrate::in_progress() {
+        return Err("profiles are being moved — try again when that finishes".into());
+    }
+    let b = bus().await?;
+    launch::launch_profile_synced(&profile_id, false, false, None, b.port, &b.token)
         .await
         .map(|o| o.pid)
         .map_err(|e| e.to_string())
+}
+
+// ---- Window synchronisation ----
+
+/// The synchronisation bus, started lazily and shared: the port stays closed
+/// for a user who never groups profiles.
+static BUS: tokio::sync::OnceCell<std::sync::Arc<sync_bus::Bus>> =
+    tokio::sync::OnceCell::const_new();
+
+async fn bus() -> Result<std::sync::Arc<sync_bus::Bus>, String> {
+    BUS.get_or_try_init(|| async {
+        // Fresh per run: tells a browser this launcher started it rather than
+        // anything else on the machine.
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        sync_bus::Bus::start(token).await.map_err(|e| e.to_string())
+    })
+    .await
+    .cloned()
+}
+
+/// Opens (or re-focuses) the floating control panel for a group. Same bundle,
+/// addressed by hash — a 60px strip does not warrant its own vite entry point.
+fn open_sync_panel(app: &tauri::AppHandle, group: &str) {
+    use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+
+    if let Some(w) = app.get_webview_window("sync-panel") {
+        let _ = w.set_focus();
+        return;
+    }
+    let url = format!("index.html#/?syncPanel={group}");
+    let built = WebviewWindowBuilder::new(app, "sync-panel", WebviewUrl::App(url.into()))
+        .title("ShardX Sync")
+        .inner_size(360.0, 168.0)
+        .resizable(true)
+        .min_inner_size(280.0, 120.0)
+        .resizable(false)
+        .always_on_top(true)
+        .decorations(false)
+        .skip_taskbar(true)
+        .build();
+    if let Err(e) = built {
+        // Not fatal — the group is synchronising, it just has no panel.
+        eprintln!("[launcher] sync panel unavailable: {e}");
+    }
+}
+
+#[tauri::command]
+async fn sync_launch(
+    app: tauri::AppHandle,
+    profile_ids: Vec<String>,
+    group: Option<String>,
+) -> Result<String, String> {
+    if profile_ids.len() < 2 {
+        return Err("a group needs at least two profiles".into());
+    }
+    let group = group.unwrap_or_else(|| "fleet".to_string());
+    let b = bus().await?;
+
+    let mut failed: Vec<String> = Vec::new();
+    for id in &profile_ids {
+        if let Err(e) = launch::launch_profile_synced(
+            id, false, false, Some(&group), b.port, &b.token).await {
+            failed.push(format!("{id}: {e}"));
+        }
+    }
+    if failed.len() == profile_ids.len() {
+        return Err(format!("nothing launched — {}", failed.join("; ")));
+    }
+    // A partial launch is still a usable group; just say what did not make it.
+    if !failed.is_empty() {
+        eprintln!("[launcher] sync group '{group}': {} failed — {}",
+                  failed.len(), failed.join("; "));
+    }
+    open_sync_panel(&app, &group);
+    Ok(group)
+}
+
+#[tauri::command]
+async fn sync_status(group: String) -> Result<sync_bus::GroupStatus, String> {
+    Ok(bus().await?.status(&group))
+}
+
+#[tauri::command]
+async fn sync_set_paused(group: String, paused: bool) -> Result<(), String> {
+    bus().await?.set_paused(&group, paused);
+    Ok(())
+}
+
+/// Lays the group's windows out on the primary display's work area — under the
+/// menu bar or behind the dock means moving them by hand anyway.
+#[tauri::command]
+async fn sync_arrange(
+    app: tauri::AppHandle,
+    group: String,
+    layout: sync_bus::Layout,
+) -> Result<(), String> {
+    let monitor = app
+        .primary_monitor()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "no display".to_string())?;
+    let scale = monitor.scale_factor();
+    let pos = monitor.position().to_logical::<i32>(scale);
+    let size = monitor.size().to_logical::<i32>(scale);
+    // Margin for the menu bar; browsers report logical pixels, as SetBounds wants.
+    let top = if cfg!(target_os = "macos") { 28 } else { 0 };
+    bus().await?.arrange(
+        &group,
+        layout,
+        (pos.x, pos.y + top, size.width, size.height - top),
+    );
+    Ok(())
+}
+
+/// Asks every window in the group to close; the panel goes with them.
+#[tauri::command]
+async fn sync_stop(group: String) -> Result<(), String> {
+    bus().await?.stop(&group);
+    Ok(())
+}
+
+/// Holds one profile out of the group — a captcha, a different password.
+#[tauri::command]
+async fn sync_set_excluded(
+    group: String,
+    profile: String,
+    excluded: bool,
+) -> Result<(), String> {
+    bus().await?.set_excluded(&group, &profile, excluded);
+    Ok(())
+}
+
+/// Every profile whose current page has something the helper could fill.
+#[tauri::command]
+async fn helper_profiles() -> Result<Vec<String>, String> {
+    let s = settings::load().map_err(|e| e.to_string())?;
+    if !s.helper_enabled {
+        return Ok(Vec::new());
+    }
+    Ok(bus().await?.helper_profiles(&s.helper_triggers))
+}
+
+/// What the helper found in one profile.
+#[tauri::command]
+async fn helper_fields(profile: String) -> Result<serde_json::Value, String> {
+    Ok(bus()
+        .await?
+        .helper_fields(&profile)
+        .unwrap_or(serde_json::Value::Null))
+}
+
+/// The operator accepted the offer; nothing fills without this. In a group every
+/// member fills with its own person — the command travels, the data does not.
+#[tauri::command]
+async fn helper_fill(profile: String) -> Result<usize, String> {
+    let b = bus().await?;
+    match b.group_of(&profile) {
+        Some(group) => Ok(b.fill_group(&group)),
+        None => {
+            b.fill(&profile);
+            Ok(1)
+        }
+    }
+}
+
+/// Opens (or re-focuses) the helper panel for one profile.
+fn open_helper_panel(app: &tauri::AppHandle, profile: &str) {
+    use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+    if let Some(w) = app.get_webview_window("helper-panel") {
+        let _ = w.set_focus();
+        return;
+    }
+    let url = format!("index.html#/?helperPanel={profile}");
+    if let Err(e) = WebviewWindowBuilder::new(app, "helper-panel", WebviewUrl::App(url.into()))
+        .title("Shard Helper")
+        .inner_size(300.0, 150.0)
+        .resizable(false)
+        .always_on_top(true)
+        .decorations(false)
+        .skip_taskbar(true)
+        // Unfocused: it appears mid-form, and stealing the keyboard then is
+        // worse than not appearing.
+        .focused(false)
+        .build()
+    {
+        eprintln!("[launcher] helper panel unavailable: {e}");
+    }
+}
+
+#[tauri::command]
+fn helper_show(app: tauri::AppHandle, profile: String) -> Result<(), String> {
+    open_helper_panel(&app, &profile);
+    Ok(())
+}
+
+#[tauri::command]
+fn helper_close(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(w) = app.get_webview_window("helper-panel") {
+        let _ = w.close();
+    }
+    Ok(())
+}
+
+/// The operator closed the panel themselves — a refusal about this page.
+/// `helper_close` is the other case: the page moved on, which silences nothing.
+#[tauri::command]
+async fn helper_dismiss(app: tauri::AppHandle, profile: String) -> Result<(), String> {
+    use tauri::Manager;
+    bus().await?.helper_dismiss(&profile);
+    if let Some(w) = app.get_webview_window("helper-panel") {
+        let _ = w.close();
+    }
+    Ok(())
+}
+
+/// Closes the floating panel; the panel calls it once the group is empty.
+#[tauri::command]
+fn sync_close_panel(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(w) = app.get_webview_window("sync-panel") {
+        let _ = w.close();
+    }
+    Ok(())
 }
 
 // ---- Cookies ----
@@ -1313,7 +1666,23 @@ fn settings_get() -> Result<settings::Settings, String> {
 }
 
 #[tauri::command]
-fn settings_save(app: tauri::AppHandle, value: settings::Settings) -> Result<(), String> {
+fn settings_save(app: tauri::AppHandle, mut value: settings::Settings) -> Result<(), String> {
+    // Owned by the migration, not the form — which round-trips the whole struct
+    // and would reset it while the data sits on another disk.
+    if let Ok(cur) = settings::load() {
+        value.data_root = cur.data_root;
+        if value.api_secret.is_empty() {
+            value.api_secret = cur.api_secret;
+        }
+        // Startup registration is a desktop-integration fact, not a form field.
+        // A client that omits these (an older UI, or a partial save) must not
+        // silently unregister the launcher from login.
+        if !value.startup_fields_present {
+            value.launch_at_login = cur.launch_at_login;
+            value.start_minimized = cur.start_minimized;
+        }
+    }
+    // `startup::save` persists the settings and reconciles the login entry.
     startup::save(&app, &value)?;
     notify_store_changed("settings");
     Ok(())
@@ -1760,11 +2129,55 @@ async fn team_collect_custody() -> Result<serde_json::Value, String> {
         }
     }
 
+    // Fleet keys. These are the ones sync actually needs: the root key
+    // authorises custody, the fleet key opens snapshots. Collected keys are
+    // cached so a push or pull no longer needs a passphrase.
+    let mut fleet_opened = 0usize;
+    let mut fleet_failed = 0usize;
+    let mut newest_fleet_generation: Option<i64> = None;
+    if !c.fleet_id.is_empty() {
+        let fleet_grants = client
+            .fleet_key_grants(&c.tenant_id, &c.device_id)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let mut store = fleet_keys::load().map_err(|e| e.to_string())?;
+        for g in &fleet_grants {
+            let info = hex_bytes(&g.hpke_info_hex)?;
+            let encapped = hex_bytes(&g.hpke_encapped_key_hex)?;
+            let wrapped = hex_bytes(&g.hpke_wrapped_fkek_hex)?;
+            let sealed = shardx_core::grants::SealedGrant {
+                hpke_info_bytes: info,
+                encapped_key_bytes: encapped,
+                ciphertext_bytes: wrapped,
+            };
+            match shardx_core::fleet_grants::open_fkek_with_info(&device_sk, &sealed) {
+                Ok(fkek) => {
+                    let generation = u64::try_from(g.fleet_generation).unwrap_or(0);
+                    store.insert(&g.fleet_id, generation, &fkek);
+                    fleet_opened += 1;
+                    newest_fleet_generation = Some(match newest_fleet_generation {
+                        Some(n) if n >= g.fleet_generation => n,
+                        _ => g.fleet_generation,
+                    });
+                }
+                Err(_) => fleet_failed += 1,
+            }
+        }
+        if fleet_opened > 0 {
+            fleet_keys::save(&store).map_err(|e| e.to_string())?;
+        }
+    }
+
     Ok(serde_json::json!({
         "grants": grants.len(),
         "opened": opened,
         "failed": failed,
         "newest_generation": newest_generation,
+        "fleet_opened": fleet_opened,
+        "fleet_failed": fleet_failed,
+        "newest_fleet_generation": newest_fleet_generation,
+        "can_sync_without_passphrase": fleet_opened > 0,
     }))
 }
 
@@ -1876,6 +2289,19 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            sync_launch,
+            sync_status,
+            sync_set_paused,
+            sync_arrange,
+            sync_stop,
+            sync_set_excluded,
+            sync_close_panel,
+            helper_profiles,
+            helper_fields,
+            helper_fill,
+            helper_show,
+            helper_close,
+            helper_dismiss,
             profile_list,
             profile_get,
             profile_validate_name,
@@ -1892,6 +2318,19 @@ pub fn run() {
             sync_cmd::profile_sync_status,
             backup_cmd::profile_backup_restore,
             backup_cmd::profile_backup_inspect,
+            trash_list,
+            trash_restore,
+            trash_purge,
+            trash_empty,
+            extension_list,
+            extension_import,
+            extension_import_url,
+            extension_delete,
+            bookmark_list,
+            bookmark_save,
+            bookmark_delete,
+            data_root_get,
+            data_root_migrate,
             profile_bind_proxy,
             profile_clone,
             profile_import,
@@ -2032,6 +2471,21 @@ pub fn run() {
             tauri::async_runtime::spawn(async {
                 runtime::ensure_profiles_migrated().await;
             });
+
+            // Point the heavy directories wherever the operator moved them,
+            // before anything reads a profile.
+            if let Ok(s) = settings::load() {
+                if let Some(root) = s.data_root.as_deref().filter(|r| !r.is_empty()) {
+                    store::set_data_root(Some(std::path::PathBuf::from(root)));
+                }
+            }
+
+            // Trash older than its week.
+            match trash::purge_expired() {
+                Ok(n) if n > 0 => eprintln!("[launcher] trash: {n} expired profile(s) removed"),
+                Ok(_) => {}
+                Err(e) => eprintln!("[launcher] trash sweep failed: {e}"),
+            }
 
             // Clean up temporary profiles from crashed runs.
             match profile::purge_temporary() {

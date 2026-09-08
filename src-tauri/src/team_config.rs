@@ -98,6 +98,9 @@ pub struct TeamStatus {
     /// key, but the private half was discarded, so grants sealed to it can
     /// never be opened. Such a device must re-enroll.
     pub can_receive_custody: bool,
+    /// Whether this device holds a fleet key. Once true, sync seals and opens
+    /// snapshots with the fleet key and no passphrase is asked for.
+    pub has_fleet_key: bool,
 }
 
 pub fn load() -> Result<TeamConfig> {
@@ -129,6 +132,11 @@ pub fn status() -> Result<TeamStatus> {
         is_enrolled: c.is_enrolled(),
         can_sync: c.can_sync(),
         can_receive_custody: c.can_receive_custody(),
+        // Reading the key cache is best effort: a device with no cache yet is
+        // simply a device without a fleet key, not an error to report here.
+        has_fleet_key: crate::fleet_keys::load()
+            .map(|s| s.active_key(&c.fleet_id).is_some())
+            .unwrap_or(false),
     })
 }
 
