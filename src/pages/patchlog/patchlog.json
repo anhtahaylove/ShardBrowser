@@ -3,6 +3,125 @@
   "repoUrl": "https://github.com/ProxyShard/ShardBrowser",
   "releases": [
     {
+      "version": "2.1.1",
+      "date": "2026-09-08",
+      "entries": [
+        {
+          "id": "engine-install-guard",
+          "title": "Installs wait for running profiles",
+          "lead": "An engine update no longer tries to replace files a running profile is holding open.",
+          "tag": "fix",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "Replacing the engine means deleting the old one first. On Windows that fails while a profile still has the browser open, and the half-written engine made the setup screen reappear on every launch afterwards."
+            },
+            {
+              "type": "p",
+              "text": "The install now stops before it deletes anything and names the profiles it is waiting on. Close them, run it again, and the update proceeds."
+            }
+          ]
+        },
+        {
+          "id": "existing-mcp-folder",
+          "title": "Adopt an existing MCP folder",
+          "lead": "Point the launcher at an MCP server you already have instead of downloading a second copy.",
+          "tag": "new",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "Settings offers Use existing MCP folder beside the download button. Pick the directory and the launcher reports its version and dependency state from there."
+            },
+            {
+              "type": "note",
+              "text": "Useful when the MCP server lives with the rest of your tooling rather than in the launcher's own data directory."
+            }
+          ]
+        },
+        {
+          "id": "verification-to-front",
+          "title": "Bring a verification tab to the front",
+          "lead": "Raise a running profile's window when a site is waiting on a human check.",
+          "tag": "new",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "Available from the profile's menu while it is running. If the profile is not running the launcher says so rather than failing quietly."
+            }
+          ]
+        },
+        {
+          "id": "shortcut-hint-line",
+          "title": "The search shortcut hint fits on one line",
+          "lead": "Ctrl K no longer wraps into a two-line column beside the search box.",
+          "tag": "fix",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "The hint sits in a narrow slot, and an ordinary space let it break across lines."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.1.0",
+      "date": "2026-09-08",
+      "entries": [
+        {
+          "id": "team-enrolment",
+          "title": "Team enrolment",
+          "lead": "Enrol a device with a team server to sync encrypted profiles between machines.",
+          "tag": "new",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "Settings gains a Team card: server URL, API token, tenant ID and a device label. Generate a tenant ID for a new fleet, or paste an existing one to join a fleet you already run."
+            },
+            {
+              "type": "note",
+              "text": "The server routes ciphertext only. It never holds a key, so it cannot read a profile even if it wanted to."
+            },
+            {
+              "type": "p",
+              "text": "Changing the server or the tenant clears this device's keys, because keys are only meaningful inside the fleet that issued them."
+            }
+          ]
+        },
+        {
+          "id": "encrypted-backup",
+          "title": "Encrypted profile backup",
+          "lead": "Profiles can be backed up and restored as ciphertext, keyed to your fleet.",
+          "tag": "new",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "A backup carries the profile's cookies, storage and fingerprint. Restoring it on an enrolled device rebuilds the profile as it was, without the plaintext ever leaving the machine."
+            }
+          ]
+        },
+        {
+          "id": "engine-manifest-pin",
+          "title": "The engine manifest is pinned",
+          "lead": "The launcher checks the published engine hash before it decides an update is needed.",
+          "scope": "launcher",
+          "tag": "fix",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "Version, engine build and archive hash are compared together. An unknown local value is no longer read as a mismatch, so the launcher stops proposing an update it has already applied."
+            }
+          ]
+        }
+      ]
+    },
+    {
       "version": "2.0.1",
       "date": "2026-09-03",
       "entries": [
