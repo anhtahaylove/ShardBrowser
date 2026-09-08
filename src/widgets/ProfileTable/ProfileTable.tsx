@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Checkbox, Pagination } from "@proxyshard/shardx-ui-kit";
+import { Button, Checkbox, Pagination } from "@proxyshard/shardx-ui-kit";
 import { ShardLogo } from "../../shared/icons";
 import { useContextMenu } from "../../shared/hooks/useContextMenu";
 import {
@@ -22,6 +22,7 @@ export function ProfileTable() {
   const expanded = useProfile((s) => s.expanded);
   const folder = useProfile((s) => s.folder);
   const search = useProfile((s) => s.search);
+  const setSearch = useProfile((s) => s.setSearch);
   const running = useProfile((s) => s.running);
 
   const visible = useVisibleProfiles();
@@ -101,14 +102,41 @@ export function ProfileTable() {
             <div className="grid size-14 place-items-center rounded-[14px] bg-primary-alpha-10 text-primary-base ring-1 ring-inset ring-primary-alpha-24">
               <ShardLogo />
             </div>
-            <h3 className="m-0 text-label-sm text-text-strong-950">No profiles yet</h3>
-            <p className="m-0 max-w-[420px] text-paragraph-sm text-text-sub-600">
-              Pick a fingerprint template to start from a curated real-Chrome snapshot, or build one from scratch.
-            </p>
-            <div className="mt-2 flex gap-2">
-              <FromTemplateButton />
-              <NewProfileButton />
-            </div>
+            {search ? (
+              <>
+                <h3 className="m-0 text-label-sm text-text-strong-950">No matching profiles</h3>
+                <p className="m-0 max-w-[420px] text-paragraph-sm text-text-sub-600">
+                  Nothing matches “{search}”.
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <Button variant="neutral" mode="stroke" size="xsmall" onClick={() => setSearch("")}>
+                    Clear search
+                  </Button>
+                </div>
+              </>
+            ) : folder ? (
+              <>
+                <h3 className="m-0 text-label-sm text-text-strong-950">Folder is empty</h3>
+                <p className="m-0 max-w-[420px] text-paragraph-sm text-text-sub-600">
+                  “{folder}” has no profiles. Move one in, or create one here.
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <FromTemplateButton />
+                  <NewProfileButton />
+                </div>
+              </>
+            ) : (
+              <>
+                <h3 className="m-0 text-label-sm text-text-strong-950">No profiles yet</h3>
+                <p className="m-0 max-w-[420px] text-paragraph-sm text-text-sub-600">
+                  Pick a fingerprint template to start from a curated real-Chrome snapshot, or build one from scratch.
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <FromTemplateButton />
+                  <NewProfileButton />
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>

@@ -154,7 +154,10 @@ export const useProfile = create<ProfileStore>((set, get) => ({
   anchorId: null,
 
   init: async () => {
+    // A failed load must be retryable, so only an in-flight or successful
+    // load short-circuits. Retrying clears the previous error first.
     if (get().status === "loading" || get().status === "ready") return;
+    set({ error: null });
     set({ status: "loading" });
     try {
       const [profiles, proxies, fingerprints] = await Promise.all([

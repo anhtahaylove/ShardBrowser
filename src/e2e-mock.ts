@@ -369,6 +369,33 @@ mockIPC(async (cmd: string, payload?: InvokeArgs) => {
     case "clipboard_write":
     case "clipboard_read":
       return "";
+
+    // v2 list endpoints: empty is a valid, uninteresting fixture state.
+    case "bookmark_list":
+    case "extension_list":
+    case "trash_list":
+    case "patch_log_list":
+    case "helper_profiles":
+    case "sync_group_list":
+      return [];
+
+    // v2 scalar/status endpoints with a harmless default.
+    case "data_root_get":
+      return { path: "C:\\fixture\\shardx", movable: true };
+    case "profile_sync_status":
+      return null;
+    case "team_status":
+      return {
+        server_url: "",
+        tenant_id: "",
+        device_id: "",
+        has_token: false,
+        is_enrolled: false,
+        can_sync: false,
+        can_receive_custody: false,
+        has_fleet_key: false,
+      };
+
     default:
       throw new Error(`Unhandled E2E command: ${cmd}`);
   }

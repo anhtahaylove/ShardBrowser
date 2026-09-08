@@ -37,6 +37,7 @@ export function ProfileRowActions({ profile, onMore }: {
             : <span className={isStarting ? "spin-icon inline-grid place-items-center" : "inline-grid place-items-center"}><PlayIcon className="size-3.5" /></span>
         }
         onClick={() => startStop(p)}
+        aria-label={`${isRunning ? "Stop" : "Start"} profile ${p.name}`}
         disabled={!isRunning && isStarting}
         title={!isRunning && isStarting ? "Starting (UDP probe + geo + spawn)…" : undefined}
       >
@@ -48,20 +49,21 @@ export function ProfileRowActions({ profile, onMore }: {
         size="xsmall"
         onlyIcon
         onClick={() => togglePin(p)}
+        aria-label={`${p.pinned ? "Unpin" : "Pin"} profile ${p.name}`}
         title={p.pinned ? "Unpin" : "Pin to top"}
         leftIcon={<PinIconApp className="size-4" />}
       >
       
       </Button>
-      <Button variant="neutral" mode="stroke" size="xsmall" onlyIcon onClick={() => expand(p.id)} title="Edit"
+      <Button variant="neutral" mode="stroke" size="xsmall" onlyIcon onClick={() => expand(p.id)} title="Edit" aria-label={`Edit profile ${p.name}`}
         leftIcon={<EditIcon className="size-4" />}
       >
       </Button>
-      <Button variant="neutral" mode="stroke" size="xsmall" onlyIcon onClick={() => cloneProfile(p.id)} title="Clone"
+      <Button variant="neutral" mode="stroke" size="xsmall" onlyIcon onClick={() => cloneProfile(p.id)} title="Clone" aria-label={`Clone profile ${p.name}`}
         leftIcon={<CopyIcon className="size-4" />}
       >
       </Button>
-      <Button variant="error" mode='filled' size="xsmall" onlyIcon onClick={() => remove(p.id)} title="Delete"
+      <Button variant="error" mode='filled' size="xsmall" onlyIcon onClick={() => remove(p.id)} title="Delete" aria-label={`Delete profile ${p.name}`}
         leftIcon={<DeleteIcon className="size-4" />}
       >
       </Button>
@@ -71,6 +73,7 @@ export function ProfileRowActions({ profile, onMore }: {
         size="xsmall"
         onlyIcon
         onClick={onMore}
+        aria-label={`More actions for profile ${p.name}`}
         title="More actions"
         leftIcon={<MoreIcon className="size-4" />}
       >

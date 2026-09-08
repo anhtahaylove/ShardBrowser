@@ -19,12 +19,23 @@ const helperProfile = panelParams.get("helperPanel");
 // Upstream's Google Analytics beacon is deliberately absent from this custom
 // build: a fleet anti-detect launcher should not phone a third party on start.
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <ThemeProvider>
-      {panelGroup ? <SyncPanel group={panelGroup} />
-       : helperProfile ? <HelperPanel profile={helperProfile} />
-       : <App />}
-    </ThemeProvider>
-  </React.StrictMode>,
-);
+async function bootstrap() {
+  // The e2e build stubs the Tauri command layer so the UI regression suite can
+  // drive real components without a backend. Loading it must happen before the
+  // first render, or components fire real invokes on mount.
+  if (import.meta.env.MODE === "e2e") {
+    await import("../e2e-mock");
+  }
+
+  ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+    <React.StrictMode>
+      <ThemeProvider>
+        {panelGroup ? <SyncPanel group={panelGroup} />
+         : helperProfile ? <HelperPanel profile={helperProfile} />
+         : <App />}
+      </ThemeProvider>
+    </React.StrictMode>,
+  );
+}
+
+void bootstrap();
