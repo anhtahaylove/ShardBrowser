@@ -129,6 +129,39 @@ export function SettingsPage() {
           onRefresh={async () => { await refreshMcp(); await checkCodex(); }}
           onCheckCodex={checkCodex}
         />
+        <p className="m-0 mb-2 text-paragraph-xs text-text-soft-400">
+          Download the <strong>MCP</strong> server source (lets an AI client drive
+          profiles and a CDP browser) into a folder you choose. The app does not run
+          it — install its deps and register it with your MCP client per the included
+          README. Requires Node.js.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="neutral"
+            mode="stroke"
+            size="small"
+            leftIcon={<DownloadIcon className="size-4" />}
+            onClick={downloadMcp}
+            disabled={mcpBusy}
+            isLoading={mcpBusy}
+          >
+            {mcpBusy ? "Downloading…" : "Download MCP server"}
+          </Button>
+          <Button
+            variant="neutral"
+            mode="stroke"
+            size="small"
+            onClick={useExistingMcp}
+            disabled={mcpBusy}
+          >
+            Use existing MCP folder
+          </Button>
+        </div>
+        {mcp?.path && (
+          <p className="m-0 mt-2 text-paragraph-xs text-text-sub-600">
+            Current folder: <code>{mcp.path}</code>
+          </p>
+        )}
       </SettingsCard>
 
       <SettingsCard title="Team">
@@ -322,41 +355,6 @@ export function SettingsPage() {
         </div>
       </SettingsCard>
 
-      <SettingsCard title="MCP server">
-        <p className="m-0 mb-2 text-paragraph-xs text-text-soft-400">
-          Download the <strong>MCP</strong> server source (lets an AI client drive
-          profiles and a CDP browser) into a folder you choose. The app does not run
-          it — install its deps and register it with your MCP client per the included
-          README. Requires Node.js.
-        </p>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant="neutral"
-            mode="stroke"
-            size="small"
-            leftIcon={<DownloadIcon className="size-4" />}
-            onClick={downloadMcp}
-            disabled={mcpBusy}
-            isLoading={mcpBusy}
-          >
-            {mcpBusy ? "Downloading…" : "Download MCP server"}
-          </Button>
-          <Button
-            variant="neutral"
-            mode="stroke"
-            size="small"
-            onClick={useExistingMcp}
-            disabled={mcpBusy}
-          >
-            Use existing MCP folder
-          </Button>
-        </div>
-        {mcp?.path && (
-          <p className="m-0 mt-2 text-paragraph-xs text-text-sub-600">
-            Current folder: <code>{mcp.path}</code>
-          </p>
-        )}
-      </SettingsCard>
 
 
       <div
