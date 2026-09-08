@@ -425,6 +425,20 @@ jobs:
       - name: List collected release assets
         run: ls -la dist/
 
+      - name: Extract release highlights from the changelog
+        run: |
+          version="${{ needs.validate.outputs.tag }}"
+          notes=$(awk -v want="## $version" '
+            $0 == want { hit = 1; next }
+            hit && /^## / { exit }
+            hit { print }
+          ' CHANGELOG.md)
+          if [ -z "$(printf '%s' "$notes" | tr -d '[:space:]')" ]; then
+            echo "CHANGELOG.md has no section for $version." >&2
+            exit 1
+          fi
+          printf '%s\n\n' "$notes" | tr -d '\r' > release-highlights.md
+
       - name: Write release notes
         run: |
           cat > release-notes.md <<'EOF'
@@ -432,22 +446,19 @@ jobs:
 
           ## Highlights
 
-          * Every API-launched browser now receives an opaque in-memory launch-instance token; conditional cleanup requires the exact profile, PID, and token so PID reuse cannot stop a replacement process.
-          * `safe_open_url` verifies Launcher ownership capability before spawning, preserves the active tab for follow-up tools, restores the prior profile state, and fails closed on mixed-version or cleanup mismatches.
-          * The legacy PID-only stop endpoint is disabled with HTTP 410, and stale-process cleanup remains inventory-only until a stable operating-system process identity is available.
-          * MCP release packaging enforces exact entry equality for the staging directory, raw tar manifest, and extracted payload, rejecting missing, extra, duplicate, nested, or non-regular entries.
-          * The 96-tool MCP contract, startup-in-tray behavior, signed Tauri updater, NSIS upgrade safety, headless automation, and Rust SDK gates remain covered by CI and release validation.
-
+          @@HIGHLIGHTS@@
           ## Install
 
           * **Windows** — the installer and portable executable are not Authenticode-signed, so Windows can show SmartScreen / **Unknown Publisher** during a manual install. The in-app updater separately verifies downloaded update bytes with the shipped Tauri updater public key.
           * **macOS** — Apple Silicon .dmg; this build is not notarized because the fork does not currently have an Apple Developer ID.
           * **Linux** — .AppImage or .deb.
-          * **MCP** — ShardX-MCP.tar.gz contains the matching MCP source and Codex helpers. Launcher Settings downloads this asset from this exact fork release.
+          * **MCP** — ShardX-MCP.tar.gz contains the matching MCP source and host helpers. Launcher Settings downloads this asset from this exact fork release.
           * **Team server** — shardx-team-server-<platform> is the self-hosted server. It serves the v2 fleet, enrollment, root key generation, and grant endpoints that the Launcher's Team features talk to.
 
           Verify downloaded assets with SHA256SUMS.txt, latest.json signatures, or the GitHub build-provenance attestation.
           EOF
+          sed -i -e '/@@HIGHLIGHTS@@/r release-highlights.md' -e '/@@HIGHLIGHTS@@/d' release-notes.md
+          cat release-notes.md
 
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2

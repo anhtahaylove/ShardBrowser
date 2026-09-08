@@ -1,5 +1,25 @@
 # Changelog
 
+## v2.2.0
+
+### MCP host
+
+- Settings now leads with **Check Hermes registration**. Hermes is the
+  primary MCP host for this fork, so its check is the primary action and
+  the Codex check moves under Advanced actions.
+- A new Hermes probe reads the resolved entry from
+  `hermes config get mcp_servers.shardbrowser` and compares it against the
+  selected `index.js` path and the running Automation API URL. It reports
+  only whether `SHARDX_TOKEN` is present, never its value.
+- The Codex repair copy is always available under Advanced actions. It was
+  previously hidden whenever it duplicated the primary action, which would
+  have left a broken Codex entry with no way to copy its repair command.
+
+### Documentation
+
+- `mcp/README.md` documents Hermes registration and maps each reported
+  state to the action that resolves it.
+
 ## v0.2.4
 
 ### Root key custody
