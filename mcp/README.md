@@ -58,7 +58,32 @@ also checks the current user's `HKCU\Environment` values for `SHARDX_API` and
 `SHARDX_TOKEN`. This keeps Codex/Cursor-style stdio launches working without
 copying the token into client config.
 
+### Hermes Desktop (Windows)
+
+First use the Settings button to store `SHARDX_TOKEN` in the Windows User
+environment, then restart Hermes so it inherits the value. Register the
+downloaded server without putting the token in Hermes config:
+
+```powershell
+hermes mcp add shardbrowser --env "SHARDX_API=http://127.0.0.1:40325" --command node --args "C:\absolute\path\to\mcp\index.js"
+```
+
+Inspect or repair the entry:
+
+```powershell
+hermes mcp list
+hermes mcp test shardbrowser
+hermes mcp remove shardbrowser
+```
+
+Note the flag shape: Hermes takes `--command` and `--args`, where the Codex CLI
+below uses a bare `--` separator. After adding or repairing, restart Hermes so
+it reloads the MCP tools, then call `health_check` first; it reports API
+reachability and authentication without printing the token.
+
 ### Codex CLI (Windows)
+
+Still supported; use this if Codex is your MCP host instead of Hermes.
 
 First use the Settings button to store `SHARDX_TOKEN` in the Windows User
 environment, then restart Codex so it inherits the value. Register the
