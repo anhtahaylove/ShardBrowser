@@ -99,3 +99,27 @@ export type CodexMcpStatus = {
   repair_command: string | null;
   config_path: string | null;
 };
+
+/** How Hermes registered this Launcher's MCP server, if at all. */
+export type HermesMcpStatus = {
+  state:
+    | "registered"
+    | "needs_repair"
+    | "disabled"
+    | "not_registered"
+    | "hermes_not_found"
+    | "timeout"
+    | "unavailable";
+  available: boolean;
+  registered: boolean;
+  ready: boolean;
+  index_path: string | null;
+  expected_index_path: string | null;
+  path_matches: boolean | null;
+  api: string | null;
+  expected_api: string;
+  api_matches: boolean | null;
+  token_in_config: boolean;
+  message: string;
+  issues: string[];
+};

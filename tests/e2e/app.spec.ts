@@ -204,6 +204,17 @@ test("Settings exposes one honest Codex repair action", async ({ page }) => {
   await expect(page.getByText("no config is changed automatically")).toBeVisible();
 });
 
+test("Settings reports Hermes registration alongside Codex", async ({ page }) => {
+  await gotoMocked(page, "/?e2e=hermes-not-registered");
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByText("Advanced actions", { exact: true }).click();
+  await page.getByRole("button", { name: "Check Hermes registration" }).click();
+
+  await expect(page.getByText("Hermes MCP fixture is not registered.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copy Hermes add command" })).toHaveCount(1);
+});
+
 test("pages without search do not expose a fake shortcut", async ({ page }) => {
   await gotoMocked(page);
 

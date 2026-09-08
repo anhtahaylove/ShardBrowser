@@ -1,28 +1,37 @@
 import { useState } from "react";
 import { Button } from "@proxyshard/shardx-ui-kit";
 import { clip } from "../../../shared/lib/clipboard";
-import type { ApiInfo, McpStatus, CodexMcpStatus } from "../../../entities/settings";
+import type { ApiInfo, McpStatus, CodexMcpStatus, HermesMcpStatus } from "../../../entities/settings";
 
 /// MCP readiness, plus the single honest Codex action for the current state.
 ///
 /// Every prerequisite is listed separately: "not working" is not useful when
 /// four different things can be missing.
+///
+/// Codex and Hermes are reported side by side: either can host this MCP
+/// server, so a problem in one must not be drawn as a global failure.
 export function McpCard({
   status,
   statusError,
   codex,
   codexError,
+  hermes,
+  hermesError,
   api,
   onRefresh,
   onCheckCodex,
+  onCheckHermes,
 }: {
   status: McpStatus | null;
   statusError: string | null;
   codex: CodexMcpStatus | null;
   codexError: string | null;
+  hermes: HermesMcpStatus | null;
+  hermesError: string | null;
   api: ApiInfo | null;
   onRefresh: () => Promise<void>;
   onCheckCodex: () => Promise<void>;
+  onCheckHermes: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const [advanced, setAdvanced] = useState(false);
@@ -36,6 +45,18 @@ export function McpCard({
 
   const copyRepair = async () => {
     if (codex?.repair_command) await clip.write(codex.repair_command);
+  };
+
+  // Built from the same values the Rust side compares against, so the copied
+  // command repairs exactly the mismatch that was reported.
+  const hermesAddCommand = () => {
+    const index = hermes?.expected_index_path ?? hermes?.index_path ?? "";
+    const apiUrl = hermes?.expected_api ?? "";
+    return `hermes mcp remove shardbrowser; hermes mcp add shardbrowser --env "SHARDX_API=${apiUrl}" --command node --args "${index}"`;
+  };
+
+  const copyHermesAdd = async () => {
+    await clip.write(hermesAddCommand());
   };
 
   const run = async (fn: () => Promise<void>) => {
@@ -116,6 +137,26 @@ export function McpCard({
         <p className="m-0 text-paragraph-xs text-text-sub-600">{codexError}</p>
       )}
 
+      <div className="flex flex-col gap-0.5 rounded-lg bg-bg-weak-50 px-3 py-2">
+        <strong className="text-label-xs text-text-strong-950">
+          {hermes?.ready ? "✓" : "○"} Hermes registration
+        </strong>
+        <span className="text-paragraph-xs text-text-sub-600">
+          {hermesError
+            ? hermesError
+            : hermes
+              ? hermes.message
+              : "Not checked yet"}
+        </span>
+      </div>
+
+      {hermes && hermes.issues.length > 0 && (
+        <p className="m-0 text-paragraph-xs text-text-sub-600">
+          {hermes.issues.join("; ")}. Use <strong>Copy Hermes add command</strong>, restart Hermes,
+          then run <code>health_check</code>.
+        </p>
+      )}
+
       <div className="flex flex-wrap items-center gap-2">
         <Button size="xsmall" disabled={busy} onClick={() => void run(primary.run)}>
           {primary.label}
@@ -130,6 +171,12 @@ export function McpCard({
               Copy Codex repair command
             </Button>
           )}
+          <Button size="xsmall" variant="neutral" mode="stroke" disabled={busy} onClick={() => void run(onCheckHermes)}>
+            {busy ? "Checking Hermes…" : "Check Hermes registration"}
+          </Button>
+          <Button size="xsmall" variant="neutral" mode="stroke" onClick={copyHermesAdd}>
+            Copy Hermes add command
+          </Button>
           <p className="m-0 text-paragraph-xs text-text-sub-600">
             The command is copied for you to run — no config is changed automatically.
           </p>

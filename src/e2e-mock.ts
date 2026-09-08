@@ -356,6 +356,41 @@ mockIPC(async (cmd: string, payload?: InvokeArgs) => {
         message: "Codex MCP fixture ready.",
         issues: [],
       };
+    case "hermes_mcp_status":
+      if (scenario === "hermes-not-registered") {
+        return {
+          available: true,
+          registered: false,
+          enabled: false,
+          index_path: null,
+          expected_index_path: "C:\\Users\\Example\\ShardX-MCP\\index.js",
+          path_matches: null,
+          api: null,
+          expected_api: "http://127.0.0.1:40325",
+          api_matches: null,
+          token_in_config: false,
+          ready: false,
+          state: "not_registered",
+          message: "Hermes MCP fixture is not registered.",
+          issues: ["shardbrowser is not registered with Hermes"],
+        };
+      }
+      return {
+        available: true,
+        registered: true,
+        enabled: true,
+        index_path: "C:\\Users\\Example\\ShardX-MCP\\index.js",
+        expected_index_path: "C:\\Users\\Example\\ShardX-MCP\\index.js",
+        path_matches: true,
+        api: "http://127.0.0.1:40325",
+        expected_api: "http://127.0.0.1:40325",
+        api_matches: true,
+        token_in_config: false,
+        ready: true,
+        state: "registered",
+        message: "Hermes MCP fixture ready.",
+        issues: [],
+      };
     case "launcher_update_check":
       if (params.get("updateHold") === "1") {
         document.documentElement.dataset.e2eUpdateCheckPending = "true";

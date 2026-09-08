@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Settings, ApiInfo, DataRootInfo, StartupStatus, McpStatus, CodexMcpStatus } from "./types";
+import type { Settings, ApiInfo, DataRootInfo, StartupStatus, McpStatus, CodexMcpStatus, HermesMcpStatus } from "./types";
 
 export const settingsGet = () => invoke<Settings>("settings_get");
 export const settingsSave = (value: Settings) => invoke("settings_save", { value });
@@ -12,6 +12,7 @@ export const mcpSetPath = (dir: string) => invoke<McpStatus>("mcp_set_path", { d
 export const startupStatus = () => invoke<StartupStatus>("startup_status");
 export const mcpStatus = () => invoke<McpStatus>("mcp_status");
 export const codexMcpStatus = () => invoke<CodexMcpStatus>("codex_mcp_status");
+export const hermesMcpStatus = () => invoke<HermesMcpStatus>("hermes_mcp_status");
 
 export const dataRootGet = () => invoke<DataRootInfo>("data_root_get");
 /** Moves the data; progress arrives as `data-migration` events. */

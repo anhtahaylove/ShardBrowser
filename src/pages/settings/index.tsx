@@ -7,10 +7,10 @@ import { Topbar } from "../../shared/ui/Topbar";
 import { CopyField } from "../../shared/ui/CopyField";
 import { toast } from "../../shared/model/toast";
 import { withUtm } from "../../shared/lib/utils";
-import type { Settings, ApiInfo, StartupStatus, McpStatus, CodexMcpStatus } from "../../entities/settings";
+import type { Settings, ApiInfo, StartupStatus, McpStatus, CodexMcpStatus, HermesMcpStatus } from "../../entities/settings";
 import { HELPER_KINDS } from "../../entities/settings";
 import { settingsGet, settingsSave, apiInfo, apiRegenerateToken, mcpDownload, mcpSetPath,
-  startupStatus, mcpStatus as mcpStatusGet, codexMcpStatus } from "../../entities/settings";
+  startupStatus, mcpStatus as mcpStatusGet, codexMcpStatus, hermesMcpStatus } from "../../entities/settings";
 import { StartupCard, McpCard } from "../../features/manage-settings";
 import { safeUiError } from "../../shared/lib/utils";
 import { DataRootCard } from "../../features/manage-profiles/ui/DataRootCard";
@@ -46,6 +46,8 @@ export function SettingsPage() {
   const [mcpError, setMcpError] = useState<string | null>(null);
   const [codex, setCodex] = useState<CodexMcpStatus | null>(null);
   const [codexError, setCodexError] = useState<string | null>(null);
+  const [hermes, setHermes] = useState<HermesMcpStatus | null>(null);
+  const [hermesError, setHermesError] = useState<string | null>(null);
 
   const refreshApi = () => apiInfo().then(setApi).catch(() => {});
   const refreshStartup = () =>
@@ -57,6 +59,10 @@ export function SettingsPage() {
   const checkCodex = () =>
     codexMcpStatus().then((v) => { setCodex(v); setCodexError(null); })
       .catch((e) => setCodexError(safeUiError(e)));
+
+  const checkHermes = () =>
+    hermesMcpStatus().then((v) => { setHermes(v); setHermesError(null); })
+      .catch((e) => setHermesError(safeUiError(e)));
 
   useEffect(() => {
     settingsGet().then((v) => { setS(v); setBaseline(v); });
@@ -125,9 +131,12 @@ export function SettingsPage() {
           statusError={mcpError}
           codex={codex}
           codexError={codexError}
+          hermes={hermes}
+          hermesError={hermesError}
           api={api}
-          onRefresh={async () => { await refreshMcp(); await checkCodex(); }}
+          onRefresh={async () => { await refreshMcp(); await checkCodex(); await checkHermes(); }}
           onCheckCodex={checkCodex}
+          onCheckHermes={checkHermes}
         />
         <p className="m-0 mb-2 text-paragraph-xs text-text-soft-400">
           Download the <strong>MCP</strong> server source (lets an AI client drive

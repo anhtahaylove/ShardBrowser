@@ -5,6 +5,7 @@ mod api;
 mod backup_cmd;
 mod bookmarks;
 mod codex_mcp;
+mod hermes_mcp;
 mod cookies;
 mod extensions;
 mod fingerprints;
@@ -341,6 +342,11 @@ async fn mcp_status() -> Result<Value, String> {
 #[tauri::command]
 async fn codex_mcp_status() -> Result<Value, String> {
     codex_mcp::status().await
+}
+
+#[tauri::command]
+async fn hermes_mcp_status() -> Result<Value, String> {
+    hermes_mcp::status().await
 }
 
 // ---- Profiles ----
@@ -2397,6 +2403,7 @@ pub fn run() {
             mcp_set_path,
             mcp_status,
             codex_mcp_status,
+            hermes_mcp_status,
             runtime::runtime_status,
             runtime::runtime_install,
             updater::launcher_update_check,
