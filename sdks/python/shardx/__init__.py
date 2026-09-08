@@ -126,14 +126,14 @@ class ShardX:
         mutating a reopened profile (e.g. `set_noise`) to keep changes."""
         path = self._profile_json_path(profile.id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(profile.config, indent=2))
+        path.write_text(json.dumps(profile.config, indent=2), encoding="utf-8")
 
     def open_profile(self, id: str) -> Profile:
         """Reopen a previously created profile by id (same fingerprint + state)."""
         path = self._profile_json_path(id)
         if not path.exists():
             raise FileNotFoundError(f"saved profile {id!r} not found")
-        return Profile(json.loads(path.read_text()), id=id)
+        return Profile(json.loads(path.read_text(encoding="utf-8")), id=id)
 
     def list_saved_profiles(self) -> list[str]:
         """Ids of every saved profile, sorted."""
