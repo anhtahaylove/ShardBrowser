@@ -6,6 +6,8 @@ export const settingsSave = (value: Settings) => invoke("settings_save", { value
 export const apiInfo = () => invoke<ApiInfo>("api_info");
 export const apiRegenerateToken = () => invoke<ApiInfo>("api_regenerate_token");
 export const mcpDownload = (dir: string) => invoke<string>("mcp_download", { dir });
+/** Adopts an MCP server already on disk instead of downloading a second copy. */
+export const mcpSetPath = (dir: string) => invoke<McpStatus>("mcp_set_path", { dir });
 
 export const startupStatus = () => invoke<StartupStatus>("startup_status");
 export const mcpStatus = () => invoke<McpStatus>("mcp_status");

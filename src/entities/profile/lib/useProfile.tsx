@@ -18,7 +18,7 @@ import {
   folderDelete, cookiesExportToFile, cookiesImport,
   profileSyncStatus, profileSyncPush, profileSyncPull,
   profileBackupCreate, profileBackupInspect, profileBackupRestore,
-  devtoolsContext, type CdpInfo,
+  devtoolsContext, devtoolsActivate, type CdpInfo,
 } from "../model/api";
 import { defaultForm, fromStored, toStored } from "../model/form";
 
@@ -60,6 +60,8 @@ export type ProfileStore = {
   launchError: Record<string, string>;
   /// Profiles whose `launch()` call is in-flight (pre-flight probes can be slow).
   startBusy: Set<string>;
+  /// Profiles whose activate call is in-flight, so repeat clicks no-op.
+  verificationBusy: Set<string>;
   selected: Set<string>;
 
   // UI state lives in the store so feature buttons stay prop-free.
@@ -87,6 +89,8 @@ export type ProfileStore = {
 
   copyCdpHttpUrl: (id: string) => Promise<void>;
   copyDevToolsInspectUrl: (id: string) => Promise<void>;
+  /** Raises the running profile's page so a verification prompt is visible. */
+  bringVerificationToFront: (id: string) => Promise<void>;
   setSearch: (q: string) => void;
   setFolder: (f: string) => void;
   setDraft: (draft: ProfileForm | null) => void;
@@ -149,6 +153,7 @@ export const useProfile = create<ProfileStore>((set, get) => ({
   runningCdp: {},
   launchError: {},
   startBusy: new Set<string>(),
+  verificationBusy: new Set<string>(),
   selected: new Set<string>(),
 
   search: "",
@@ -245,6 +250,24 @@ export const useProfile = create<ProfileStore>((set, get) => ({
       await clip.write(url);
       toast.ok("Copied DevTools inspect URL");
     } catch (e) { toast.err(safeUiError(e)); }
+  },
+
+  // A site can park a CAPTCHA or 2FA prompt on a background tab, where the
+  // operator never sees it. Raising the page is the whole point of the action,
+  // so a failure has to say so rather than fail silently.
+  bringVerificationToFront: async (id) => {
+    if (get().verificationBusy.has(id)) return;
+    set({ verificationBusy: new Set([...get().verificationBusy, id]) });
+    try {
+      await devtoolsActivate(id);
+      toast.ok("Verification tab brought to front");
+    } catch (e) {
+      toast.err(`Could not bring verification tab to front: ${safeUiError(e)}`);
+    } finally {
+      const n = new Set(get().verificationBusy);
+      n.delete(id);
+      set({ verificationBusy: n });
+    }
   },
 
   setSearch: (search) => set({ search }),

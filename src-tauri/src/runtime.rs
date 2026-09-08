@@ -578,6 +578,23 @@ pub async fn runtime_status() -> Result<RuntimeStatus, String> {
     })
 }
 
+/// Why the engine cannot be replaced right now, or `None` when it is free.
+///
+/// Swapping the engine deletes the tree a running profile executes from. On
+/// Windows that fails partway with os error 32 and leaves a half-deleted
+/// install; elsewhere it yanks files from under a live browser. Naming the
+/// profiles is the difference between a fixable message and a mystery.
+fn engine_busy_message(running: &[String]) -> Option<String> {
+    if running.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "Stop the {} running profile(s) before updating the engine: {}",
+        running.len(),
+        running.join(", "),
+    ))
+}
+
 #[tauri::command]
 pub async fn runtime_install(window: Window, force: bool) -> Result<RuntimeStatus, String> {
     let spec = host_spec().ok_or("Host platform has no published ShardX archive")?;
@@ -600,6 +617,23 @@ pub async fn runtime_install(window: Window, force: bool) -> Result<RuntimeStatu
     // Manifest unreachable → don't force a re-download.
     let need_browser =
         force || !installed_now || engine_outdated(&local, &manifest, &spec.browser.key);
+
+    // Replacing the engine deletes the tree a running profile is executing from.
+    // On Windows that fails outright (os error 32) partway through, leaving a
+    // half-deleted engine; on Unix it silently pulls the files out from under a
+    // live browser. Either way the operator loses the session, so refuse while
+    // any profile is up and name them.
+    if need_browser {
+        let running: Vec<String> = crate::process::Tracker::shared()
+            .running()
+            .into_iter()
+            .map(|r| r.profile_id)
+            .collect();
+        if let Some(message) = engine_busy_message(&running) {
+            return Err(message);
+        }
+    }
+
     let browser_etag = if need_browser {
         // Wipe the old engine tree first. The archive extracts *over* the
         // existing dir but never deletes files the new version dropped — most
@@ -941,4 +975,24 @@ fn place_widevine(base: &Path) -> Result<()> {
     fs::rename(&src, &dst)?;
     let _ = fs::remove_dir(base.join("ShardX-Widevine-Linux"));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_free_engine_has_no_complaint() {
+        assert_eq!(engine_busy_message(&[]), None);
+    }
+
+    #[test]
+    fn a_busy_engine_names_every_profile_holding_it() {
+        let msg = engine_busy_message(&["alpha".to_string(), "beta".to_string()])
+            .expect("running profiles must block the install");
+        assert!(msg.contains("alpha"), "{msg}");
+        assert!(msg.contains("beta"), "{msg}");
+        // The count tells the operator how many tabs to go close.
+        assert!(msg.contains('2'), "{msg}");
+    }
 }

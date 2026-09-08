@@ -26,6 +26,9 @@ export const processList = () =>
   invoke<{ profile_id: string; pid: number; uptime_ms: number; cdp?: CdpInfo }[]>("process_list");
 export const devtoolsContext = (profileId: string) =>
   invoke<DevtoolsContext>("devtools_context", { profileId });
+/** Raises the profile's current page — used to surface a verification prompt. */
+export const devtoolsActivate = (profileId: string) =>
+  invoke<DevtoolsTarget>("devtools_activate", { profileId });
 export const processKill = (profileId: string) => invoke<boolean>("process_kill", { profileId });
 export const launch = (profileId: string) => invoke<number>("launch", { profileId });
 
