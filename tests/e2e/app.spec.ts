@@ -204,6 +204,17 @@ test("Settings exposes one honest Codex repair action", async ({ page }) => {
   await expect(page.getByText("no config is changed automatically")).toBeVisible();
 });
 
+test("Advanced actions stay collapsed until opened", async ({ page }) => {
+  await gotoMocked(page, "/?e2e=hermes-registered");
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByRole("button", { name: "Check Hermes registration" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Check Codex registration" })).toBeHidden();
+
+  await page.getByText("Advanced actions", { exact: true }).click();
+  await expect(page.getByRole("button", { name: "Check Codex registration" })).toBeVisible();
+});
+
 test("Settings reports Hermes registration alongside Codex", async ({ page }) => {
   await gotoMocked(page, "/?e2e=hermes-not-registered");
 
