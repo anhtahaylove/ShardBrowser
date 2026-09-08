@@ -59,8 +59,10 @@ export function Topbar({ crumbs, search = "", onSearch }: {
             }
           }}
           rightIcon={
-            <span aria-hidden="true" className="text-paragraph-xs text-text-soft-400">
-              {isMac ? "⌘K" : "Ctrl K"}
+            // The hint sits in a narrow slot, so an ordinary space lets "Ctrl K"
+            // wrap onto two lines and read as a squashed column.
+            <span aria-hidden="true" className="whitespace-nowrap text-paragraph-xs text-text-soft-400">
+              {isMac ? "⌘K" : "Ctrl\u00a0K"}
             </span>
           }
         />

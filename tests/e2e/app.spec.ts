@@ -340,3 +340,22 @@ test("an existing MCP folder can be adopted without downloading a second copy", 
     .toHaveText("C:\\Users\\Example\\Existing-MCP");
   await expect(page.getByText(/Using MCP server at/)).toBeVisible();
 });
+
+test("the search shortcut hint stays on one line", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await gotoMocked(page);
+
+  // The hint sits in a narrow slot beside the input. With an ordinary space it
+  // wrapped to two lines and rendered as a squashed column, so measure every
+  // hint on the page against its own line height rather than trusting the first.
+  const wrapped = await page.evaluate(() =>
+    [...document.querySelectorAll("span")]
+      .filter((s) => /Ctrl|⌘/.test(s.textContent || ""))
+      .map((s) => {
+        const r = s.getBoundingClientRect();
+        const lh = parseFloat(getComputedStyle(s).lineHeight) || 21;
+        return { text: s.textContent, height: Math.round(r.height), lineHeight: lh };
+      })
+      .filter((h) => h.height > h.lineHeight * 1.4));
+  expect(wrapped).toEqual([]);
+});
