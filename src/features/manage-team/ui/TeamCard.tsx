@@ -92,8 +92,25 @@ export function TeamCard() {
     } else if (r.failed > 0) {
       toast.err(`${r.opened} of ${r.grants} opened; ${r.failed} could not be opened`);
     } else {
-      const gen = r.newest_generation == null ? "" : ` (generation ${r.newest_generation})`;
-      toast.ok(`Custody in place: ${r.opened} grant(s) opened${gen}`);
+      // The fleet key is the one sync needs, so lead with that.
+      if (r.can_sync_without_passphrase) {
+        const gen =
+          r.newest_fleet_generation == null
+            ? ""
+            : ` (generation ${r.newest_fleet_generation})`;
+        toast.ok(
+          `Fleet key collected${gen} — this device can sync without a passphrase`,
+        );
+      } else if (r.opened > 0) {
+        const gen =
+          r.newest_generation == null ? "" : ` (generation ${r.newest_generation})`;
+        toast.ok(
+          `Root custody in place: ${r.opened} grant(s)${gen}. No fleet key yet — ` +
+            `sync still needs a passphrase.`,
+        );
+      } else {
+        toast.err("No grants are waiting for this device yet");
+      }
     }
   });
 

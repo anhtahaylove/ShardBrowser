@@ -4,6 +4,7 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import { toast } from "../../../shared/lib/toast";
 import { confirmModal } from "../../../shared/lib/confirm";
 import { passphraseModal } from "../../../shared/model/passphrase";
+import { useTeam } from "../../team";
 import { clip } from "../../../shared/lib/clipboard";
 import { readTextFile, fmtBytes, safeUiError } from "../../../shared/lib/utils";
 import { storeBus } from "../../../shared/lib/storeBus";
@@ -401,14 +402,20 @@ export const useProfile = create<ProfileStore>((set, get) => ({
       // another device published in the meantime.
       const remote = await profileSyncStatus(p.id);
       const base = remote?.version ?? 0;
-      const passphrase = await passphraseModal({
-        title: base === 0 ? "Encrypt profile for the team" : `Push over version ${base}`,
-        message:
-          "Everyone who pulls this profile must enter the same passphrase. " +
-          "It is not stored anywhere and cannot be recovered.",
-        confirm: base === 0,
-      });
-      if (passphrase === null) return;
+      // A device holding a fleet key needs no passphrase: the fleet shares the
+      // key through grants, so asking for one would be theatre.
+      let passphrase = "";
+      if (!useTeam.getState().status?.has_fleet_key) {
+        const typed = await passphraseModal({
+          title: base === 0 ? "Encrypt profile for the team" : `Push over version ${base}`,
+          message:
+            "Everyone who pulls this profile must enter the same passphrase. " +
+            "It is not stored anywhere and cannot be recovered.",
+          confirm: base === 0,
+        });
+        if (typed === null) return;
+        passphrase = typed;
+      }
       const res = await profileSyncPush(p.id, passphrase, base);
       toast.ok(`Pushed version ${res.version} — ${fmtBytes(res.container_bytes)}`);
     } catch (e) { toast.err(safeUiError(e)); }
@@ -430,10 +437,13 @@ export const useProfile = create<ProfileStore>((set, get) => ({
           { label: "Pull and replace", value: true, danger: true },
         ],
       }))) return;
-      const passphrase = await passphraseModal({
-        title: "Passphrase for this profile",
-        message: "The passphrase used when this profile was pushed.",
-      });
+      let passphrase: string | null = "";
+      if (!useTeam.getState().status?.has_fleet_key) {
+        passphrase = await passphraseModal({
+          title: "Passphrase for this profile",
+          message: "The passphrase used when this profile was pushed.",
+        });
+      }
       if (passphrase === null) return;
       const bytes = await profileSyncPull(p.id, passphrase);
       toast.ok(`Pulled version ${remote.version} — ${fmtBytes(bytes)} restored`);

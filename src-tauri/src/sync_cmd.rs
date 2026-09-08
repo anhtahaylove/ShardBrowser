@@ -26,7 +26,7 @@
 
 use serde::Serialize;
 
-use crate::{fleet_client, profile, team_config};
+use crate::{fleet_client, fleet_keys, profile, team_config};
 
 /// Result of a completed push.
 #[derive(Debug, Serialize)]
@@ -105,11 +105,29 @@ pub async fn profile_sync_push(
         return Err("this profile has no data to push yet".into());
     }
 
+    // Prefer the fleet key this device collected from its grant: it is the
+    // key the fleet actually shares, so no passphrase has to be agreed out of
+    // band. The passphrase path stays for devices that have not collected a
+    // grant yet, and is refused outright if neither is available.
+    let fleet_key = fleet_keys::load()
+        .ok()
+        .and_then(|s| s.active_key(&c.fleet_id));
+    if fleet_key.is_none() && passphrase.is_empty() {
+        return Err(
+            "this device has no fleet key yet — collect key custody in Team settings, \
+             or supply a passphrase"
+                .into(),
+        );
+    }
+
     // Argon2id is deliberately slow and packing is IO-bound: not on the UI
     // thread.
     let seal_profile_id = profile_id.clone();
-    let sealed = tokio::task::spawn_blocking(move || {
-        shardx_core::backup_file::seal_profile(&seal_profile_id, &udd, &passphrase)
+    let sealed = tokio::task::spawn_blocking(move || match fleet_key {
+        Some((fkek, _generation)) => {
+            shardx_core::backup_file::seal_profile_with_fkek(&seal_profile_id, &udd, &fkek)
+        }
+        None => shardx_core::backup_file::seal_profile(&seal_profile_id, &udd, &passphrase),
     })
     .await
     .map_err(|e| format!("seal task failed: {e}"))?
@@ -185,8 +203,30 @@ pub async fn profile_sync_pull(profile_id: String, passphrase: String) -> Result
         .await
         .map_err(|e| format!("{e:#}"))?;
 
+    // Try every fleet key this device holds, newest first: a snapshot pushed
+    // before a rotation is sealed under an older generation and must still
+    // restore. Falls back to the passphrase for pre-custody snapshots.
+    let candidates = fleet_keys::load()
+        .map(|s| s.keys_newest_first(&c.fleet_id))
+        .unwrap_or_default();
+
     tokio::task::spawn_blocking(move || {
-        shardx_core::backup_file::open_profile(&container, &udd, &passphrase)
+        let mut last_err = None;
+        for (fkek, _generation) in &candidates {
+            match shardx_core::backup_file::open_profile_with_fkek(&container, &udd, fkek) {
+                Ok(bytes) => return Ok(bytes),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        if !passphrase.is_empty() {
+            return shardx_core::backup_file::open_profile(&container, &udd, &passphrase);
+        }
+        Err(last_err.unwrap_or_else(|| {
+            anyhow::anyhow!(
+                "this device has no fleet key for this snapshot — collect key custody in \
+                 Team settings, or supply the passphrase it was pushed with"
+            )
+        }))
     })
     .await
     .map_err(|e| format!("restore task failed: {e}"))?

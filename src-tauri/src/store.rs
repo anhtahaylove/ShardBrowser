@@ -99,6 +99,15 @@ pub fn team_config_path() -> Result<PathBuf> {
     Ok(config_root()?.join("team.json"))
 }
 
+/// Where collected fleet keys are cached.
+///
+/// Kept out of `team.json` deliberately: that file is round-tripped by the
+/// Settings page, and key material must not ride along with settings a UI
+/// save could rewrite.
+pub fn fleet_keys_path() -> Result<PathBuf> {
+    Ok(config_root()?.join("fleet-keys.json"))
+}
+
 pub fn psapi_path() -> Result<PathBuf> {
     Ok(config_root()?.join("psapi.json"))
 }

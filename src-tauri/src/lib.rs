@@ -9,6 +9,7 @@ mod cookies;
 mod extensions;
 mod fingerprints;
 pub mod fleet_client;
+mod fleet_keys;
 mod launch;
 mod mcp_setup;
 mod migrate;
@@ -2128,11 +2129,55 @@ async fn team_collect_custody() -> Result<serde_json::Value, String> {
         }
     }
 
+    // Fleet keys. These are the ones sync actually needs: the root key
+    // authorises custody, the fleet key opens snapshots. Collected keys are
+    // cached so a push or pull no longer needs a passphrase.
+    let mut fleet_opened = 0usize;
+    let mut fleet_failed = 0usize;
+    let mut newest_fleet_generation: Option<i64> = None;
+    if !c.fleet_id.is_empty() {
+        let fleet_grants = client
+            .fleet_key_grants(&c.tenant_id, &c.device_id)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let mut store = fleet_keys::load().map_err(|e| e.to_string())?;
+        for g in &fleet_grants {
+            let info = hex_bytes(&g.hpke_info_hex)?;
+            let encapped = hex_bytes(&g.hpke_encapped_key_hex)?;
+            let wrapped = hex_bytes(&g.hpke_wrapped_fkek_hex)?;
+            let sealed = shardx_core::grants::SealedGrant {
+                hpke_info_bytes: info,
+                encapped_key_bytes: encapped,
+                ciphertext_bytes: wrapped,
+            };
+            match shardx_core::fleet_grants::open_fkek_with_info(&device_sk, &sealed) {
+                Ok(fkek) => {
+                    let generation = u64::try_from(g.fleet_generation).unwrap_or(0);
+                    store.insert(&g.fleet_id, generation, &fkek);
+                    fleet_opened += 1;
+                    newest_fleet_generation = Some(match newest_fleet_generation {
+                        Some(n) if n >= g.fleet_generation => n,
+                        _ => g.fleet_generation,
+                    });
+                }
+                Err(_) => fleet_failed += 1,
+            }
+        }
+        if fleet_opened > 0 {
+            fleet_keys::save(&store).map_err(|e| e.to_string())?;
+        }
+    }
+
     Ok(serde_json::json!({
         "grants": grants.len(),
         "opened": opened,
         "failed": failed,
         "newest_generation": newest_generation,
+        "fleet_opened": fleet_opened,
+        "fleet_failed": fleet_failed,
+        "newest_fleet_generation": newest_fleet_generation,
+        "can_sync_without_passphrase": fleet_opened > 0,
     }))
 }
 

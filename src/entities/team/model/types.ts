@@ -17,6 +17,8 @@ export type TeamStatus = {
    * opened. Such a device must re-enroll.
    */
   can_receive_custody: boolean;
+  /** True when this device holds a fleet key, so sync needs no passphrase. */
+  has_fleet_key: boolean;
 };
 
 /** What `team_collect_custody` found waiting on the server. */
@@ -29,4 +31,12 @@ export type CustodyResult = {
   failed: number;
   /** Highest root generation among the opened grants, if any. */
   newest_generation: number | null;
+  /** Fleet key grants opened. These hold the key sync actually uses. */
+  fleet_opened: number;
+  /** Fleet grants that failed to open. */
+  fleet_failed: number;
+  /** Highest fleet generation among the opened fleet grants, if any. */
+  newest_fleet_generation: number | null;
+  /** True once this device holds a fleet key, so sync needs no passphrase. */
+  can_sync_without_passphrase: boolean;
 };
