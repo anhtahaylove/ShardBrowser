@@ -77,4 +77,7 @@ export type RtUpdate = {
   latest: string | null;
   update_available: boolean;
   release_url: string | null;
+  /// Release notes shown before the user consents to the download.
+  notes?: string | null;
+  pub_date?: string | null;
 };

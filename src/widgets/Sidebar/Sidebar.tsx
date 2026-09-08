@@ -16,60 +16,15 @@ import {
   CopyIcon,
   DocsIcon,
   ShardLogo,
-  ShardMini,
 } from "../../shared/icons";
 import { clip } from "../../shared/lib/clipboard";
 import { toast } from "../../shared/model/toast";
 import { withUtm } from "../../shared/lib/utils";
-import type { RtUpdate, Section } from "../../shared/types";
+import type { Section } from "../../shared/types";
 import { useNav } from "../../shared/model/navigation";
 import { DownloadMcp } from "../../features/DownloadMcp";
 import { ThemeSwitch } from "../../features/ThemeSwitch";
-
-function VersionPill() {
-  const [info, setInfo] = useState<RtUpdate | null>(null);
-  useEffect(() => {
-    invoke<RtUpdate>("launcher_update_check").then(setInfo).catch(() => {});
-  }, []);
-  const open = () => {
-    if (info?.release_url) openUrl(info.release_url).catch(() => {});
-  };
-  const clickable = !!info?.release_url;
-  return (
-    <button
-      type="button"
-      className={cn(
-        "flex w-full items-center gap-2.5 rounded-lg border border-transparent bg-transparent px-2.5 py-2 text-left text-text-strong-950 transition-colors",
-        info?.update_available
-          ? "cursor-pointer border-warning-base/40 bg-warning-alpha-16 hover:border-warning-base"
-          : "cursor-default hover:enabled:bg-bg-weak-50 disabled:opacity-85",
-      )}
-      onClick={open}
-      disabled={!clickable}
-      title={
-        info?.update_available
-          ? `New release ${info.latest} is available — click to open the Releases page.`
-          : info
-            ? `Running ${info.current}${info.latest ? `, GitHub: ${info.latest}` : ""}`
-            : "Checking for updates…"
-      }
-    >
-      <span className="text-icon-strong-950"><ShardMini /></span>
-      <div className="flex min-w-0 flex-col">
-        <div className="text-label-xs">ShardX Launcher v{info?.current ?? "…"}</div>
-        <div className="text-paragraph-xs text-text-soft-400">
-          {info === null
-            ? "checking for updates…"
-            : info.update_available
-              ? `Update available → ${info.latest}`
-              : info.latest
-                ? "up to date"
-                : "offline"}
-        </div>
-      </div>
-    </button>
-  );
-}
+import { UpdaterPill } from "../UpdaterPill";
 
 export function Sidebar() {
   const section = useNav((s) => s.section);
@@ -179,7 +134,7 @@ export function Sidebar() {
           </Button>
         </div>
         <ThemeSwitch />
-        <VersionPill />
+        <UpdaterPill />
       </div>
     </aside>
   );

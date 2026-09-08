@@ -9,6 +9,8 @@ export type ProgressBarProps = {
   /** Show the numeric percentage on the right. */
   showValue?: boolean
   className?: string
+  /** Names the bar for assistive tech; a bare progressbar role is unlabelled. */
+  'aria-label'?: string
 }
 
 const fillColor: Record<ProgressColor, string> = {
@@ -25,6 +27,7 @@ export default function ProgressBar({
   color = 'primary',
   showValue = false,
   className,
+  'aria-label': ariaLabel,
 }: ProgressBarProps) {
   const pct = Math.min(100, Math.max(0, (value / max) * 100))
 
@@ -33,6 +36,7 @@ export default function ProgressBar({
       <div
         className="h-1.5 w-full overflow-hidden rounded-full bg-bg-soft-200"
         role="progressbar"
+        aria-label={ariaLabel}
         aria-valuenow={Math.round(pct)}
         aria-valuemin={0}
         aria-valuemax={100}

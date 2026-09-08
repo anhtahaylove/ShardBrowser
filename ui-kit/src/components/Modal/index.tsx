@@ -15,6 +15,8 @@ export type ModalProps = {
   showClose?: boolean
 }
 
+let modalSeq = 0
+
 export default function Modal({
   open,
   onClose,
@@ -28,6 +30,8 @@ export default function Modal({
   const [mounted, setMounted] = useState(false)
   const [render, setRender] = useState(false)
   const [visible, setVisible] = useState(false)
+  // A dialog needs an accessible name; derive it from the title we already render.
+  const [titleId] = useState(() => `shardx-modal-title-${++modalSeq}`)
 
   useEffect(() => setMounted(true), [])
 
@@ -37,6 +41,11 @@ export default function Modal({
       requestAnimationFrame(() => requestAnimationFrame(() => setVisible(true)))
     } else {
       setVisible(false)
+      // transitionend is not guaranteed (reduced motion, an already-transparent
+      // backdrop, a background tab). Without this fallback the closed dialog
+      // stays mounted and keeps its role/name in the accessibility tree.
+      const t = setTimeout(() => setRender(false), 250)
+      return () => clearTimeout(t)
     }
   }, [open])
 
@@ -69,6 +78,7 @@ export default function Modal({
       <div
         role="dialog"
         aria-modal="true"
+        aria-labelledby={title ? titleId : undefined}
         onClick={(e) => e.stopPropagation()}
         className={cn(
           'relative flex w-full flex-col rounded-2xl bg-bg-white-0 shadow-[var(--shadow-md)] transition-all duration-200',
@@ -82,7 +92,7 @@ export default function Modal({
         {(title || showClose) && (
           <div className="flex items-start justify-between gap-4 p-5 pb-0">
             <div className="flex flex-col gap-1">
-              {title && <h2 className="text-label-lg text-text-strong-950">{title}</h2>}
+              {title && <h2 id={titleId} className="text-label-lg text-text-strong-950">{title}</h2>}
               {description && <p className="text-paragraph-sm text-text-sub-600">{description}</p>}
             </div>
             {showClose && (
