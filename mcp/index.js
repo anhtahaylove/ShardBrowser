@@ -14,8 +14,25 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
+import os from "node:os";
+import path from "node:path";
 import { z } from "zod";
 import { chromium } from "patchright";
+
+import { classifyCloudflareChallenge, waitForChallengeClear } from "./challenge.js";
+import {
+  acquireSafeOpenProfile,
+  navigateActivePage,
+  redactLaunchInstanceToken,
+  runSafeOpenLifecycle,
+} from "./safe-open-lifecycle.js";
+import {
+  clearVerificationCheckpoint,
+  notifyVerificationRequired,
+  readVerificationCheckpoint,
+  saveVerificationCheckpoint,
+} from "./verification-checkpoint.js";
 
 function readWindowsUserEnv(name) {
   if (process.platform !== "win32") return "";
@@ -52,7 +69,9 @@ async function api(path, { method = "GET", body } = {}) {
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
   if (!res.ok) {
     const msg = data && data.error ? data.error : `HTTP ${res.status}`;
-    throw new Error(`${method} ${path} → ${msg}`);
+    const error = new Error(`${method} ${path} → ${msg}`);
+    error.status = res.status;
+    throw error;
   }
   return data;
 }
@@ -74,7 +93,7 @@ async function cdpEndpoint(profileId, { autostart = true, headless = false } = {
   }
   const cdp = entry?.cdp;
   if (!cdp?.http_url) {
-    throw new Error(`profile ${profileId} is not running with CDP (start it first)`);
+    throw new Error(`profile ${profileId} is not running with CDP (stop/restart it through MCP or the Automation API to enable DevTools)`);
   }
   return cdp;
 }
@@ -106,9 +125,164 @@ async function pageFor(profileId, opts) {
   return p;
 }
 
+async function existingPageFor(profileId, opts) {
+  const browser = await browserFor(profileId, opts);
+  const context = browser.contexts()[0];
+  if (!context) return null;
+  const current = activePage.get(profileId);
+  if (current && !current.isClosed() && current.context() === context) return current;
+  const page = context.pages().find((candidate) => !candidate.url().startsWith("devtools://")) || null;
+  if (page) activePage.set(profileId, page);
+  return page;
+}
+
+async function challengeStatusForPage(page, response) {
+  const [title, bodyText, turnstileVisible] = await Promise.all([
+    page.title().catch(() => ""),
+    page.locator("body").innerText({ timeout: 2000 }).catch(() => ""),
+    page
+      .locator('iframe[src*="challenges.cloudflare.com"], .cf-turnstile')
+      .first()
+      .isVisible()
+      .catch(() => false),
+  ]);
+  return {
+    ...classifyCloudflareChallenge({
+      headers: response?.headers?.() || {},
+      title,
+      bodyText,
+      turnstileVisible,
+    }),
+    url: page.isClosed() ? "" : page.url(),
+    title,
+    manual_action_required: false,
+  };
+}
+
+async function updateChallengeStatus(profileId, page, response, operation = "challenge_check") {
+  const status = await challengeStatusForPage(page, response);
+  status.manual_action_required = status.detected;
+  try {
+    if (status.detected) {
+      const saved = await saveVerificationCheckpoint(profileId, status, { operation });
+      status.checkpoint = saved.checkpoint;
+      status.windows_notification_dispatched = saved.created && notifyVerificationRequired();
+    } else {
+      await clearVerificationCheckpoint(profileId);
+      status.checkpoint = null;
+      status.windows_notification_dispatched = false;
+    }
+  } catch {
+    // Filesystem or notification failures must not interrupt challenge handoff.
+    status.checkpoint = null;
+    status.windows_notification_dispatched = false;
+  }
+  try {
+    await api(`/profiles/${profileId}/verification-status`, {
+      method: "POST",
+      body: {
+        required: status.detected,
+        kind: status.kind,
+      },
+    });
+    status.launcher_status_reported = true;
+  } catch {
+    // Challenge detection must keep working with older Launcher builds that
+    // do not expose the optional verification-status handoff endpoint.
+    status.launcher_status_reported = false;
+  }
+  return status;
+}
+
+async function waitForVerification(profileId, page, initialChallenge, timeoutMs, operation) {
+  await page.bringToFront().catch(() => {});
+  const result = await waitForChallengeClear(
+    initialChallenge,
+    () => challengeStatusForPage(page),
+    { timeoutMs, isClosed: () => page.isClosed() },
+  );
+  if (page.isClosed()) {
+    return { ...result, page_closed: true, resumed: false, timed_out: false };
+  }
+  const challenge = await updateChallengeStatus(profileId, page, undefined, operation);
+  return {
+    ...result,
+    challenge,
+    timed_out: challenge.detected && result.timed_out,
+    resumed: result.waited && !challenge.detected,
+  };
+}
+
 // Locator with a default timeout, shared by element actions.
 const loc = (page, selector) => page.locator(selector).first();
 const TIMEOUT = 15000;
+
+// ---------- Motion: human pointer and keystrokes ----------
+//
+// The `Motion` domain lives on the BROWSER target, so it needs a browser-level
+// CDP session. These wrappers only turn a selector into the coordinates it wants.
+
+const motion = new Map(); // profile_id → { browser, session, pointer }
+
+async function motionFor(profileId, opts) {
+  const b = await browserFor(profileId, opts);
+  const cur = motion.get(profileId);
+  if (cur && cur.browser === b && b.isConnected()) return cur;
+  const m = { browser: b, session: await b.newBrowserCDPSession(), pointer: false };
+  motion.set(profileId, m);
+  return m;
+}
+
+// Resting cursor position. Never the target — a glide starting on top of what
+// it aims at has no trajectory and no duration.
+async function ensurePointer(m, page) {
+  if (m.pointer) return;
+  const [w, h] = await page
+    .evaluate(() => [window.innerWidth, window.innerHeight])
+    .catch(() => [1280, 800]);
+  await m.session.send("Motion.createPointer", {
+    x: Math.round(w * 0.15),
+    y: Math.round(h * 0.8),
+  });
+  m.pointer = true;
+}
+
+// Selector → viewport point. Scrolled into view first; `width` travels along
+// because it feeds Fitts's law in the core.
+async function targetOf(page, selector, { timeout = TIMEOUT, dx, dy } = {}) {
+  const l = loc(page, selector);
+  await l.waitFor({ state: "visible", timeout });
+  await l.scrollIntoViewIfNeeded({ timeout });
+  const box = await l.boundingBox({ timeout });
+  if (!box) throw new Error(`element is not rendered, so it has no coordinates: ${selector}`);
+  return {
+    x: Math.round(box.x + (typeof dx === "number" ? dx : box.width / 2)),
+    y: Math.round(box.y + (typeof dy === "number" ? dy : box.height / 2)),
+    width: Math.round(box.width),
+    height: Math.round(box.height),
+  };
+}
+
+// Either a selector or an explicit point, resolved the same way.
+async function pointOf(page, { selector, x, y, offset_x, offset_y }) {
+  if (selector) {
+    return targetOf(page, selector, { dx: offset_x, dy: offset_y });
+  }
+  if (typeof x !== "number" || typeof y !== "number") {
+    throw new Error("give either a selector or both x and y");
+  }
+  return { x: Math.round(x), y: Math.round(y), width: 32, height: 32 };
+}
+
+async function glide(m, page, target) {
+  await ensurePointer(m, page);
+  const r = await m.session.send("Motion.glideTo", {
+    x: target.x,
+    y: target.y,
+    targetWidth: target.width,
+  });
+  return r?.durationMs ?? 0;
+}
 
 // ---------- helpers ----------
 
@@ -121,7 +295,6 @@ function profileSummary(profile, match) {
     id: profile.id,
     name: profile.name,
     folder: profile.folder,
-    notes: profile.notes,
     running: !!profile.running,
     cdp: profile.cdp,
     ...(match ? { match } : {}),
@@ -167,7 +340,171 @@ function assertHttpUrl(url) {
   return parsed.href;
 }
 
-const server = new McpServer({ name: "shardx", version: "0.1.12" });
+async function cdpJson(cdp, path) {
+  const res = await fetch(new URL(path, cdp.http_url).href);
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(`CDP ${path} → HTTP ${res.status}`);
+  }
+  return data;
+}
+
+function targetSummary(cdp, target) {
+  const frontend = target.devtoolsFrontendUrl
+    ? new URL(target.devtoolsFrontendUrl, cdp.http_url).href
+    : null;
+  return {
+    id: target.id,
+    type: target.type,
+    title: target.title || "",
+    url: target.url || "",
+    attached: !!target.attached,
+    web_socket_debugger_url: target.webSocketDebuggerUrl || null,
+    devtools_frontend_url: frontend,
+  };
+}
+
+function launcherDataDir() {
+  if (process.platform === "win32") {
+    return process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
+  }
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support");
+  }
+  return process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share");
+}
+
+function profileUserDataDir(profileId) {
+  return path.join(launcherDataDir(), "shardx-launcher", "user-data", profileId);
+}
+
+function normalizeProcessText(value) {
+  return String(value || "").toLowerCase().replace(/\\/g, "/");
+}
+
+function parseProcessJson(out) {
+  const trimmed = out.trim();
+  if (!trimmed) return [];
+  const parsed = JSON.parse(trimmed);
+  return Array.isArray(parsed) ? parsed : [parsed];
+}
+
+function listProcesses() {
+  if (process.platform === "win32") {
+    const out = execFileSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress",
+      ],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true },
+    );
+    return parseProcessJson(out).map((p) => ({
+      pid: Number(p.ProcessId),
+      parent_pid: Number(p.ParentProcessId),
+      exe: p.ExecutablePath || "",
+      command: p.CommandLine || "",
+    }));
+  }
+  const out = execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" });
+  return out
+    .split(/\r?\n/)
+    .map((line) => line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/))
+    .filter(Boolean)
+    .map((m) => ({ pid: Number(m[1]), parent_pid: Number(m[2]), exe: "", command: m[3] }));
+}
+
+function descendantPids(processes, rootPids) {
+  const byParent = new Map();
+  for (const proc of processes) {
+    if (!Number.isFinite(proc.pid) || !Number.isFinite(proc.parent_pid)) continue;
+    const siblings = byParent.get(proc.parent_pid) || [];
+    siblings.push(proc.pid);
+    byParent.set(proc.parent_pid, siblings);
+  }
+
+  const descendants = new Set();
+  const stack = [...rootPids];
+  while (stack.length) {
+    const parentPid = stack.pop();
+    for (const childPid of byParent.get(parentPid) || []) {
+      if (descendants.has(childPid)) continue;
+      descendants.add(childPid);
+      stack.push(childPid);
+    }
+  }
+  return descendants;
+}
+
+async function staleProfileProcesses(profileId) {
+  const running = await api("/running");
+  const tracked = new Set(
+    running
+      .filter((r) => r.profile_id === profileId)
+      .map((r) => Number(r.pid))
+      .filter((pid) => Number.isFinite(pid)),
+  );
+  const userDataDir = normalizeProcessText(profileUserDataDir(profileId));
+  const processes = listProcesses();
+  const trackedDescendants = descendantPids(processes, tracked);
+  const stale = processes
+    .filter((p) => Number.isFinite(p.pid))
+    .filter((p) => !tracked.has(p.pid))
+    .filter((p) => !trackedDescendants.has(p.pid))
+    .filter((p) => {
+      const cmd = normalizeProcessText(p.command);
+      return cmd.includes("--user-data-dir") && cmd.includes(userDataDir);
+    })
+    .map((p) => ({ pid: p.pid, parent_pid: p.parent_pid }));
+  return { running, tracked_pids: [...tracked], stale };
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function stopStartedProfile(profileId, expectedPid, launchInstanceToken) {
+  if (!Number.isInteger(expectedPid) || expectedPid <= 0) {
+    throw new Error(`cannot stop profile ${profileId} without an owned PID`);
+  }
+  if (typeof launchInstanceToken !== "string" || !launchInstanceToken.trim()) {
+    throw new Error(`cannot stop profile ${profileId} without a launch-instance token`);
+  }
+  let stopError = null;
+  try {
+    await api(`/profiles/${profileId}/stop-if-launch-instance`, {
+      method: "POST",
+      body: {
+        expected_pid: expectedPid,
+        launch_instance_token: launchInstanceToken,
+      },
+    });
+  } catch (error) {
+    if (error.status === 409) throw error;
+    stopError = error;
+  }
+  browsers.delete(profileId);
+  activePage.delete(profileId);
+  let readError = null;
+  for (let i = 0; i < 60; i++) {
+    try {
+      const running = await api("/running");
+      const current = running.find((item) => item.profile_id === profileId);
+      if (!current || current.pid !== expectedPid) return;
+      readError = null;
+    } catch (error) {
+      readError = error;
+    }
+    await sleep(250);
+  }
+  const details = [stopError, readError]
+    .filter(Boolean)
+    .map((error) => error.message)
+    .join("; ");
+  throw new Error(`owned profile process ${expectedPid} did not stop within 15 seconds${details ? `: ${details}` : ""}`);
+}
+
+const MCP_VERSION = createRequire(import.meta.url)("./package.json").version;
+const server = new McpServer({ name: "shardx", version: MCP_VERSION });
 
 // ================= API tools =================
 
@@ -187,7 +524,11 @@ server.tool(
       });
     }
     try {
-      const [profiles, running] = await Promise.all([api("/profiles"), api("/running")]);
+      const [profiles, running, startup] = await Promise.all([
+        api("/profiles"),
+        api("/running"),
+        api("/startup").catch((error) => ({ available: false, error: String(error?.message || error) })),
+      ]);
       return text({
         ok: true,
         api: API,
@@ -196,6 +537,7 @@ server.tool(
         authenticated: true,
         profiles_count: profiles.length,
         running_count: running.length,
+        startup,
       });
     } catch (error) {
       return text({
@@ -208,6 +550,30 @@ server.tool(
       });
     }
   },
+);
+
+server.tool(
+  "startup_status",
+  "Read whether ShardX Launcher is configured and registered to start at desktop sign-in. Also reports that the API is embedded and MCP is client-spawned.",
+  {},
+  async () => text(await api("/startup")),
+);
+
+server.tool(
+  "configure_startup",
+  "Enable or disable ShardX Launcher at desktop sign-in for the current user. The embedded API starts with the Launcher; MCP remains client-spawned. Optionally choose whether the window stays in the system tray.",
+  {
+    enabled: z.boolean(),
+    start_minimized: z.boolean().optional(),
+  },
+  async ({ enabled, start_minimized }) =>
+    text(await api("/startup", {
+      method: "PUT",
+      body: {
+        enabled,
+        ...(start_minimized !== undefined ? { start_minimized } : {}),
+      },
+    })),
 );
 
 server.tool(
@@ -260,22 +626,272 @@ server.tool(
 
 server.tool(
   "safe_open_url",
-  "Resolve/start a profile, open an http(s) URL, wait for DOM content, and return title/url.",
+  "Resolve/start a profile, open an http(s) URL in the MCP-active tab, and automatically pause a visible run for manual Cloudflare verification before resuming. By default it restores a profile started by this call; set keep_running=true when follow-up tab/screenshot/ARIA/network tools in the same MCP process must use that tab, then call stop_profile. Never clicks, solves, or bypasses challenge controls.",
   {
     profile_id: z.string().optional(),
     profile_query: z.string().optional(),
     exact: z.boolean().optional(),
     url: z.string(),
     headless: z.boolean().optional(),
+    keep_running: z.boolean().optional(),
+    verification_timeout_ms: z.number().int().min(0).max(600000).optional(),
   },
-  async ({ profile_id, profile_query, exact, url, headless }) => {
+  async ({ profile_id, profile_query, exact, url, headless, keep_running, verification_timeout_ms }) => {
     // Reject non-http(s) input before resolving/starting a profile so an
     // invalid navigation request has no browser-process side effect.
     const targetUrl = assertHttpUrl(url);
     const profile = await resolveProfile({ profile_id, profile_query, exact });
-    const page = await pageFor(profile.id, { headless: !!headless });
-    await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-    return text({ profile: profileSummary(profile), url: page.url(), title: await page.title() });
+    const acquire = () =>
+      acquireSafeOpenProfile({
+        profileId: profile.id,
+        headless: !!headless,
+        listRunning: () => api("/running"),
+        getLauncherHealth: () => api("/health"),
+        startProfile: ({ headless: startHeadless }) =>
+          api(`/profiles/${profile.id}/start`, {
+            method: "POST",
+            body: { headless: startHeadless },
+          }),
+        cleanupStartedProfile: (ownedPid, ownedLaunchInstanceToken) =>
+          stopStartedProfile(profile.id, ownedPid, ownedLaunchInstanceToken),
+      });
+    const open = async () => {
+      const page = await pageFor(profile.id, { autostart: false, headless: !!headless });
+      const response = await navigateActivePage({
+        page,
+        profileId: profile.id,
+        targetUrl,
+        activePages: activePage,
+      });
+      let challenge = await updateChallengeStatus(profile.id, page, response, "safe_open_url");
+      let verification = null;
+      const timeoutMs = verification_timeout_ms ?? (headless ? 0 : 120000);
+      if (challenge.detected && timeoutMs > 0) {
+        const wait = await waitForVerification(profile.id, page, challenge, timeoutMs, "safe_open_url");
+        if (wait.page_closed) throw new Error("verification page closed while waiting");
+        challenge = wait.challenge;
+        verification = {
+          paused: wait.waited,
+          resumed: wait.resumed,
+          timed_out: wait.timed_out,
+          elapsed_ms: wait.elapsed_ms,
+        };
+      }
+      return {
+        url: page.url(),
+        title: await page.title(),
+        challenge,
+        verification,
+      };
+    };
+    const { result, selfHealed: self_healed, lifecycle } = await runSafeOpenLifecycle({
+      acquire,
+      open,
+      stopStartedProfile: (ownedPid, ownedLaunchInstanceToken) =>
+        stopStartedProfile(profile.id, ownedPid, ownedLaunchInstanceToken),
+      getRunningProfile: async () =>
+        (await api("/running")).find((item) => item.profile_id === profile.id) || null,
+      keepRunning: !!keep_running,
+    });
+    return text({
+      profile: profileSummary(profile),
+      url: result.url,
+      title: result.title,
+      challenge: result.challenge,
+      verification: result.verification,
+      self_healed,
+      lifecycle,
+    });
+  },
+);
+
+server.tool(
+  "challenge_status",
+  "Inspect the current page of a running profile for a Cloudflare interstitial or visible Turnstile widget. Read-only: never starts the profile or interacts with verification controls.",
+  {
+    profile_id: z.string().optional(),
+    profile_query: z.string().optional(),
+    exact: z.boolean().optional(),
+  },
+  async ({ profile_id, profile_query, exact }) => {
+    const profile = await resolveProfile({ profile_id, profile_query, exact });
+    const running = await api("/running");
+    const entry = running.find((item) => item.profile_id === profile.id);
+    if (!entry) {
+      return text({
+        profile: profileSummary(profile),
+        running: false,
+        cdp_ready: false,
+        checked: false,
+        reason: "profile_not_running",
+        challenge: null,
+      });
+    }
+    if (!entry.cdp?.http_url) {
+      return text({
+        profile: profileSummary(profile),
+        running: true,
+        cdp_ready: false,
+        checked: false,
+        reason: "cdp_unavailable",
+        challenge: null,
+      });
+    }
+    const page = await existingPageFor(profile.id, { autostart: false });
+    if (!page) {
+      return text({
+        profile: profileSummary(profile),
+        running: true,
+        cdp_ready: true,
+        checked: false,
+        reason: "no_page",
+        challenge: null,
+      });
+    }
+    return text({
+      profile: profileSummary(profile),
+      running: true,
+      cdp_ready: true,
+      checked: true,
+      challenge: await updateChallengeStatus(profile.id, page, undefined, "challenge_status"),
+    });
+  },
+);
+
+server.tool(
+  "verification_checkpoint",
+  "Read a privacy-minimal persisted checkpoint for a Cloudflare verification handoff. Does not inspect, start, or change the browser profile.",
+  {
+    profile_id: z.string().optional(),
+    profile_query: z.string().optional(),
+    exact: z.boolean().optional(),
+  },
+  async ({ profile_id, profile_query, exact }) => {
+    const profile = await resolveProfile({ profile_id, profile_query, exact });
+    const checkpoint = await readVerificationCheckpoint(profile.id);
+    return text({
+      profile: profileSummary(profile),
+      pending: !!checkpoint,
+      checkpoint,
+      ...(checkpoint
+        ? { next_step: "Bring the visible verification tab to front and call wait_for_human_verification." }
+        : {}),
+    });
+  },
+);
+
+server.tool(
+  "wait_for_human_verification",
+  "Wait for a person to complete a detected Cloudflare verification in an already-running visible profile. Never clicks, solves, or bypasses the challenge.",
+  {
+    profile_id: z.string().optional(),
+    profile_query: z.string().optional(),
+    exact: z.boolean().optional(),
+    timeout_ms: z.number().int().min(1000).max(600000).optional(),
+  },
+  async ({ profile_id, profile_query, exact, timeout_ms }) => {
+    const profile = await resolveProfile({ profile_id, profile_query, exact });
+    const running = await api("/running");
+    const entry = running.find((item) => item.profile_id === profile.id);
+    if (!entry?.cdp?.http_url) {
+      return text({
+        profile: profileSummary(profile),
+        running: !!entry,
+        cdp_ready: false,
+        challenge_cleared: false,
+        waited: false,
+        reason: entry ? "cdp_unavailable" : "profile_not_running",
+        next_step: "Start a visible CDP-enabled profile with ensure_profile_started, then open the target page again.",
+      });
+    }
+
+    const page = await existingPageFor(profile.id, { autostart: false });
+    if (!page) {
+      return text({
+        profile: profileSummary(profile),
+        running: true,
+        cdp_ready: true,
+        challenge_cleared: false,
+        waited: false,
+        reason: "no_page",
+        next_step: "Open the target page in the visible browser, then call this tool again.",
+      });
+    }
+    const initial = await updateChallengeStatus(
+      profile.id,
+      page,
+      undefined,
+      "wait_for_human_verification",
+    );
+    const wait = await waitForVerification(
+      profile.id,
+      page,
+      initial,
+      timeout_ms ?? 120000,
+      "wait_for_human_verification",
+    );
+    if (wait.page_closed) {
+      return text({
+        profile: profileSummary(profile),
+        running: true,
+        cdp_ready: true,
+        challenge_cleared: false,
+        waited: wait.waited,
+        timed_out: false,
+        elapsed_ms: wait.elapsed_ms,
+        reason: "page_closed",
+        challenge: wait.challenge,
+      });
+    }
+    return text({
+      profile: profileSummary(profile),
+      running: true,
+      cdp_ready: true,
+      challenge_cleared: !wait.challenge.detected,
+      waited: wait.waited,
+      timed_out: wait.timed_out,
+      elapsed_ms: wait.elapsed_ms,
+      challenge: wait.challenge,
+      ...(wait.challenge.detected
+        ? { next_step: "Complete verification manually in the visible browser, then call this tool again." }
+        : {}),
+    });
+  },
+);
+
+server.tool(
+  "devtools_context",
+  "Resolve/start a profile and return its CDP endpoint plus /json/list page targets for Chrome DevTools handoff.",
+  {
+    profile_id: z.string().optional(),
+    profile_query: z.string().optional(),
+    exact: z.boolean().optional(),
+    headless: z.boolean().optional(),
+  },
+  async ({ profile_id, profile_query, exact, headless }) => {
+    const profile = await resolveProfile({ profile_id, profile_query, exact });
+    const cdp = await cdpEndpoint(profile.id, { autostart: true, headless: !!headless });
+    const rawTargets = await cdpJson(cdp, "/json/list");
+    const targets = (Array.isArray(rawTargets) ? rawTargets : [])
+      .filter((t) => t.type === "page")
+      .map((t) => targetSummary(cdp, t));
+    const currentPage = activePage.get(profile.id);
+    let current = targets.find((t) => t.url && !t.url.startsWith("devtools://")) || null;
+    if (currentPage && !currentPage.isClosed()) {
+      const url = currentPage.url();
+      const target = targets.find((t) => t.url === url);
+      current = {
+        ...(target || {}),
+        url,
+        title: await currentPage.title().catch(() => target?.title || ""),
+      };
+    }
+    return text({
+      profile: { id: profile.id, name: profile.name, running: true },
+      cdp,
+      targets,
+      current,
+    });
   },
 );
 
@@ -304,15 +920,21 @@ server.tool(
     proxy: z.string().optional(),
     proxy_id: z.string().optional(),
     platform: z.enum(["Windows", "macOS", "Linux"]).optional(),
+    // Icon and omnibox-pill accent. Omit to derive it from the name.
+    color: z.string().optional(),
+    // Extension-library ids; see list_extensions.
+    extensions: z.array(z.string()).optional(),
     fingerprint: z.any().optional(),
+    launch: z.record(z.any()).optional(),
   },
-  async ({ name, notes, folder, proxy, proxy_id, platform, fingerprint }) => {
+  async ({ name, notes, folder, proxy, proxy_id, platform, color, extensions, fingerprint, launch }) => {
     if (!fingerprint) {
       const fp = await api(platform ? `/fingerprint/new/${platform}` : "/fingerprint/new");
       fingerprint = fp.fingerprint;
     }
+    if (launch) fingerprint.launch = launch;
     const path = folder ? `/folders/${encodeURIComponent(folder)}/profiles` : "/profiles";
-    const body = { name, notes, proxy, proxy_id, fingerprint };
+    const body = { name, notes, proxy, proxy_id, color, extensions, fingerprint };
     if (folder) delete body.folder; // folder comes from the path
     return text(await api(path, { method: "POST", body }));
   },
@@ -320,20 +942,37 @@ server.tool(
 
 server.tool(
   "create_temporary_profile",
-  "Create a TEMPORARY profile (hidden from the list, auto-deleted on close). Random/specified fingerprint, optional inline proxy string.",
+  "Create a TEMPORARY profile (hidden from the list, auto-deleted on close). Random/specified fingerprint, optional inline proxy string and noise.",
   {
     fingerprint_id: z.string().optional(),
     platform: z.enum(["Windows", "macOS", "Linux"]).optional(),
     proxy: z.string().optional(),
+    noise: z.record(z.any()).optional(),
+    launch: z.record(z.any()).optional(),
     name: z.string().optional(),
     folder: z.string().optional(),
+    // `{canvas: true}` or a full block; omitted vectors stay off.
+    noise: z
+      .record(
+        z.enum(["canvas", "webgl", "audio", "client_rects", "sensors", "fonts"]),
+        z.union([
+          z.boolean(),
+          z.object({
+            enabled: z.boolean().optional(),
+            seed: z.number().int().optional(),
+            intensity: z.number().optional(),
+            max_offset: z.number().optional(),
+          }),
+        ]),
+      )
+      .optional(),
   },
   async (args) => text(await api("/profiles/temporary", { method: "POST", body: args })),
 );
 
 server.tool(
   "edit_profile",
-  "Edit a profile. Only provided fields change; `fingerprint` replaces it verbatim; folder:'' unfiles; proxy_id:'' unbinds.",
+  "Edit a profile. Only provided fields change; `fingerprint` replaces it verbatim; folder:'' unfiles; proxy_id:'' unbinds; color:'' goes back to the name-derived one; `extensions` replaces the whole list.",
   {
     id: z.string(),
     name: z.string().optional(),
@@ -341,6 +980,8 @@ server.tool(
     folder: z.string().optional(),
     proxy_id: z.string().optional(),
     proxy: z.string().optional(),
+    color: z.string().optional(),
+    extensions: z.array(z.string()).optional(),
     fingerprint: z.any().optional(),
   },
   async ({ id, ...body }) => text(await api(`/profiles/${id}`, { method: "PATCH", body })),
@@ -348,7 +989,7 @@ server.tool(
 
 server.tool(
   "delete_profile",
-  "Delete a profile (config + user-data-dir).",
+  "Move a profile to the trash, restorable for 7 days (see list_trash / restore_profile).",
   { id: z.string() },
   async ({ id }) => text(await api(`/profiles/${id}`, { method: "DELETE" })),
 );
@@ -357,8 +998,13 @@ server.tool(
   "start_profile",
   "Launch a profile with CDP. Returns { pid, cdp:{ web_socket_debugger_url, http_url } }. Set headless to run without a window.",
   { id: z.string(), headless: z.boolean().optional() },
-  async ({ id, headless }) =>
-    text(await api(`/profiles/${id}/start`, { method: "POST", body: { headless: !!headless } })),
+  async ({ id, headless }) => {
+    const started = await api(`/profiles/${id}/start`, {
+      method: "POST",
+      body: { headless: !!headless },
+    });
+    return text(redactLaunchInstanceToken(started));
+  },
 );
 
 server.tool(
@@ -368,6 +1014,7 @@ server.tool(
   async ({ id }) => {
     const b = browsers.get(id);
     if (b) { try { await b.close(); } catch {} browsers.delete(id); }
+    motion.delete(id);
     return text(await api(`/profiles/${id}/stop`, { method: "POST" }));
   },
 );
@@ -377,6 +1024,34 @@ server.tool(
   "List running profiles with pid and CDP endpoint.",
   {},
   async () => text(await api("/running")),
+);
+
+server.tool(
+  "cleanup_stale_profile_processes",
+  "Inspect stale ShardX browser processes for one profile. This tool is inventory-only because a numeric PID cannot prove process ownership safely.",
+  {
+    profile_id: z.string().optional(),
+    profile_query: z.string().optional(),
+    exact: z.boolean().optional(),
+    dry_run: z.boolean().optional(),
+  },
+  async ({ profile_id, profile_query, exact, dry_run }) => {
+    const profile = await resolveProfile({ profile_id, profile_query, exact });
+    const inspection = await staleProfileProcesses(profile.id);
+    return text({
+      profile: { id: profile.id, name: profile.name },
+      running_tracked: inspection.running.some((r) => r.profile_id === profile.id),
+      tracked_pids: inspection.tracked_pids,
+      dry_run: true,
+      requested_dry_run: dry_run ?? true,
+      termination_supported: false,
+      stale_count: inspection.stale.length,
+      stale_pids: inspection.stale.map((p) => p.pid),
+      killed_pids: [],
+      errors: [],
+      note: "PID-only termination is disabled; stop a tracked profile through Launcher ownership APIs.",
+    });
+  },
 );
 
 server.tool("list_fingerprints", "List the fingerprint library entries.", {}, async () =>
@@ -434,6 +1109,80 @@ server.tool(
   async ({ id }) => text(await api(`/proxies/${id}`, { method: "DELETE" })),
 );
 
+// ---- extensions ----
+
+server.tool(
+  "list_extensions",
+  "Extensions in the library, with ids to pass to create_profile / edit_profile.",
+  {},
+  async () => text(await api("/extensions")),
+);
+
+server.tool(
+  "add_extension",
+  "Add an extension. `url` takes a Web Store page, a bare extension id, or a direct .crx/.zip link — the launcher downloads it. `path` takes a local file or unpacked folder.",
+  { url: z.string().optional(), path: z.string().optional() },
+  async (args) => text(await api("/extensions", { method: "POST", body: args })),
+);
+
+server.tool(
+  "delete_extension",
+  "Remove an extension from the library. Profiles that named it stop loading it on their next start.",
+  { id: z.string() },
+  async ({ id }) => text(await api(`/extensions/${id}`, { method: "DELETE" })),
+);
+
+// ---- bookmarks ----
+
+server.tool(
+  "list_bookmarks",
+  "Folder-scoped bookmarks pushed into profiles.",
+  {},
+  async () => text(await api("/bookmarks")),
+);
+
+server.tool(
+  "save_bookmark",
+  "Add or update a bookmark. Bound to a folder it reaches every profile in it; folder '' means every profile. Applied on each profile's next launch.",
+  {
+    id: z.string().optional(),
+    url: z.string(),
+    title: z.string().optional(),
+    folder: z.string().optional(),
+  },
+  async (args) => text(await api("/bookmarks", { method: "POST", body: args })),
+);
+
+server.tool(
+  "delete_bookmark",
+  "Delete a bookmark; it leaves its profiles on their next launch.",
+  { id: z.string() },
+  async ({ id }) => text(await api(`/bookmarks/${id}`, { method: "DELETE" })),
+);
+
+// ---- trash ----
+
+server.tool(
+  "list_trash",
+  "Deleted profiles still restorable, with the day each one expires.",
+  {},
+  async () => text(await api("/trash")),
+);
+
+server.tool(
+  "restore_profile",
+  "Bring a deleted profile back under its own id, with its cookies and logins.",
+  { id: z.string() },
+  async ({ id }) => text(await api(`/trash/${id}/restore`, { method: "POST" })),
+);
+
+server.tool(
+  "purge_profile",
+  "Delete a trashed profile for good. There is nothing after this.",
+  { id: z.string() },
+  async ({ id }) => text(await api(`/trash/${id}`, { method: "DELETE" })),
+);
+
 server.tool(
   "export_cookies",
   "Export a profile's cookies (decrypted).",
@@ -457,8 +1206,12 @@ server.tool(
   { profile_id: z.string(), url: z.string(), headless: z.boolean().optional() },
   async ({ profile_id, url, headless }) => {
     const page = await pageFor(profile_id, { headless: !!headless });
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    return text({ url: page.url(), title: await page.title() });
+    const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    return text({
+      url: page.url(),
+      title: await page.title(),
+      challenge: await updateChallengeStatus(profile_id, page, response, "browser_navigate"),
+    });
   },
 );
 
@@ -1303,6 +2056,121 @@ server.tool(
     });
     await client.detach().catch(() => {});
     return text({ offline: !!offline, latency_ms: latency_ms ?? 0, download_kbps: download_kbps ?? 0, upload_kbps: upload_kbps ?? 0 });
+  },
+);
+
+// ---- human input (Motion domain) ----
+//
+// Prefer over browser_click / browser_type where a site watches how input
+// arrives. They cost real time, which is the point.
+
+server.tool(
+  "human_move",
+  "Move the pointer to an element (or a point) along a human trajectory. Give either selector or x+y.",
+  {
+    profile_id: z.string(),
+    selector: z.string().optional(),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    offset_x: z.number().optional(),
+    offset_y: z.number().optional(),
+  },
+  async ({ profile_id, selector, x, y, offset_x, offset_y }) => {
+    const page = await pageFor(profile_id);
+    const m = await motionFor(profile_id);
+    const t = await pointOf(page, { selector, x, y, offset_x, offset_y });
+    const ms = await glide(m, page, t);
+    return text({ x: t.x, y: t.y, duration_ms: ms });
+  },
+);
+
+server.tool(
+  "human_click",
+  "Move to an element (or a point) and click it the way a person does. Give either selector or x+y.",
+  {
+    profile_id: z.string(),
+    selector: z.string().optional(),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    offset_x: z.number().optional(),
+    offset_y: z.number().optional(),
+    button: z.enum(["left", "middle", "right"]).optional(),
+    click_count: z.number().int().min(1).max(3).optional(),
+  },
+  async ({ profile_id, selector, x, y, offset_x, offset_y, button, click_count }) => {
+    const page = await pageFor(profile_id);
+    const m = await motionFor(profile_id);
+    const t = await pointOf(page, { selector, x, y, offset_x, offset_y });
+    const ms = await glide(m, page, t);
+    await m.session.send("Motion.tap", {
+      button: button ?? "left",
+      clickCount: click_count ?? 1,
+    });
+    return text({ clicked: selector ?? `${t.x},${t.y}`, duration_ms: ms });
+  },
+);
+
+server.tool(
+  "human_type",
+  "Type text into whatever currently has focus, key by key with human timing. Use human_fill to focus a field first.",
+  {
+    profile_id: z.string(),
+    text: z.string(),
+    allow_typos: z.boolean().optional(),
+  },
+  async ({ profile_id, text: value, allow_typos }) => {
+    const page = await pageFor(profile_id);
+    const m = await motionFor(profile_id);
+    await ensurePointer(m, page);
+    const r = await m.session.send("Motion.enterText", {
+      text: value,
+      allowTypos: !!allow_typos,
+    });
+    return text({ typed: value.length, duration_ms: r?.durationMs ?? 0 });
+  },
+);
+
+server.tool(
+  "human_fill",
+  "Click a field and type into it, both humanly. The one to reach for on a form.",
+  {
+    profile_id: z.string(),
+    selector: z.string(),
+    text: z.string(),
+    // Triple-clicks to select first; without it the text is appended.
+    clear: z.boolean().optional(),
+    allow_typos: z.boolean().optional(),
+  },
+  async ({ profile_id, selector, text: value, clear, allow_typos }) => {
+    const page = await pageFor(profile_id);
+    const m = await motionFor(profile_id);
+    const t = await targetOf(page, selector);
+    const moved = await glide(m, page, t);
+    await m.session.send("Motion.tap", { button: "left", clickCount: clear ? 3 : 1 });
+    const r = await m.session.send("Motion.enterText", {
+      text: value,
+      allowTypos: !!allow_typos,
+    });
+    return text({
+      filled: selector,
+      at: `${t.x},${t.y}`,
+      move_ms: moved,
+      type_ms: r?.durationMs ?? 0,
+    });
+  },
+);
+
+server.tool(
+  "human_release_pointer",
+  "Drop this profile's pointer. Rarely needed — the next human_* call makes a new one.",
+  { profile_id: z.string() },
+  async ({ profile_id }) => {
+    const m = motion.get(profile_id);
+    if (m?.pointer) {
+      await m.session.send("Motion.destroyPointer").catch(() => {});
+      m.pointer = false;
+    }
+    return text("pointer released");
   },
 );
 
