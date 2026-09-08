@@ -235,6 +235,8 @@ async fn list_profiles() -> ApiResult {
                 "created_at": m.created_at,
                 "pinned": m.pinned,
                 "folder": m.folder,
+                "color": m.color,
+                "extensions": m.extensions,
                 "running": r.is_some(),
                 "pid": r.map(|x| x.pid),
                 "cdp": r.and_then(|x| x.cdp.clone()),
@@ -288,6 +290,10 @@ struct CreateReq {
     /// Proxy string: added to store + full-tested, bound by id.
     proxy: Option<String>,
     folder: Option<String>,
+    /// Icon and omnibox-pill accent, `#rrggbb`. Omitted = derived from the name.
+    color: Option<String>,
+    /// Extension-library ids to load at launch (`GET /extensions`).
+    extensions: Option<Vec<String>>,
     fingerprint: Value,
     launch: Option<Value>,
     /// Reserved for backward-compatible error reporting; not implemented.
@@ -343,6 +349,13 @@ async fn persist_created(folder_override: Option<String>, body: CreateReq) -> Ap
 
     let folder = folder_override.or(body.folder).unwrap_or_default();
     let mut meta = json!({ "id": "", "folder": folder });
+    if let Some(c) = body.color.as_ref().filter(|c| !c.is_empty()) {
+        meta["color"] = json!(c);
+    }
+    if let Some(ids) = body.extensions.as_ref() {
+        validate_extension_ids(ids)?;
+        meta["extensions"] = json!(ids);
+    }
     if let Some(pid) = body.proxy_id.as_ref() {
         meta["proxy_id"] = json!(pid);
     } else if let Some(pstr) = body.proxy.as_ref() {
@@ -614,6 +627,7 @@ async fn create_temporary(Json(body): Json<TempReq>) -> ApiResult {
     )
     .map_err(|error| profile_api_error(error, StatusCode::BAD_REQUEST))?;
     cfg.insert("name".into(), json!(normalized_name));
+    crate::ensure_default_noise(&mut cfg);
     apply_temp_noise_override(&mut cfg, body.noise)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     apply_temp_object_override(&mut cfg, "launch", body.launch)
@@ -641,13 +655,15 @@ async fn create_temporary(Json(body): Json<TempReq>) -> ApiResult {
     })))
 }
 
+/// Into the trash, like the UI's delete. Temporary profiles are torn down by
+/// the Tracker and never reach it.
 async fn delete_profile(Path(id): Path<String>) -> ApiResult {
     let _claim = crate::profile::begin_user_mutation([&id], "delete this profile")
         .map_err(|error| profile_api_error(error, StatusCode::INTERNAL_SERVER_ERROR))?;
-    crate::profile::delete(&id)
-        .map_err(|error| profile_api_error(error, StatusCode::INTERNAL_SERVER_ERROR))?;
+    crate::trash::move_to_trash(&id)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     crate::notify_store_changed("profiles");
-    Ok(Json(json!({ "deleted": true, "id": id })))
+    Ok(Json(json!({ "deleted": true, "id": id, "trashed": true })))
 }
 
 #[derive(Deserialize)]
@@ -660,8 +676,34 @@ struct EditReq {
     proxy_id: Option<String>,
     /// Proxy string: stored + tested, then bound.
     proxy: Option<String>,
+    /// `#rrggbb`; "" goes back to the name-derived colour.
+    color: Option<String>,
+    /// Replaces the whole list; `[]` loads none.
+    extensions: Option<Vec<String>>,
     /// Replace stored fingerprint verbatim.
     fingerprint: Option<Value>,
+}
+
+/// Reject unknown ids rather than writing a profile that launches without them.
+fn validate_extension_ids(ids: &[String]) -> Result<(), ApiError> {
+    let known: std::collections::HashSet<String> = crate::extensions::list()
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .into_iter()
+        .map(|e| e.id)
+        .collect();
+    let missing: Vec<&str> = ids
+        .iter()
+        .filter(|id| !known.contains(*id))
+        .map(|s| s.as_str())
+        .collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(err(
+            StatusCode::BAD_REQUEST,
+            format!("no such extension: {}", missing.join(", ")),
+        ))
+    }
 }
 
 /// Edit profile; only provided fields change. Returns the updated profile.
@@ -696,6 +738,14 @@ async fn edit_profile(Path(id): Path<String>, Json(body): Json<EditReq>) -> ApiR
         stored.meta.proxy_id = Some(s.id);
         stored.meta.inline_proxy = None;
         crate::notify_store_changed("proxies");
+    }
+    if let Some(c) = body.color.as_ref() {
+        // "" is how a caller asks for the derived colour back.
+        stored.meta.color = (!c.is_empty()).then(|| c.clone());
+    }
+    if let Some(ids) = body.extensions.as_ref() {
+        validate_extension_ids(ids)?;
+        stored.meta.extensions = ids.clone();
     }
 
     crate::profile::save_raw(&mut stored)
@@ -1041,6 +1091,126 @@ async fn list_proxies() -> ApiResult {
     Ok(Json(json!(out)))
 }
 
+// ---- extensions ----
+
+fn extension_json(e: &crate::extensions::ExtensionEntry, with_icon: bool) -> Value {
+    json!({
+        "id": e.id,
+        "name": e.name,
+        "version": e.version,
+        "description": e.description,
+        "size_bytes": e.size_bytes,
+        "added_at": e.added_at,
+        // Data URLs run to hundreds of kilobytes each; a listing of thirty
+        // extensions is not the place for them.
+        "icon": with_icon.then(|| e.icon.clone()),
+    })
+}
+
+async fn list_extensions() -> ApiResult {
+    let list = crate::extensions::list()
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let out: Vec<Value> = list.iter().map(|e| extension_json(e, false)).collect();
+    Ok(Json(json!(out)))
+}
+
+#[derive(Deserialize)]
+struct AddExtensionReq {
+    /// Web Store page, a bare extension id, or a direct .crx / .zip link.
+    url: Option<String>,
+    /// Local .crx / .zip file, or an unpacked folder, on this machine.
+    path: Option<String>,
+}
+
+/// Add to the library. The response carries the icon, since the caller has
+/// just asked for exactly this one.
+async fn add_extension(Json(body): Json<AddExtensionReq>) -> ApiResult {
+    let entry = match (body.url.as_deref(), body.path.as_deref()) {
+        (Some(u), _) if !u.is_empty() => crate::extensions::import_url(u)
+            .await
+            .map_err(|e| err(StatusCode::BAD_REQUEST, format!("{e:#}")))?,
+        (_, Some(p)) if !p.is_empty() => {
+            crate::extensions::import(std::path::Path::new(p))
+                .map_err(|e| err(StatusCode::BAD_REQUEST, format!("{e:#}")))?
+        }
+        _ => return Err(err(StatusCode::BAD_REQUEST, "`url` or `path` required")),
+    };
+    crate::notify_store_changed("extensions");
+    Ok(Json(extension_json(&entry, true)))
+}
+
+async fn delete_extension(Path(id): Path<String>) -> ApiResult {
+    crate::extensions::delete(&id)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    crate::notify_store_changed("extensions");
+    Ok(Json(json!({ "deleted": true, "id": id })))
+}
+
+// ---- bookmarks ----
+
+async fn list_bookmarks() -> ApiResult {
+    let list = crate::bookmarks::list()
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::to_value(list).unwrap_or(Value::Null)))
+}
+
+#[derive(Deserialize)]
+struct BookmarkReq {
+    /// Present = update that bookmark; absent = a new one.
+    id: Option<String>,
+    url: String,
+    /// Blank uses the address itself.
+    title: Option<String>,
+    /// Launcher folder; "" (or absent) means every profile.
+    folder: Option<String>,
+}
+
+/// Upsert. Profiles pick the change up on their next launch, not immediately —
+/// the bookmarks file is written just before the browser reads it.
+async fn save_bookmark(Json(body): Json<BookmarkReq>) -> ApiResult {
+    let saved = crate::bookmarks::save(crate::bookmarks::Bookmark {
+        id: body.id.unwrap_or_default(),
+        title: body.title.unwrap_or_default(),
+        url: body.url,
+        folder: body.folder.unwrap_or_default(),
+    })
+    .map_err(|e| err(StatusCode::BAD_REQUEST, e.to_string()))?;
+    crate::notify_store_changed("bookmarks");
+    Ok(Json(serde_json::to_value(saved).unwrap_or(Value::Null)))
+}
+
+async fn delete_bookmark(Path(id): Path<String>) -> ApiResult {
+    crate::bookmarks::delete(&id)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    crate::notify_store_changed("bookmarks");
+    Ok(Json(json!({ "deleted": true, "id": id })))
+}
+
+// ---- trash ----
+
+async fn list_trash() -> ApiResult {
+    let list = crate::trash::list()
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::to_value(list).unwrap_or(Value::Null)))
+}
+
+/// Puts the profile back under its own id, so anything that referenced it
+/// still points at it.
+async fn restore_trash(Path(id): Path<String>) -> ApiResult {
+    let meta = crate::trash::restore(&id)
+        .map_err(|e| err(StatusCode::NOT_FOUND, e.to_string()))?;
+    crate::notify_store_changed("profiles");
+    Ok(Json(serde_json::to_value(meta).unwrap_or(Value::Null)))
+}
+
+/// Deletes the archive for good. There is nothing after this.
+async fn purge_trash(Path(id): Path<String>) -> ApiResult {
+    crate::trash::purge(&id)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    crate::notify_store_changed("trash");
+    Ok(Json(json!({ "purged": true, "id": id })))
+}
+
 async fn list_folders() -> ApiResult {
     let metas = crate::profile::list_all().map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let mut set = std::collections::BTreeSet::new();
@@ -1136,6 +1306,13 @@ pub async fn serve(secret: String, port: u16) {
         .route("/startup", get(get_startup).put(configure_startup))
         .route("/proxies", get(list_proxies).post(add_proxy))
         .route("/proxies/:id", delete(delete_proxy))
+        .route("/extensions", get(list_extensions).post(add_extension))
+        .route("/extensions/:id", delete(delete_extension))
+        .route("/bookmarks", get(list_bookmarks).post(save_bookmark))
+        .route("/bookmarks/:id", delete(delete_bookmark))
+        .route("/trash", get(list_trash))
+        .route("/trash/:id", delete(purge_trash))
+        .route("/trash/:id/restore", post(restore_trash))
         .route_layer(middleware::from_fn(auth));
 
     let app = Router::new()

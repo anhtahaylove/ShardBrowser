@@ -153,6 +153,7 @@ class Browser:
             self.runtime.chromium_version,
             self.runtime.grease_brand,
             self.runtime.grease_version,
+            self.runtime.tls,
         )
         apply_noise_seeds(profile.config, profile.id)
         fp_file = udd / "fingerprint.json"

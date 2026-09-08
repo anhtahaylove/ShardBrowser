@@ -1,8 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main"],
+  "description": "Capability for the main window and the floating panels",
+  "windows": [
+    "main",
+    "sync-panel",
+    "helper-panel"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
@@ -14,7 +18,15 @@
     "opener:default",
     {
       "identifier": "opener:allow-open-path",
-      "allow": [{ "path": "$HOME/**" }]
+      "allow": [
+        { "path": "$HOME/**" },
+        { "path": "$APPCONFIG/**" },
+        { "path": "/Volumes/**" },
+        { "path": "/media/**" },
+        { "path": "/mnt/**" },
+        { "path": "?:/**" },
+        { "path": "?:\\**" }
+      ]
     },
     "dialog:default"
   ]

@@ -22,6 +22,13 @@ pub struct ProfileMeta {
     /// current-session uptime when the profile is running.
     #[serde(default)]
     pub total_runtime_ms: u64,
+    /// Icon accent, `#rrggbb`. None = derived from the name, which is what the
+    /// browser does on its own.
+    #[serde(default)]
+    pub color: Option<String>,
+    /// Extension ids from the library, loaded at launch.
+    #[serde(default)]
+    pub extensions: Vec<String>,
 }
 
 /// On-disk `<profiles_dir>/<id>.json`: FingerprintConfig + `_meta` envelope.
@@ -63,6 +70,12 @@ pub struct StoredMeta {
     /// Hidden from listings; auto-deleted on close.
     #[serde(default, skip_serializing_if = "is_false")]
     pub temporary: bool,
+    /// Icon accent, `#rrggbb`; absent = derived from the name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// Extension ids from the library.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extensions: Vec<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -509,6 +522,8 @@ pub fn list_all() -> Result<Vec<ProfileMeta>> {
             pinned: stored.meta.pinned,
             folder: stored.meta.folder,
             total_runtime_ms: stored.meta.total_runtime_ms,
+            color: stored.meta.color,
+            extensions: stored.meta.extensions,
         });
     }
     // Pinned first, then newest-first by created_at; name fallback for same-second ties.
@@ -791,6 +806,8 @@ pub fn clone_profile(id: &str) -> Result<ProfileMeta> {
         pinned: false,
         folder: src.meta.folder,
         total_runtime_ms: 0,
+        color: src.meta.color,
+        extensions: src.meta.extensions,
     })
 }
 
@@ -890,7 +907,12 @@ pub fn delete_folder(name: &str, delete_profiles: bool) -> Result<usize> {
         let result = if let Some(body) = body {
             atomic_write(&path, &body)
         } else {
-            delete(&id)
+            // Through the trash, like every other delete — a folder wiped by
+            // mistake is exactly the case the week of retention is there for.
+            match crate::trash::move_to_trash(&id) {
+                Ok(_) => Ok(()),
+                Err(_) => delete(&id),
+            }
         };
         result.with_context(|| {
             format!("folder deletion partially applied ({applied}/{total} profiles updated)")
