@@ -1,8 +1,12 @@
+import { useEffect } from "react";
+
 import { TitleBar } from "../widgets/TitleBar/TitleBar";
 import { Sidebar } from "../widgets/Sidebar/Sidebar";
 import { FirstRunGate } from "../widgets/FirstRunGate/FirstRunGate";
 import { ToastHost } from "../widgets/ToastHost/ToastHost";
 import { ConfirmHost } from "../widgets/ConfirmHost/ConfirmHost";
+
+import { PassphraseHost } from "../widgets/PassphraseHost/PassphraseHost";
 import { StarModal } from "../widgets/StarModal/StarModal";
 import { HelperWatcher } from "../widgets/HelperWatcher";
 import { WhatsNewGate } from "../widgets/WhatsNewGate";
@@ -17,9 +21,13 @@ import { SettingsPage } from "../pages/settings";
 import { PatchLogPage } from "../pages/patchlog";
 import { useNav } from "../shared/model/navigation";
 
+import { useTeam } from "../entities/team";
+
 export function App() {
   const section = useNav((s) => s.section);
-
+  // Profile rows ask whether team actions apply; load it once here.
+  const loadTeam = useTeam((s) => s.refresh);
+  useEffect(() => { void loadTeam(); }, [loadTeam]);
 
   return (
     <>
@@ -45,6 +53,8 @@ export function App() {
           </main>
           <ToastHost />
           <ConfirmHost />
+
+      <PassphraseHost />
           <StarModal />
         </div>
       </FirstRunGate>

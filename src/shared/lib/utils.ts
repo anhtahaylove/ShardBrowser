@@ -93,3 +93,18 @@ export const isDcIsp = (name: string) => /datacenter|isp/i.test(name);
 export const availCode = (name: string) => (/datacenter/i.test(name) ? "dc" : /isp/i.test(name) ? "isp" : "");
 
 export const readTextFile = (path: string) => invoke<string>("read_text_file", { path });
+
+/**
+ * Error text safe to show in the UI.
+ *
+ * Backend errors can quote the request that failed, and that request may carry
+ * the API token. Toasts get screenshotted and pasted into chats, so scrub the
+ * credential before it is ever rendered.
+ */
+export const safeUiError = (error: unknown) => {
+  const text = error instanceof Error ? error.message : String(error);
+  return text
+    .replace(/Bearer\s+[^\s"']+/gi, "Bearer ***")
+    .replace(/("SHARDX_TOKEN"\s*:\s*")[^"]*(")/gi, "$1***$2")
+    .replace(/SHARDX_TOKEN\s*=\s*[^\s;]+/gi, "SHARDX_TOKEN=***");
+};

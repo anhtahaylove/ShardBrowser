@@ -49,3 +49,25 @@ export const cookiesExportToFile = (profileId: string, path: string) => invoke<n
 export const cookiesImport = (profileId: string, cookies: any[]) => invoke<number>("cookies_import", { profileId, cookies });
 export const enrichPicksForPreset = (presetId: string) => invoke<{ hardware_concurrency?: number; device_memory?: number; platform_version?: string }>("enrich_picks_for_preset", { presetId });
 export const hostPlatform = () => invoke<string>("host_platform");
+
+/** What the team server holds for a profile, or null if it has nothing. */
+export type RemoteSnapshot = { version: number; container_bytes: number; sha256?: string };
+export type PushResult = { version: number; container_bytes: number; sha256: string };
+
+export const profileSyncStatus = (profileId: string) =>
+  invoke<RemoteSnapshot | null>("profile_sync_status", { profileId });
+/** `baseVersion` is the version being replaced; the server refuses a stale base. */
+export const profileSyncPush = (profileId: string, passphrase: string, baseVersion: number) =>
+  invoke<PushResult>("profile_sync_push", { profileId, passphrase, baseVersion });
+export const profileSyncPull = (profileId: string, passphrase: string) =>
+  invoke<number>("profile_sync_pull", { profileId, passphrase });
+
+export type BackupResult = { file_bytes: number; sha256: string };
+
+export const profileBackupCreate = (profileId: string, destPath: string, passphrase: string) =>
+  invoke<BackupResult>("profile_backup_create", { profileId, destPath, passphrase });
+/** Validates the container before a passphrase is asked for. */
+export const profileBackupInspect = (srcPath: string) =>
+  invoke<unknown>("profile_backup_inspect", { srcPath });
+export const profileBackupRestore = (profileId: string, srcPath: string, passphrase: string) =>
+  invoke<number>("profile_backup_restore", { profileId, srcPath, passphrase });

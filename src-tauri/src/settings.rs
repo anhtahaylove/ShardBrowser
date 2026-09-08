@@ -38,6 +38,12 @@ pub struct Settings {
     /// Keep the main window hidden when it was launched by the startup entry.
     #[serde(default = "default_start_minimized")]
     pub start_minimized: bool,
+    /// True when the payload actually carried the two startup fields above.
+    /// Serde cannot tell "absent" from "false" for a plain bool, and a save
+    /// that omits them must leave the login registration alone rather than
+    /// read the defaults as a request to turn it off. Never stored.
+    #[serde(default, skip_serializing)]
+    pub startup_fields_present: bool,
     /// Appended to every launch, one per line. Applied last, so a repeat wins.
     #[serde(default)]
     pub extra_args: String,
@@ -100,6 +106,7 @@ pub fn load() -> Result<Settings> {
             minimize_to_tray: default_minimize_to_tray(),
             launch_at_login: false,
             start_minimized: default_start_minimized(),
+            startup_fields_present: false,
             extra_args: String::new(),
             data_root: None,
             api_enabled: default_api_enabled(),

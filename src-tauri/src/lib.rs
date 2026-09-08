@@ -1673,6 +1673,13 @@ fn settings_save(app: tauri::AppHandle, mut value: settings::Settings) -> Result
         if value.api_secret.is_empty() {
             value.api_secret = cur.api_secret;
         }
+        // Startup registration is a desktop-integration fact, not a form field.
+        // A client that omits these (an older UI, or a partial save) must not
+        // silently unregister the launcher from login.
+        if !value.startup_fields_present {
+            value.launch_at_login = cur.launch_at_login;
+            value.start_minimized = cur.start_minimized;
+        }
     }
     // `startup::save` persists the settings and reconciles the login entry.
     startup::save(&app, &value)?;

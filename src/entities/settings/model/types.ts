@@ -8,6 +8,10 @@ export type Settings = {
   api_secret?: string;
   /** Shard Helper: offer to fill forms a generated identity fits. */
   helper_enabled?: boolean;
+  /** Start ShardX when the user signs in. */
+  launch_at_login?: boolean;
+  /** Start hidden in the tray rather than showing the window. */
+  start_minimized?: boolean;
   /** Which field kinds it reacts to. Empty means all of them. */
   helper_triggers?: string[];
   /** Profile's camera is ShardX's rather than the machine's. */

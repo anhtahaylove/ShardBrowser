@@ -11,6 +11,7 @@ import type { Settings, ApiInfo } from "../../entities/settings";
 import { HELPER_KINDS } from "../../entities/settings";
 import { settingsGet, settingsSave, apiInfo, apiRegenerateToken, mcpDownload } from "../../entities/settings";
 import { DataRootCard } from "../../features/manage-profiles/ui/DataRootCard";
+import { TeamCard } from "../../features/manage-team/ui/TeamCard";
 
 function SettingsCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -63,6 +64,29 @@ export function SettingsPage() {
       <div className="mb-3.5 flex items-end justify-between gap-4">
         <h1 className="m-0 text-title-h5 text-text-strong-950">Settings</h1>
       </div>
+
+      <SettingsCard title="Startup">
+        <p className="m-0 mb-2 text-paragraph-xs text-text-soft-400">
+          Useful when profiles are launched by the automation API: ShardX is
+          already running and waiting when the first request arrives.
+        </p>
+        <Switch
+          label="Start ShardX when I sign in"
+          checked={s.launch_at_login ?? false}
+          onChange={(checked) => setS({ ...s, launch_at_login: checked })}
+        />
+        <div className="mt-2">
+          <Switch
+            label="Start hidden in the tray"
+            checked={s.start_minimized ?? false}
+            onChange={(checked) => setS({ ...s, start_minimized: checked })}
+          />
+        </div>
+      </SettingsCard>
+
+      <SettingsCard title="Team">
+        <TeamCard />
+      </SettingsCard>
 
       <SettingsCard title="Proxy geo checker">
         <p className="m-0 mb-2 text-paragraph-xs text-text-soft-400">

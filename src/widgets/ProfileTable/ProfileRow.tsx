@@ -6,6 +6,7 @@ import type { ContextItem } from "../../shared/types";
 import { CountryFlag } from "../../shared/ui/CountryFlag";
 import { fmtTs, fmtUptime } from "../../shared/lib/utils";
 import { useProfile, type ProfileMeta } from "../../entities/profile";
+import { useTeam, canSyncProfiles } from "../../entities/team";
 import type { ProxyEntry } from "../../entities/proxy";
 import { ProfileInlineEditor, ProfileRowActions } from "../../features/manage-profiles";
 
@@ -31,6 +32,11 @@ export function ProfileRow({ profile, proxy, onMenu }: {
   const setFolderModal = useProfile((s) => s.setFolderModal);
   const setProfileFolder = useProfile((s) => s.setProfileFolder);
   const exportCookies = useProfile((s) => s.exportCookies);
+  const backupProfile = useProfile((s) => s.backupProfile);
+  const restoreProfile = useProfile((s) => s.restoreProfile);
+  const pushProfile = useProfile((s) => s.pushProfile);
+  const pullProfile = useProfile((s) => s.pullProfile);
+  const teamReady = useTeam(canSyncProfiles);
   const importCookies = useProfile((s) => s.importCookies);
 
   // Shift-presses are handled in mousedown only: a click on the checkbox's
@@ -47,6 +53,16 @@ export function ProfileRow({ profile, proxy, onMenu }: {
     { label: "Move to folder…", onClick: () => setFolderModal({ profileId: p.id }) },
     ...(p.folder
       ? [{ label: "Remove from folder", onClick: () => setProfileFolder(p.id, "") }]
+      : []),
+    { sep: true, label: "", onClick: () => {} },
+    { label: "Back up (encrypted)…", onClick: () => backupProfile(p) },
+    { label: "Restore from backup…", onClick: () => restoreProfile(p) },
+    ...(teamReady
+      ? [
+          { sep: true, label: "", onClick: () => {} },
+          { label: "Push to team", onClick: () => pushProfile(p) },
+          { label: "Pull from team", onClick: () => pullProfile(p) },
+        ]
       : []),
     { sep: true, label: "", onClick: () => {} },
     { label: "Export cookies", onClick: () => exportCookies(p) },

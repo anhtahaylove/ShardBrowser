@@ -3,8 +3,9 @@ import { open, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { toast } from "../../../shared/lib/toast";
 import { confirmModal } from "../../../shared/lib/confirm";
+import { passphraseModal } from "../../../shared/model/passphrase";
 import { clip } from "../../../shared/lib/clipboard";
-import { readTextFile } from "../../../shared/lib/utils";
+import { readTextFile, fmtBytes, safeUiError } from "../../../shared/lib/utils";
 import { storeBus } from "../../../shared/lib/storeBus";
 import { proxyList, type ProxyEntry } from "../../proxy";
 import { fingerprintList, type FingerprintEntry } from "../../fingerprint";
@@ -14,6 +15,8 @@ import {
   profileSetPin, profileSetFolder, profileBindProxy, profileImport,
   profileCreateFromTemplate, processList, processKill, launch, syncLaunch,
   folderDelete, cookiesExportToFile, cookiesImport,
+  profileSyncStatus, profileSyncPush, profileSyncPull,
+  profileBackupCreate, profileBackupInspect, profileBackupRestore,
 } from "../model/api";
 import { defaultForm, fromStored, toStored } from "../model/form";
 
@@ -104,6 +107,10 @@ export type ProfileStore = {
   cloneProfile: (id: string) => Promise<void>;
   togglePin: (p: ProfileMeta) => Promise<void>;
   exportCookies: (p: ProfileMeta) => Promise<void>;
+  backupProfile: (p: ProfileMeta) => Promise<void>;
+  restoreProfile: (p: ProfileMeta) => Promise<void>;
+  pushProfile: (p: ProfileMeta) => Promise<void>;
+  pullProfile: (p: ProfileMeta) => Promise<void>;
   importCookies: (p: ProfileMeta) => Promise<void>;
 
   setProfileFolder: (id: string, f: string) => Promise<void>;
@@ -328,6 +335,109 @@ export const useProfile = create<ProfileStore>((set, get) => ({
   togglePin: async (p) => {
     try { await profileSetPin(p.id, !p.pinned); get().reload(); }
     catch (e) { toast.err(String(e)); }
+  },
+
+  // Encrypted single-profile backup to a .shxbak file.
+  backupProfile: async (p) => {
+    if (get().running[p.id]) { toast.err("Stop the profile before backing it up"); return; }
+    try {
+      const path = await saveDialog({
+        defaultPath: `${(p.name || p.id).replace(/[^\w.-]+/g, "_")}.shxbak`,
+        filters: [{ name: "ShardX backup", extensions: ["shxbak"] }],
+      });
+      if (typeof path !== "string") return; // cancelled
+      const passphrase = await passphraseModal({
+        title: "Encrypt backup",
+        message:
+          "This passphrase is the only way to open the backup. It is not stored " +
+          "anywhere and cannot be recovered — if you lose it, the backup is unreadable.",
+        confirm: true,
+      });
+      if (passphrase === null) return;
+      const res = await profileBackupCreate(p.id, path, passphrase);
+      toast.ok(`Backed up ${fmtBytes(res.file_bytes)} — SHA-256 ${res.sha256.slice(0, 12)}…`);
+      const dir = path.replace(/[/\\][^/\\]*$/, "");
+      try { await openPath(dir); } catch {}
+    } catch (e) { toast.err(safeUiError(e)); }
+  },
+
+  restoreProfile: async (p) => {
+    if (get().running[p.id]) { toast.err("Stop the profile before restoring it"); return; }
+    try {
+      const path = await open({
+        multiple: false, directory: false, title: "Select a ShardX backup",
+        filters: [{ name: "ShardX backup", extensions: ["shxbak"] }],
+      });
+      if (typeof path !== "string") return;
+      // Validate the file before asking for a passphrase, so a wrong pick is
+      // caught without the user typing anything.
+      await profileBackupInspect(path);
+      if ((await confirmModal({
+        title: "Restore profile",
+        message:
+          "This replaces the current profile data with the backup's contents. " +
+          "Anything not in the backup is lost.",
+        danger: true,
+        buttons: [{ label: "Cancel", value: false }, { label: "Restore", value: true, danger: true }],
+      })) !== true) return;
+      const passphrase = await passphraseModal({
+        title: "Open backup",
+        message: "Enter the passphrase this backup was created with.",
+      });
+      if (passphrase === null) return;
+      await profileBackupRestore(p.id, path, passphrase);
+      toast.ok("Profile restored");
+      get().reload();
+    } catch (e) { toast.err(safeUiError(e)); }
+  },
+
+  // Push a profile to the team server. The passphrase is the shared secret
+  // between devices: whoever pulls this profile must type the same one.
+  pushProfile: async (p) => {
+    if (get().running[p.id]) { toast.err("Stop the profile before pushing it"); return; }
+    try {
+      // Read the remote version first. Pushing from a stale base is what the
+      // server refuses, and showing the version is how the user learns that
+      // another device published in the meantime.
+      const remote = await profileSyncStatus(p.id);
+      const base = remote?.version ?? 0;
+      const passphrase = await passphraseModal({
+        title: base === 0 ? "Encrypt profile for the team" : `Push over version ${base}`,
+        message:
+          "Everyone who pulls this profile must enter the same passphrase. " +
+          "It is not stored anywhere and cannot be recovered.",
+        confirm: base === 0,
+      });
+      if (passphrase === null) return;
+      const res = await profileSyncPush(p.id, passphrase, base);
+      toast.ok(`Pushed version ${res.version} — ${fmtBytes(res.container_bytes)}`);
+    } catch (e) { toast.err(safeUiError(e)); }
+  },
+
+  // Pull the team's current version over the local profile.
+  pullProfile: async (p) => {
+    if (get().running[p.id]) { toast.err("Stop the profile before pulling it"); return; }
+    try {
+      const remote = await profileSyncStatus(p.id);
+      if (!remote) { toast.err("The team server has no snapshot for this profile yet"); return; }
+      if (!(await confirmModal({
+        title: `Pull version ${remote.version}`,
+        message:
+          "This replaces the current profile data with the team's copy. " +
+          "Anything not in that snapshot is lost.",
+        buttons: [
+          { label: "Cancel", value: false },
+          { label: "Pull and replace", value: true, danger: true },
+        ],
+      }))) return;
+      const passphrase = await passphraseModal({
+        title: "Passphrase for this profile",
+        message: "The passphrase used when this profile was pushed.",
+      });
+      if (passphrase === null) return;
+      const bytes = await profileSyncPull(p.id, passphrase);
+      toast.ok(`Pulled version ${remote.version} — ${fmtBytes(bytes)} restored`);
+    } catch (e) { toast.err(safeUiError(e)); }
   },
 
   exportCookies: async (p) => {
