@@ -10,6 +10,7 @@ export function ProfileInlineEditor() {
   const fingerprints = useProfile((s) => s.fingerprints);
   const saveDraft = useProfile((s) => s.saveDraft);
   const cancelEdit = useProfile((s) => s.cancelEdit);
+  const draftError = useProfile((s) => s.draftError);
 
   if (!draft) return null;
 
@@ -21,6 +22,7 @@ export function ProfileInlineEditor() {
       fingerprints={fingerprints}
       onSave={saveDraft}
       onCancel={cancelEdit}
+      error={draftError}
     />
   );
 }

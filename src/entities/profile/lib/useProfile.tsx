@@ -12,7 +12,7 @@ import { proxyList, type ProxyEntry } from "../../proxy";
 import { fingerprintList, type FingerprintEntry } from "../../fingerprint";
 import type { ProfileMeta, ProfileForm } from "../model/types";
 import {
-  profileList, profileGet, profileSave, profileDelete, profileClone,
+  profileList, profileGet, profileSave, profileValidateName, profileDelete, profileClone,
   profileSetPin, profileSetFolder, profileBindProxy, profileImport,
   profileCreateFromTemplate, processList, processKill, launch, syncLaunch,
   folderDelete, cookiesExportToFile, cookiesImport,
@@ -67,6 +67,8 @@ export type ProfileStore = {
   folder: string;
   expanded: string | null;
   draft: ProfileForm | null;
+  /// Why the open draft could not be saved, shown beside the form.
+  draftError: string | null;
   /// Empty folders persist here until a profile lands in them.
   folderRegistry: string[];
   folderModal: FolderModalTarget | null;
@@ -152,6 +154,7 @@ export const useProfile = create<ProfileStore>((set, get) => ({
   search: "",
   folder: "all",
   expanded: null,
+  draftError: null,
   draft: null,
   folderRegistry: loadFolderRegistry(),
   folderModal: null,
@@ -307,13 +310,17 @@ export const useProfile = create<ProfileStore>((set, get) => ({
     const stored = await profileGet(id);
     set({ draft: fromStored(stored), expanded: id });
   },
-  newProfile: () => set({ draft: defaultForm(), expanded: "__new__" }),
-  cancelEdit: () => set({ expanded: null, draft: null }),
+  newProfile: () => set({ draft: defaultForm(), expanded: "__new__", draftError: null }),
+  cancelEdit: () => set({ expanded: null, draft: null, draftError: null }),
 
   saveDraft: async () => {
     const { draft, fingerprints, folder } = get();
     if (!draft) return;
     try {
+      // Validate before persisting: the backend owns the rule, and a rejected
+      // name must not reach profile_save or the folder assignment below.
+      set({ draftError: null });
+      await profileValidateName(draft.name, draft.id || null);
       const fp = fingerprints.find((g) => g.id === draft.gpu_preset_id) ?? null;
       const saved = await profileSave(toStored(draft, fp));
       await profileBindProxy(saved.id, draft.proxy_id);
@@ -328,7 +335,11 @@ export const useProfile = create<ProfileStore>((set, get) => ({
       get().reload();
       storeBus.emit("profiles");
       toast.ok(draft.id ? "Profile saved" : `Created "${saved.name}"`);
-    } catch (e) { toast.err(String(e)); }
+    } catch (e) {
+      // Shown beside the form, where the offending field is. A toast as well
+      // would be the same message twice, and it would scroll away from it.
+      set({ draftError: safeUiError(e) });
+    }
   },
 
   // Block the Start button until launch() returns. The launch includes

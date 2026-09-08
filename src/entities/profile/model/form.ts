@@ -47,6 +47,10 @@ export const defaultForm = (): ProfileForm => ({
 export function fromStored(stored: any): ProfileForm {
   const f = defaultForm();
   if (!stored) return f;
+  // Keep the document we loaded. The editor only knows the fields it renders,
+  // so anything else on disk (custom_fonts and other launcher-managed or
+  // future keys) would be dropped on save unless we carry it through.
+  f._stored = stored;
   f.id = stored?._meta?.id ?? "";
   f.proxy_id = stored?._meta?.proxy_id ?? null;
   f.name = stored?.name ?? "";
@@ -92,7 +96,11 @@ export function fromStored(stored: any): ProfileForm {
 
 /// Build on-disk FingerprintConfig from library payload + user-edited fields.
 export function toStored(f: ProfileForm, lib: FingerprintEntry | null): any {
-  const base: any = lib && lib.payload ? JSON.parse(JSON.stringify(lib.payload)) : {};
+  // Start from what was on disk so unrendered fields survive the edit; a new
+  // fingerprint library payload is layered on top of it, not instead of it.
+  const prior: any = f._stored ? JSON.parse(JSON.stringify(f._stored)) : {};
+  const libPayload: any = lib && lib.payload ? JSON.parse(JSON.stringify(lib.payload)) : {};
+  const base: any = { ...prior, ...libPayload };
 
   base._meta = {
     id: f.id,

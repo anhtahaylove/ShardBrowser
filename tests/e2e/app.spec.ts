@@ -105,7 +105,7 @@ test("legacy custom-font metadata survives an ordinary profile edit but stays hi
 test("invalid profile names are rejected before profile persistence", async ({ page }) => {
   await gotoMocked(page);
 
-  await page.getByRole("button", { name: "+ New profile" }).click();
+  await page.getByRole("button", { name: "New profile" }).click();
   await page.getByLabel("Profile name").fill("bad/name");
   await page.getByRole("button", { name: "Create profile" }).click();
 
@@ -237,7 +237,7 @@ test("macOS uses Cmd+K and Escape clears then blurs search", async ({ page }) =>
 test("CSSelect supports Arrow, Enter, Space, and Escape without saving", async ({ page }) => {
   await gotoMocked(page);
 
-  await page.getByRole("button", { name: "+ New profile" }).click();
+  await page.getByRole("button", { name: "New profile" }).click();
   const proxySelect = page.locator("label").filter({ has: page.getByText("Proxy", { exact: true }) }).getByRole("combobox").first();
   await proxySelect.focus();
   await proxySelect.press("ArrowDown");

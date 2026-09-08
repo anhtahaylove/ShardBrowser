@@ -28,13 +28,15 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
 }
 
 export function InlineEditor({
-  draft, setDraft, proxies, fingerprints, onSave, onCancel,
+  draft, setDraft, proxies, fingerprints, onSave, onCancel, error,
 }: {
   draft: ProfileForm;
   setDraft: (f: ProfileForm) => void;
   proxies: ProxyEntry[];
   fingerprints: FingerprintEntry[];
   onSave: () => void;
+  /// Save rejection to show inline; the toast alone is too easy to miss.
+  error?: string | null;
   onCancel: () => void;
 }) {
   const f = draft;
@@ -278,7 +280,12 @@ export function InlineEditor({
           />
         </div>
       </div>
-      <div className="mt-4 flex justify-end gap-2.5 border-t border-stroke-soft-200 pt-3.5">
+      <div className="mt-4 flex items-center justify-end gap-2.5 border-t border-stroke-soft-200 pt-3.5">
+        {error && (
+          <p role="alert" className="mr-auto m-0 text-paragraph-xs text-error-base">
+            {error}
+          </p>
+        )}
         <Button variant="neutral" mode="stroke" size="small" onClick={onCancel}>Cancel</Button>
         <Button variant="primary" mode="filled" size="small" onClick={onSave}>
           {f.id ? "Save changes" : "Create profile"}

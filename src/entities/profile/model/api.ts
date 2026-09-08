@@ -4,6 +4,9 @@ import type { ProfileMeta } from "./types";
 export const profileList = () => invoke<ProfileMeta[]>("profile_list");
 export const profileGet = (id: string) => invoke<any>("profile_get", { id });
 export const profileSave = (payload: any) => invoke<ProfileMeta>("profile_save", { payload });
+/// Rejects names the profile directory cannot hold, before anything persists.
+export const profileValidateName = (name: string, id?: string | null) =>
+  invoke<string>("profile_validate_name", { name, id: id || null });
 export const profileDelete = (id: string) => invoke("profile_delete", { id });
 export const profileClone = (id: string) => invoke<ProfileMeta>("profile_clone", { id });
 export const profileSetPin = (id: string, pinned: boolean) => invoke("profile_set_pin", { id, pinned });

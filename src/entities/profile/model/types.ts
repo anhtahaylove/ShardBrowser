@@ -22,6 +22,9 @@ export type ProfileMeta = {
 };
 
 export type ProfileForm = {
+  /** The document this form was loaded from, so a save cannot drop
+   *  fields the editor does not render. Absent for new profiles. */
+  _stored?: any;
   id: string;
   name: string;
   notes: string;
