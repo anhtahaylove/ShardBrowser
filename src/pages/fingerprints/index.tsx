@@ -15,7 +15,7 @@ export function FingerprintsPage() {
 
   return (
     <section className="flex flex-col">
-      <Topbar crumbs={["Library", "Fingerprints"]} search="" onSearch={() => {}} />
+      <Topbar crumbs={["Library", "Fingerprints"]} />
       <div className="mb-3.5 flex items-end justify-between gap-4">
         <h1 className="m-0 text-title-h5 text-text-strong-950">Fingerprint Library</h1>
         <FingerprintToolbar />

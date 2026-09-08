@@ -41,6 +41,9 @@ export function ProfileRow({ profile, proxy, onMenu }: {
   // the reason, rather than silently missing menu items.
   const syncBlocked = useTeam(syncBlockedReason);
   const importCookies = useProfile((s) => s.importCookies);
+  const copyCdpHttpUrl = useProfile((s) => s.copyCdpHttpUrl);
+  const copyDevToolsInspectUrl = useProfile((s) => s.copyDevToolsInspectUrl);
+  const launchError = useProfile((s) => s.launchError[p.id]);
 
   // Shift-presses are handled in mousedown only: a click on the checkbox's
   // <label> reaches the row twice, and applying the range twice would undo it.
@@ -86,6 +89,18 @@ export function ProfileRow({ profile, proxy, onMenu }: {
           },
         ]
       : []),
+    { sep: true, label: "", onClick: () => {} },
+    // Only meaningful while the engine is up and exposing a debugger port.
+    {
+      label: "Copy CDP HTTP URL",
+      onClick: () => { void copyCdpHttpUrl(p.id); },
+      disabledReason: isRunning ? undefined : "Start the profile first",
+    },
+    {
+      label: "Copy DevTools inspect URL",
+      onClick: () => { void copyDevToolsInspectUrl(p.id); },
+      disabledReason: isRunning ? undefined : "Start the profile first",
+    },
     { sep: true, label: "", onClick: () => {} },
     { label: "Export cookies", onClick: () => exportCookies(p) },
     { label: "Import cookies", onClick: () => importCookies(p) },
@@ -154,19 +169,25 @@ export function ProfileRow({ profile, proxy, onMenu }: {
         </div>
         <div>
           <Checkbox
+            aria-label={`Select profile ${p.name}`}
             checked={isSel}
             onChange={() => { if (!shiftPress.current) toggleSelect(p.id); }}
           />
         </div>
-        <div className="min-w-0 cursor-pointer overflow-hidden" onClick={() => { if (!shiftPress.current) expand(p.id); }}>
+        <div className="cell-name min-w-0 cursor-pointer overflow-hidden" title={p.name} onClick={() => { if (!shiftPress.current) expand(p.id); }}>
           <div className="overflow-hidden text-ellipsis whitespace-nowrap text-label-xs text-text-strong-950">
             {p.pinned && (
               <span className="mr-1.5 inline-flex items-center align-middle text-primary-base" title="Pinned">
                 <PinIconApp className="size-3" />
               </span>
             )}
-            {p.name}
+            <span className="name-main">{p.name}</span>
           </div>
+          {launchError && (
+            <div className="launch-error-inline mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap text-paragraph-xs text-error-base" title={launchError}>
+              {launchError}
+            </div>
+          )}
           <div className="mono mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap text-[10.5px] text-text-disabled-300">{p.id.slice(0, 8)}</div>
         </div>
         <div>

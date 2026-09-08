@@ -60,7 +60,7 @@ export function SettingsPage() {
   };
   return (
     <section className="flex flex-col">
-      <Topbar crumbs={["System", "Settings"]} search="" onSearch={() => {}} />
+      <Topbar crumbs={["System", "Settings"]} />
       <div className="mb-3.5 flex items-end justify-between gap-4">
         <h1 className="m-0 text-title-h5 text-text-strong-950">Settings</h1>
       </div>

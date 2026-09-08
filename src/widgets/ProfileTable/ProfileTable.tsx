@@ -69,6 +69,7 @@ export function ProfileTable() {
           <div></div>
           <div>
             <Checkbox
+              aria-label="Select all profiles on this page"
               title="Select all on this page"
               // Header checkbox toggles only visible page rows; other pages preserved.
               checked={allPageSelected}
@@ -114,7 +115,7 @@ export function ProfileTable() {
                   </Button>
                 </div>
               </>
-            ) : folder ? (
+            ) : folder && folder !== "all" ? (
               <>
                 <h3 className="m-0 text-label-sm text-text-strong-950">Folder is empty</h3>
                 <p className="m-0 max-w-[420px] text-paragraph-sm text-text-sub-600">

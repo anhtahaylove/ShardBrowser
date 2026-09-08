@@ -76,7 +76,7 @@ test("desktop-wide actions, theme, and launch errors remain visible", async ({ p
   const profileNameText = page.locator(".cell-name .name-main", { hasText: profileName }).first();
   await expect(profileNameText).toBeVisible();
   await expect.poll(() => profileNameText.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.getByRole("button", { name: "Switch to light theme" }).click();
+  await page.getByRole("tab", { name: "Light" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await page.getByRole("button", { name: `Start profile ${profileName}` }).click();
   await expect(page.locator(".launch-error-inline")).toContainText("fixture browser launch failed");

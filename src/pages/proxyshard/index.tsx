@@ -12,7 +12,7 @@ export function ProxyShardPage() {
 
   return (
     <section className="ps-page flex flex-col">
-      <Topbar crumbs={["Workspace", "ProxyShard"]} search="" onSearch={() => {}} />
+      <Topbar crumbs={["Workspace", "ProxyShard"]} />
 
       <PsAccountMetrics />
 

@@ -11,7 +11,18 @@ export const profileSetFolder = (id: string, folder: string) => invoke("profile_
 export const profileBindProxy = (profileId: string, proxyId: string | null) => invoke("profile_bind_proxy", { profileId, proxyId });
 export const profileImport = (payloads: any[]) => invoke<number>("profile_import", { payloads });
 export const profileCreateFromTemplate = (templateId: string) => invoke<ProfileMeta>("profile_create_from_template", { templateId });
-export const processList = () => invoke<{ profile_id: string; pid: number; uptime_ms: number }[]>("process_list");
+export type CdpInfo = { port: number; http_url: string; ws_url: string | null };
+export type DevtoolsTarget = { devtools_frontend_url: string | null };
+export type DevtoolsContext = {
+  cdp: CdpInfo;
+  targets: DevtoolsTarget[];
+  current: DevtoolsTarget | null;
+};
+
+export const processList = () =>
+  invoke<{ profile_id: string; pid: number; uptime_ms: number; cdp?: CdpInfo }[]>("process_list");
+export const devtoolsContext = (profileId: string) =>
+  invoke<DevtoolsContext>("devtools_context", { profileId });
 export const processKill = (profileId: string) => invoke<boolean>("process_kill", { profileId });
 export const launch = (profileId: string) => invoke<number>("launch", { profileId });
 

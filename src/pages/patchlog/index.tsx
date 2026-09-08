@@ -252,7 +252,7 @@ export function PatchLogPage() {
 
   return (
     <section className="flex flex-col">
-      <Topbar crumbs={["System", "Patch log"]} search="" onSearch={() => {}} />
+      <Topbar crumbs={["System", "Patch log"]} />
 
       <div className="mb-1.5 flex items-start justify-between gap-4">
         <h1 className="m-0 text-title-h5 text-text-strong-950">Patch log</h1>

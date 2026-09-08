@@ -14,6 +14,7 @@ export function ToastHost() {
           className="pointer-events-auto min-w-[280px] max-w-[520px] animate-[toastIn_0.2s_cubic-bezier(.2,.9,.3,1)] shadow-[var(--shadow-md)]"
         >
           <Alert
+            className={t.kind === "err" ? "toast-err" : t.kind === "ok" ? "toast-ok" : "toast-info"}
             status={t.kind === "ok" ? "success" : t.kind === "err" ? "error" : "information"}
             variant="light"
             onClose={() => dismiss(t.id)}

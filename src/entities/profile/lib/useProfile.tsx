@@ -18,6 +18,7 @@ import {
   folderDelete, cookiesExportToFile, cookiesImport,
   profileSyncStatus, profileSyncPush, profileSyncPull,
   profileBackupCreate, profileBackupInspect, profileBackupRestore,
+  devtoolsContext, type CdpInfo,
 } from "../model/api";
 import { defaultForm, fromStored, toStored } from "../model/form";
 
@@ -54,6 +55,9 @@ export type ProfileStore = {
   /// as a truthy flag (any number = running) and as the anchor for the ticking
   /// uptime display in the Status column.
   running: Record<string, number>;
+  runningCdp: Record<string, CdpInfo>;
+  /** Last launch failure per profile, kept on the row until the next attempt. */
+  launchError: Record<string, string>;
   /// Profiles whose `launch()` call is in-flight (pre-flight probes can be slow).
   startBusy: Set<string>;
   selected: Set<string>;
@@ -79,6 +83,8 @@ export type ProfileStore = {
   reload: () => Promise<void>;
   startProcessPolling: () => () => void;
 
+  copyCdpHttpUrl: (id: string) => Promise<void>;
+  copyDevToolsInspectUrl: (id: string) => Promise<void>;
   setSearch: (q: string) => void;
   setFolder: (f: string) => void;
   setDraft: (draft: ProfileForm | null) => void;
@@ -138,6 +144,8 @@ export const useProfile = create<ProfileStore>((set, get) => ({
   fingerprints: new Array<FingerprintEntry>(),
 
   running: {},
+  runningCdp: {},
+  launchError: {},
   startBusy: new Set<string>(),
   selected: new Set<string>(),
 
@@ -157,7 +165,11 @@ export const useProfile = create<ProfileStore>((set, get) => ({
     // A failed load must be retryable, so only an in-flight or successful
     // load short-circuits. Retrying clears the previous error first.
     if (get().status === "loading" || get().status === "ready") return;
-    set({ error: null });
+    // Re-read the folder registry here rather than trusting the value captured
+    // at module-eval time: the store module is imported before bootstrap runs,
+    // so a registry written after that (another window, or the e2e fixture)
+    // would otherwise stay invisible until a reload.
+    set({ error: null, folderRegistry: loadFolderRegistry() });
     set({ status: "loading" });
     try {
       const [profiles, proxies, fingerprints] = await Promise.all([
@@ -198,14 +210,38 @@ export const useProfile = create<ProfileStore>((set, get) => ({
         for (const r of list) {
           next[r.profile_id] = prev[r.profile_id] ?? (now - r.uptime_ms);
         }
+        const cdp: Record<string, CdpInfo> = {};
+        for (const r of list) if (r.cdp) cdp[r.profile_id] = r.cdp;
         const justExited = Object.keys(prev).some((id) => !(id in next));
-        set({ running: next });
+        set({ running: next, runningCdp: cdp });
         if (justExited) get().reload();
       } catch {}
     };
     tick();
     const handle = setInterval(tick, 2000);
     return () => { cancelled = true; clearInterval(handle); };
+  },
+
+  // DevTools handoff: automation users copy these constantly, so they are
+  // first-class actions rather than something to reconstruct by hand.
+  copyCdpHttpUrl: async (id) => {
+    const cdp = get().runningCdp[id];
+    if (!cdp) { toast.err("CDP is not enabled for this running profile"); return; }
+    try {
+      await clip.write(cdp.http_url);
+      toast.ok("Copied CDP HTTP URL");
+    } catch (e) { toast.err(safeUiError(e)); }
+  },
+
+  copyDevToolsInspectUrl: async (id) => {
+    try {
+      const ctx = await devtoolsContext(id);
+      const url = ctx.current?.devtools_frontend_url
+        ?? ctx.targets[0]?.devtools_frontend_url
+        ?? `${ctx.cdp.http_url}/json/list`;
+      await clip.write(url);
+      toast.ok("Copied DevTools inspect URL");
+    } catch (e) { toast.err(safeUiError(e)); }
   },
 
   setSearch: (search) => set({ search }),
@@ -305,12 +341,19 @@ export const useProfile = create<ProfileStore>((set, get) => ({
       return;
     }
     if (get().startBusy.has(p.id)) return;
-    set({ startBusy: new Set([...get().startBusy, p.id]) });
+    // A new attempt supersedes the previous failure.
+    const cleared = { ...get().launchError };
+    delete cleared[p.id];
+    set({ startBusy: new Set([...get().startBusy, p.id]), launchError: cleared });
     try {
       await launch(p.id);
       // Don't optimistically flip `running`; the 2s poll picks up the new child.
     } catch (e) {
-      toast.err(String(e));
+      // A toast disappears; a failed launch needs to stay readable on the row
+      // that failed, next to the button the user just pressed.
+      const message = safeUiError(e);
+      toast.err(message);
+      set({ launchError: { ...get().launchError, [p.id]: message } });
     } finally {
       const n = new Set(get().startBusy);
       n.delete(p.id);

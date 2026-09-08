@@ -7,10 +7,16 @@ export function useContextMenu() {
   const close = () => setMenu(null);
   useEffect(() => {
     if (!menu) return;
-    const dismiss = () => close();
+    // Registered on the next frame: the click that opened the menu is still
+    // propagating to window, and dismissing on it would close the menu
+    // instantly (it never appears for a left-click trigger).
+    let armed = false;
+    const arm = requestAnimationFrame(() => { armed = true; });
+    const dismiss = () => { if (armed) close(); };
     window.addEventListener("click", dismiss);
     window.addEventListener("scroll", dismiss, true);
     return () => {
+      cancelAnimationFrame(arm);
       window.removeEventListener("click", dismiss);
       window.removeEventListener("scroll", dismiss, true);
     };

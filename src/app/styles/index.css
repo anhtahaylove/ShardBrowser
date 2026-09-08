@@ -10,6 +10,13 @@
 /* Generate Tailwind utilities used inside the kit's prebuilt components. */
 @source "../../../node_modules/@proxyshard/shardx-ui-kit/dist";
 
+/* Secondary row actions collapse into the ⋮ menu below this width, so a
+ * narrow window spends its pixels on the profile name instead of a button
+ * strip. The menu always carries the same actions. */
+@theme {
+  --breakpoint-wide: 1600px;
+}
+
 /* Titlebar height — shared CSS var, not a design token. */
 :root {
   --titlebar-h: 30px;

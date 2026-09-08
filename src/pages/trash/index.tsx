@@ -22,7 +22,7 @@ export function TrashPage() {
 
   return (
     <section className="flex flex-col">
-      <Topbar crumbs={["System", "Trash"]} search="" onSearch={() => {}} />
+      <Topbar crumbs={["System", "Trash"]} />
 
       <div className="mb-3.5 flex items-end justify-between gap-4">
         <div>
