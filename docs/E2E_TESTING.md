@@ -28,7 +28,7 @@ the `e2e` build mode.
 
 - Startup/profile loading, inline failures, Retry, and single-flight reloads.
 - Profile/proxy empty states, search shortcuts, responsive actions, and More.
-- Settings dirty/restart state, sticky Save, MCP/Codex action hierarchy.
+- Settings dirty/restart state, sticky Save, MCP action hierarchy.
 - Keyboard behavior for dialogs and `CSSelect`.
 - Updater checking, no update, available, progress, consent, invalid signature,
   and offline failures.
