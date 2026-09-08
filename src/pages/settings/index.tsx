@@ -7,9 +7,12 @@ import { Topbar } from "../../shared/ui/Topbar";
 import { CopyField } from "../../shared/ui/CopyField";
 import { toast } from "../../shared/model/toast";
 import { withUtm } from "../../shared/lib/utils";
-import type { Settings, ApiInfo } from "../../entities/settings";
+import type { Settings, ApiInfo, StartupStatus, McpStatus, CodexMcpStatus } from "../../entities/settings";
 import { HELPER_KINDS } from "../../entities/settings";
-import { settingsGet, settingsSave, apiInfo, apiRegenerateToken, mcpDownload } from "../../entities/settings";
+import { settingsGet, settingsSave, apiInfo, apiRegenerateToken, mcpDownload,
+  startupStatus, mcpStatus as mcpStatusGet, codexMcpStatus } from "../../entities/settings";
+import { StartupCard, McpCard } from "../../features/manage-settings";
+import { safeUiError } from "../../shared/lib/utils";
 import { DataRootCard } from "../../features/manage-profiles/ui/DataRootCard";
 import { TeamCard } from "../../features/manage-team/ui/TeamCard";
 
@@ -35,8 +38,32 @@ export function SettingsPage() {
     api_port: 40325,
   });
   const [api, setApi] = useState<ApiInfo | null>(null);
+  // The saved copy, so "unsaved changes" is a fact rather than a guess.
+  const [baseline, setBaseline] = useState<Settings | null>(null);
+  const [startup, setStartup] = useState<StartupStatus | null>(null);
+  const [startupError, setStartupError] = useState<string | null>(null);
+  const [mcp, setMcp] = useState<McpStatus | null>(null);
+  const [mcpError, setMcpError] = useState<string | null>(null);
+  const [codex, setCodex] = useState<CodexMcpStatus | null>(null);
+  const [codexError, setCodexError] = useState<string | null>(null);
+
   const refreshApi = () => apiInfo().then(setApi).catch(() => {});
-  useEffect(() => { settingsGet().then(setS); refreshApi(); }, []);
+  const refreshStartup = () =>
+    startupStatus().then((v) => { setStartup(v); setStartupError(null); })
+      .catch((e) => setStartupError(safeUiError(e)));
+  const refreshMcp = () =>
+    mcpStatusGet().then((v) => { setMcp(v); setMcpError(null); })
+      .catch((e) => setMcpError(safeUiError(e)));
+  const checkCodex = () =>
+    codexMcpStatus().then((v) => { setCodex(v); setCodexError(null); })
+      .catch((e) => setCodexError(safeUiError(e)));
+
+  useEffect(() => {
+    settingsGet().then((v) => { setS(v); setBaseline(v); });
+    void refreshApi();
+    void refreshStartup();
+    void refreshMcp();
+  }, []);
   const regenToken = async () => {
     try { setApi(await apiRegenerateToken()); toast.ok("Token regenerated"); }
     catch (e) { toast.err(String(e)); }
@@ -55,9 +82,18 @@ export function SettingsPage() {
     finally { setMcpBusy(false); }
   };
   const save = async () => {
-    try { await settingsSave(s); toast.ok("Settings saved"); }
-    catch (e) { toast.err(String(e)); }
+    try {
+      await settingsSave(s);
+      setBaseline({ ...s });
+      // Saving is what registers the startup entry, so re-read the truth.
+      await Promise.all([refreshApi(), refreshStartup()]);
+      toast.ok("Settings saved");
+    } catch (e) { toast.err(safeUiError(e)); }
   };
+
+  const dirty = !!baseline && JSON.stringify(s) !== JSON.stringify(baseline);
+  const restartPending =
+    !!api && ((s.api_enabled ?? true) !== api.enabled || (s.api_port ?? 40325) !== api.port);
   return (
     <section className="flex flex-col">
       <Topbar crumbs={["System", "Settings"]} />
@@ -65,23 +101,20 @@ export function SettingsPage() {
         <h1 className="m-0 text-title-h5 text-text-strong-950">Settings</h1>
       </div>
 
-      <SettingsCard title="Startup">
-        <p className="m-0 mb-2 text-paragraph-xs text-text-soft-400">
-          Useful when profiles are launched by the automation API: ShardX is
-          already running and waiting when the first request arrives.
-        </p>
-        <Switch
-          label="Start ShardX when I sign in"
-          checked={s.launch_at_login ?? false}
-          onChange={(checked) => setS({ ...s, launch_at_login: checked })}
+      <SettingsCard title="Startup &amp; background services">
+        <StartupCard settings={s} onChange={setS} status={startup} error={startupError} />
+      </SettingsCard>
+
+      <SettingsCard title="MCP server">
+        <McpCard
+          status={mcp}
+          statusError={mcpError}
+          codex={codex}
+          codexError={codexError}
+          api={api}
+          onRefresh={async () => { await refreshMcp(); await checkCodex(); }}
+          onCheckCodex={checkCodex}
         />
-        <div className="mt-2">
-          <Switch
-            label="Start hidden in the tray"
-            checked={s.start_minimized ?? false}
-            onChange={(checked) => setS({ ...s, start_minimized: checked })}
-          />
-        </div>
       </SettingsCard>
 
       <SettingsCard title="Team">
@@ -295,17 +328,24 @@ export function SettingsPage() {
         </Button>
       </SettingsCard>
 
-      <div className="mt-3.5">
-        <Button
-          variant="primary"
-          mode="filled"
-          size="small"
-      //    leftIcon={<ShardMini />}
-          onClick={async () => { await save(); refreshApi(); }}
-        >
-          Save settings
-        </Button>
+
+      <div
+        role="region"
+        aria-label="Settings save status"
+        className="sticky bottom-0 z-10 mt-2 flex items-center justify-between gap-3 rounded-lg bg-bg-white-0 px-4 py-3 shadow-[var(--shadow-xs)] ring-1 ring-inset ring-stroke-soft-200"
+      >
+        <div className="flex flex-col gap-0.5">
+          <strong className="text-label-xs text-text-strong-950">
+            {dirty ? "Unsaved changes" : "All changes saved"}
+          </strong>
+          {restartPending && (
+            <span className="text-paragraph-xs text-warning-base">
+              Restart required for Automation API changes
+            </span>
+          )}
+        </div>
+        <Button size="xsmall" onClick={save} disabled={!dirty}>Save settings</Button>
       </div>
-    </section>
+</section>
   );
 }

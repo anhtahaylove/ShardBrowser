@@ -63,4 +63,39 @@ export type ApiInfo = {
   port: number;
   base_url: string;
   token: string;
+  /** Where the API actually bound, which can differ from the requested port. */
+  runtime_base_url?: string | null;
+  /** Set when the listener failed to bind, so readiness can say why. */
+  error?: string | null;
+};
+
+/** Whether the OS runs the Launcher at sign-in for the current user. */
+export type StartupStatus = {
+  registered: boolean;
+  scope: string | null;
+  detail: string | null;
+};
+
+/** Readiness of the on-demand MCP stdio server. */
+export type McpStatus = {
+  path: string | null;
+  installed: boolean;
+  files_downloaded: boolean;
+  lockfile_present: boolean;
+  version: string | null;
+  version_current: boolean;
+  required_version: string | null;
+  dependencies_installed: boolean;
+  api_reachable: boolean;
+  ready: boolean;
+  state: "not_downloaded" | "update_available" | "dependencies_missing" | "api_unavailable" | "ready" | "missing";
+  message: string | null;
+};
+
+/** How Codex registered this Launcher's MCP server, if at all. */
+export type CodexMcpStatus = {
+  state: "ready" | "needs_repair" | "disabled" | "unsupported_transport" | "not_configured";
+  issues: string[];
+  repair_command: string | null;
+  config_path: string | null;
 };
