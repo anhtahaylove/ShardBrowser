@@ -50,10 +50,21 @@ export function useContextMenu() {
         ) : (
           <button
             key={i}
-            className={`w-full cursor-pointer rounded-8 border-0 bg-transparent px-2.5 py-2 text-left text-label-xs transition-colors hover:bg-bg-weak-50 ${
-              it.danger ? "text-error-base" : "text-text-sub-600 hover:text-text-strong-950"
+            type="button"
+            disabled={!!it.disabledReason}
+            title={it.disabledReason}
+            className={`w-full rounded-8 border-0 bg-transparent px-2.5 py-2 text-left text-label-xs transition-colors ${
+              it.disabledReason
+                ? "cursor-not-allowed text-text-disabled-300"
+                : it.danger
+                  ? "cursor-pointer text-error-base hover:bg-bg-weak-50"
+                  : "cursor-pointer text-text-sub-600 hover:bg-bg-weak-50 hover:text-text-strong-950"
             }`}
-            onClick={() => { it.onClick(); close(); }}
+            onClick={() => {
+              if (it.disabledReason) return;
+              it.onClick();
+              close();
+            }}
           >
             {it.label}
           </button>

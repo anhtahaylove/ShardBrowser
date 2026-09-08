@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { ToastItem } from "../types";
+import { safeUiError } from "../lib/utils";
 
 /// Global toast queue (zustand). `toast.ok/err/info` can be called from
 /// anywhere — including non-React code — via the store's static API.
@@ -25,6 +26,14 @@ export const useToastStore = create<ToastState>((set) => ({
 
 export const toast = {
   ok: (t: string) => useToastStore.getState().push("ok", t),
-  err: (t: string) => useToastStore.getState().push("err", t),
+  /**
+   * Error toast.
+   *
+   * Redaction happens here rather than at each call site: most callers pass a
+   * raw exception, and a backend error can carry a bearer token, a proxy
+   * password or key material. Sanitising centrally means a new call site
+   * cannot forget.
+   */
+  err: (t: unknown) => useToastStore.getState().push("err", safeUiError(t)),
   info: (t: string) => useToastStore.getState().push("info", t),
 };

@@ -6,7 +6,7 @@ import type { ContextItem } from "../../shared/types";
 import { CountryFlag } from "../../shared/ui/CountryFlag";
 import { fmtTs, fmtUptime } from "../../shared/lib/utils";
 import { useProfile, type ProfileMeta } from "../../entities/profile";
-import { useTeam, canSyncProfiles } from "../../entities/team";
+import { useTeam, canSyncProfiles, syncBlockedReason } from "../../entities/team";
 import type { ProxyEntry } from "../../entities/proxy";
 import { ProfileInlineEditor, ProfileRowActions } from "../../features/manage-profiles";
 
@@ -37,6 +37,9 @@ export function ProfileRow({ profile, proxy, onMenu }: {
   const pushProfile = useProfile((s) => s.pushProfile);
   const pullProfile = useProfile((s) => s.pullProfile);
   const teamReady = useTeam(canSyncProfiles);
+  // An enrolled device that still cannot sync gets the entries, greyed with
+  // the reason, rather than silently missing menu items.
+  const syncBlocked = useTeam(syncBlockedReason);
   const importCookies = useProfile((s) => s.importCookies);
 
   // Shift-presses are handled in mousedown only: a click on the checkbox's
@@ -55,20 +58,44 @@ export function ProfileRow({ profile, proxy, onMenu }: {
       ? [{ label: "Remove from folder", onClick: () => setProfileFolder(p.id, "") }]
       : []),
     { sep: true, label: "", onClick: () => {} },
-    { label: "Back up (encrypted)…", onClick: () => backupProfile(p) },
-    { label: "Restore from backup…", onClick: () => restoreProfile(p) },
-    ...(teamReady
+    // These read or replace the whole profile directory, which Chromium holds
+    // open while it runs. Showing them greyed with the reason beats letting
+    // someone click and only then be told to stop the profile.
+    {
+      label: "Back up (encrypted)…",
+      onClick: () => backupProfile(p),
+      disabledReason: isRunning ? "Stop the profile first" : undefined,
+    },
+    {
+      label: "Restore from backup…",
+      onClick: () => restoreProfile(p),
+      disabledReason: isRunning ? "Stop the profile first" : undefined,
+    },
+    ...(teamReady || syncBlocked
       ? [
           { sep: true, label: "", onClick: () => {} },
-          { label: "Push to team", onClick: () => pushProfile(p) },
-          { label: "Pull from team", onClick: () => pullProfile(p) },
+          {
+            label: "Push to team",
+            onClick: () => pushProfile(p),
+            disabledReason: syncBlocked ?? (isRunning ? "Stop the profile first" : undefined),
+          },
+          {
+            label: "Pull from team",
+            onClick: () => pullProfile(p),
+            disabledReason: syncBlocked ?? (isRunning ? "Stop the profile first" : undefined),
+          },
         ]
       : []),
     { sep: true, label: "", onClick: () => {} },
     { label: "Export cookies", onClick: () => exportCookies(p) },
     { label: "Import cookies", onClick: () => importCookies(p) },
     { sep: true, label: "", onClick: () => {} },
-    { label: "Delete", onClick: () => remove(p.id), danger: true },
+    {
+      label: "Delete",
+      onClick: () => remove(p.id),
+      danger: true,
+      disabledReason: isRunning ? "Stop the profile first" : undefined,
+    },
   ];
 
   return (

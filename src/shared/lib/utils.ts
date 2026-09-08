@@ -103,8 +103,18 @@ export const readTextFile = (path: string) => invoke<string>("read_text_file", {
  */
 export const safeUiError = (error: unknown) => {
   const text = error instanceof Error ? error.message : String(error);
-  return text
-    .replace(/Bearer\s+[^\s"']+/gi, "Bearer ***")
-    .replace(/("SHARDX_TOKEN"\s*:\s*")[^"]*(")/gi, "$1***$2")
-    .replace(/SHARDX_TOKEN\s*=\s*[^\s;]+/gi, "SHARDX_TOKEN=***");
+  return (
+    text
+      .replace(/Bearer\s+[^\s"']+/gi, "Bearer ***")
+      .replace(/("SHARDX_TOKEN"\s*:\s*")[^"]*(")/gi, "$1***$2")
+      .replace(/SHARDX_TOKEN\s*=\s*[^\s;]+/gi, "SHARDX_TOKEN=***")
+      // Proxy URLs carry credentials inline; a failed connection would
+      // otherwise print user:pass straight into a toast.
+      .replace(/(\w+:\/\/)[^\s/@:]+:[^\s/@]+@/g, "$1***:***@")
+      // Long hex runs are key material, tokens or device ids. Nothing the
+      // user can act on, and the first two are secret.
+      .replace(/\b[0-9a-f]{32,}\b/gi, (m) => `${m.slice(0, 8)}…[redacted]`)
+      // Passphrases echoed back by a failing call.
+      .replace(/(passphrase\s*[:=]\s*)\S+/gi, "$1***")
+  );
 };

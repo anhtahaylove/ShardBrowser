@@ -30,3 +30,19 @@ export const useTeam = create<TeamState>((set) => ({
 /** True when this device is enrolled and able to sync profiles. */
 export const canSyncProfiles = (s: TeamState) =>
   !!s.status?.is_enrolled && !!s.status?.can_sync;
+
+/**
+ * Why sync is unavailable, or undefined when it works.
+ *
+ * A device enrolled before sync existed reports `is_enrolled` but not
+ * `can_sync`. Hiding the menu entry silently leaves the user with no way to
+ * discover that re-enrolling is what fixes it.
+ */
+export const syncBlockedReason = (s: TeamState): string | undefined => {
+  if (!s.loaded) return "Checking team status…";
+  if (!s.status?.is_enrolled) return undefined;
+  if (!s.status.can_sync) {
+    return "This device was enrolled before sync existed — re-enrol it in Settings";
+  }
+  return undefined;
+};

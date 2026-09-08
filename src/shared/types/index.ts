@@ -20,7 +20,18 @@ export type ConfirmReq = {
   resolve: (v: any) => void;
 };
 
-export type ContextItem = { label: string; onClick: () => void; danger?: boolean; sep?: boolean };
+export type ContextItem = {
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+  sep?: boolean;
+  /**
+   * Why this item cannot be used right now. When set the item is shown but
+   * inert, with the reason as its tooltip — better than letting someone click
+   * and only then learn the profile has to be stopped first.
+   */
+  disabledReason?: string;
+};
 
 export type OsPlatform = "macOS" | "Windows" | "Linux";
 
