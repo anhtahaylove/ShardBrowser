@@ -100,7 +100,8 @@ codex mcp get shardbrowser
 codex mcp remove shardbrowser; codex mcp add shardbrowser --env "SHARDX_API=http://127.0.0.1:40325" -- node "C:\absolute\path\to\mcp\index.js"
 ```
 
-ShardX Settings can also run a local **Check Codex registration** inspection.
+ShardX Settings can also run a local **Check Codex registration** inspection,
+under **Advanced actions** since Hermes is the primary host.
 It compares Codex's `shardbrowser` entry with the selected `index.js` path and
 `SHARDX_API`, and only reports whether `SHARDX_TOKEN` is present in config
 without printing the token value. After adding or repairing, restart Codex so it
@@ -291,8 +292,8 @@ see [`docs/WORDPRESS_WPCLI_FALLBACK.md`](../docs/WORDPRESS_WPCLI_FALLBACK.md).
 
 ## Troubleshooting Hermes registration
 
-ShardX Settings can inspect the Hermes entry locally: open **Advanced actions**
-and use **Check Hermes registration**. It reads the resolved entry with
+ShardX Settings can inspect the Hermes entry locally: **Check Hermes
+registration** is the card primary action. It reads the resolved entry with
 `hermes config get mcp_servers.shardbrowser` and compares it against the
 selected `index.js` path and the running Automation API URL. As with the Codex
 check, it only reports whether `SHARDX_TOKEN` is present in config and never

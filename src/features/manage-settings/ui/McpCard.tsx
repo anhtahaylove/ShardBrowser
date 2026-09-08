@@ -41,7 +41,7 @@ export function McpCard({
   const versionLabel = status?.version ? `v${status.version}` : "Unknown";
   const requiredLabel = status?.required_version ? `v${status.required_version}` : "this Launcher";
   const runtimeApiUrl = api?.runtime_base_url ?? api?.base_url ?? "";
-  const codexChecked = !!codex || !!codexError;
+  const hermesChecked = !!hermes || !!hermesError;
 
   const copyRepair = async () => {
     if (codex?.repair_command) await clip.write(codex.repair_command);
@@ -64,18 +64,15 @@ export function McpCard({
     try { await fn(); } finally { setBusy(false); }
   };
 
-  const needsRepair =
-    codex?.state === "needs_repair" ||
-    codex?.state === "disabled" ||
-    codex?.state === "unsupported_transport";
+  const hermesNeedsRepair =
+    hermes?.state === "needs_repair" || hermes?.state === "disabled";
 
-  // One primary action, chosen by what is actually missing. When Codex needs
-  // repair, copying the command is the only thing that helps — and it stays
-  // the single copy on screen, so Advanced must not duplicate it.
-  const primary = !codexChecked
-    ? { label: busy ? "Checking Codex…" : "Check Codex registration", run: onCheckCodex }
-    : needsRepair
-      ? { label: "Copy Codex repair command", run: copyRepair }
+  // One primary action, chosen by what is actually missing. Hermes is the
+  // primary host, so its check leads; Codex stays available under Advanced.
+  const primary = !hermesChecked
+    ? { label: busy ? "Checking Hermes…" : "Check Hermes registration", run: onCheckHermes }
+    : hermesNeedsRepair || hermes?.state === "not_registered"
+      ? { label: "Copy Hermes add command", run: copyHermesAdd }
       : { label: busy ? "Refreshing…" : "Refresh status", run: onRefresh };
 
   const items: [boolean, string, string][] = [
@@ -166,17 +163,17 @@ export function McpCard({
       <details open={advanced} onToggle={(e) => setAdvanced((e.target as HTMLDetailsElement).open)}>
         <summary className="cursor-pointer text-label-xs text-text-sub-600">Advanced actions</summary>
         <div className="mt-2 flex flex-col gap-2">
-          {!needsRepair && (
-            <Button size="xsmall" variant="neutral" mode="stroke" onClick={copyRepair} disabled={!codex?.repair_command}>
-              Copy Codex repair command
+          <Button size="xsmall" variant="neutral" mode="stroke" onClick={copyRepair} disabled={!codex?.repair_command}>
+            Copy Codex repair command
+          </Button>
+          <Button size="xsmall" variant="neutral" mode="stroke" disabled={busy} onClick={() => void run(onCheckCodex)}>
+            {busy ? "Checking Codex…" : "Check Codex registration"}
+          </Button>
+          {primary.label !== "Copy Hermes add command" && (
+            <Button size="xsmall" variant="neutral" mode="stroke" onClick={copyHermesAdd} disabled={!hermesChecked}>
+              Copy Hermes add command
             </Button>
           )}
-          <Button size="xsmall" variant="neutral" mode="stroke" disabled={busy} onClick={() => void run(onCheckHermes)}>
-            {busy ? "Checking Hermes…" : "Check Hermes registration"}
-          </Button>
-          <Button size="xsmall" variant="neutral" mode="stroke" onClick={copyHermesAdd}>
-            Copy Hermes add command
-          </Button>
           <p className="m-0 text-paragraph-xs text-text-sub-600">
             The command is copied for you to run — no config is changed automatically.
           </p>

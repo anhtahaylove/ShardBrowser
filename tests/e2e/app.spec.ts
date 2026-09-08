@@ -167,8 +167,8 @@ test("settings dirty state and MCP readiness render from fixture", async ({ page
   await expect(page.getByLabel("Start in the system tray")).toBeEnabled();
   await expect(page.getByText("MCP ready", { exact: true })).toBeVisible();
   await expect(page.getByLabel("MCP setup readiness")).toContainText("API reachable");
-  await expect(page.getByRole("button", { name: "Check Codex registration" })).toBeVisible();
-  await page.getByRole("button", { name: "Check Codex registration" }).click();
+  await expect(page.getByRole("button", { name: "Check Hermes registration" })).toBeVisible();
+  await page.getByRole("button", { name: "Check Hermes registration" }).click();
   await expect(page.getByRole("button", { name: "Refresh status" })).toBeVisible();
   const advanced = page.getByText("Advanced actions", { exact: true });
   await advanced.click();
@@ -197,9 +197,9 @@ test("Settings exposes one honest Codex repair action", async ({ page }) => {
   await gotoMocked(page, "/?e2e=codex-needs-repair");
 
   await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByText("Advanced actions", { exact: true }).click();
   await page.getByRole("button", { name: "Check Codex registration" }).click();
   await expect(page.getByRole("button", { name: "Copy Codex repair command" })).toBeVisible();
-  await page.getByText("Advanced actions", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Copy Codex repair command" })).toHaveCount(1);
   await expect(page.getByText("no config is changed automatically")).toBeVisible();
 });
@@ -208,7 +208,6 @@ test("Settings reports Hermes registration alongside Codex", async ({ page }) =>
   await gotoMocked(page, "/?e2e=hermes-not-registered");
 
   await page.getByRole("button", { name: "Settings" }).click();
-  await page.getByText("Advanced actions", { exact: true }).click();
   await page.getByRole("button", { name: "Check Hermes registration" }).click();
 
   await expect(page.getByText("Hermes MCP fixture is not registered.")).toBeVisible();
