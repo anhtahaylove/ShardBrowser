@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '@/lib/cn'
 import { CheckIcon, ChevronDownIcon, SearchIcon } from '@/lib/icons'
@@ -52,6 +53,9 @@ export default function Select({
   className,
 }: SelectProps) {
   const [open, setOpen] = useState(false)
+  // Which option arrow keys are sitting on. Kept separate from the committed
+  // value so Escape can close without changing anything.
+  const [activeIndex, setActiveIndex] = useState(-1)
   const [query, setQuery] = useState('')
   const [mounted, setMounted] = useState(false)
   const [coords, setCoords] = useState<Coords | null>(null)
@@ -162,13 +166,18 @@ export default function Select({
                   No results
                 </li>
               ) : (
-                filteredOptions.map((opt) => {
+                filteredOptions.map((opt, optIndex) => {
                   const isSelected = opt.value === value
+                  const isActive = optIndex === activeIndex
                   return (
                     <li key={opt.value}>
                       <button
+                        id={`${id}-option-${optIndex}`}
+                        role="option"
+                        aria-selected={isSelected}
                         type="button"
                         disabled={opt.disabled}
+                        onMouseEnter={() => setActiveIndex(optIndex)}
                         onClick={() => {
                           onChange?.(opt.value)
                           close()
@@ -176,7 +185,7 @@ export default function Select({
                         className={cn(
                           'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-paragraph-sm text-text-strong-950 transition-colors',
                           'hover:bg-bg-weak-50 disabled:pointer-events-none disabled:text-text-disabled-300',
-                          isSelected && 'bg-bg-weak-50',
+                          (isSelected || isActive) && 'bg-bg-weak-50',
                         )}
                       >
                         {opt.icon && <span className="flex size-5 shrink-0 items-center justify-center">{opt.icon}</span>}
@@ -193,6 +202,67 @@ export default function Select({
         )
       : null
 
+
+  // Disabled entries are skipped by the keyboard, matching a native select.
+  const selectableIndexes = filteredOptions.flatMap((o, i) => (o.disabled ? [] : [i]))
+  const moveActive = (delta: number) => {
+    if (selectableIndexes.length === 0) return
+    const current = selectableIndexes.indexOf(activeIndex)
+    const next =
+      current < 0
+        ? delta > 0
+          ? selectableIndexes[0]
+          : selectableIndexes[selectableIndexes.length - 1]
+        : selectableIndexes[(current + delta + selectableIndexes.length) % selectableIndexes.length]
+    setActiveIndex(next)
+  }
+
+  useEffect(() => { setActiveIndex(-1) }, [query])
+
+  const onTriggerKeyDown = (e: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (disabled) return
+    switch (e.key) {
+      case 'ArrowDown':
+      case 'ArrowUp':
+        e.preventDefault()
+        if (!open) {
+          setOpen(true)
+          setActiveIndex(filteredOptions.findIndex((o) => o.value === value && !o.disabled))
+        } else {
+          moveActive(e.key === 'ArrowDown' ? 1 : -1)
+        }
+        break
+      case 'Enter':
+        if (!open) break
+        e.preventDefault()
+        if (activeIndex >= 0 && !filteredOptions[activeIndex]?.disabled) {
+          onChange?.(filteredOptions[activeIndex].value)
+        }
+        close()
+        break
+      case ' ':
+        // Space opens the list but must not commit: a keyboard user pressing
+        // it mid-review would otherwise silently pick whatever is highlighted.
+        e.preventDefault()
+        if (!open) {
+          setOpen(true)
+          setActiveIndex(filteredOptions.findIndex((o) => o.value === value && !o.disabled))
+        }
+        break
+      case 'Escape':
+        if (!open) break
+        e.preventDefault()
+        close()
+        break
+      case 'Home':
+      case 'End':
+        if (!open) break
+        e.preventDefault()
+        setActiveIndex(e.key === 'Home' ? selectableIndexes[0] : selectableIndexes[selectableIndexes.length - 1])
+        break
+    }
+  }
+
   return (
     <div className={cn('flex w-full flex-col gap-1', className)}>
       {label && (
@@ -206,8 +276,11 @@ export default function Select({
         type="button"
         disabled={disabled}
         onClick={() => (open ? close() : setOpen(true))}
+        onKeyDown={onTriggerKeyDown}
+        role="combobox"
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-activedescendant={open && activeIndex >= 0 ? `${id}-option-${activeIndex}` : undefined}
         className={cn(
           'flex w-full items-center justify-between gap-2 rounded-[10px] bg-bg-white-0 text-left ring-1 ring-inset ring-stroke-soft-200 transition-shadow',
           size === 'medium' ? 'h-10 px-3' : 'h-9 px-2.5',

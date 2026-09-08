@@ -54,6 +54,9 @@ export function ProxySelect({
 }) {
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  /// Keyboard highlight; null is "direct connection". Separate from `value`
+  /// so Escape leaves the saved choice untouched.
+  const [active, setActive] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const trigger = useRef<HTMLButtonElement>(null);
   const coords = useAnchoredCoords(open, trigger);
@@ -122,12 +125,12 @@ export function ProxySelect({
               />
             </div>
           )}
-          <ul className="overflow-auto p-1.5 scrollbar" style={{ maxHeight: coords?.maxHeight }}>
+          <ul role="listbox" className="overflow-auto p-1.5 scrollbar" style={{ maxHeight: coords?.maxHeight }}>
             <li>
               <Row
                 text="— direct connection —"
                 muted
-                active={!value}
+                active={active === null}
                 onClick={() => { onChange(null); close(); }}
               />
             </li>
@@ -135,7 +138,7 @@ export function ProxySelect({
               <li key={p.id}>
                 <Row
                   text={label(p)}
-                  active={p.id === value}
+                  active={p.id === active}
                   onClick={() => { onChange(p.id); close(); }}
                 />
               </li>
@@ -151,12 +154,53 @@ export function ProxySelect({
     </div>
   );
 
+  // -1 is the "direct connection" row, so every entry has an index.
+  const entryIds: (string | null)[] = [null, ...shown.map((p) => p.id)];
+  const activePos = entryIds.indexOf(active);
+  const move = (delta: number) => {
+    if (entryIds.length === 0) return;
+    const from = activePos < 0 ? (delta > 0 ? -1 : 0) : activePos;
+    setActive(entryIds[(from + delta + entryIds.length) % entryIds.length]);
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    switch (e.key) {
+      case "ArrowDown":
+      case "ArrowUp":
+        e.preventDefault();
+        if (!open) { setOpen(true); setActive(value); }
+        else move(e.key === "ArrowDown" ? 1 : -1);
+        break;
+      case "Enter":
+        if (!open) break;
+        e.preventDefault();
+        onChange(active);
+        close();
+        break;
+      case " ":
+        // Opens only. Committing on Space would pick whatever happens to be
+        // highlighted while the user is still reading the list.
+        e.preventDefault();
+        if (!open) { setOpen(true); setActive(value); }
+        break;
+      case "Escape":
+        if (!open) break;
+        e.preventDefault();
+        close();
+        break;
+    }
+  };
+
   return (
     <>
       <button
         ref={trigger}
         type="button"
-        onClick={() => (open ? close() : setOpen(true))}
+        role="combobox"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onKeyDown={onKeyDown}
+        onClick={() => { if (open) { close(); } else { setActive(value); setOpen(true); } }}
         className="flex h-9 w-full items-center gap-2 rounded-lg bg-bg-white-0 px-2.5 text-left text-paragraph-sm text-text-strong-950 ring-1 ring-inset ring-stroke-soft-200 transition-colors hover:bg-bg-weak-50"
       >
         <span className={cn("min-w-0 flex-1 truncate", !selected && "text-text-soft-400")}>

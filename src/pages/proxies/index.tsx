@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { Button } from "@proxyshard/shardx-ui-kit";
 import { Topbar } from "../../shared/ui/Topbar";
 import { useStoreChanged } from "../../shared/hooks/useStoreChanged";
 import { useProxy } from "../../entities/proxy";
@@ -20,6 +21,8 @@ export function ProxiesPage() {
   const setInfoFor = useProxy((s) => s.setInfoFor);
   const snapshots = useProxy((s) => s.snapshots);
   const distributeOpen = useProxy((s) => s.distributeOpen);
+  const status = useProxy((s) => s.status);
+  const error = useProxy((s) => s.error);
   const setDistributeOpen = useProxy((s) => s.setDistributeOpen);
 
   useEffect(() => { init(); }, [init]);
@@ -33,7 +36,19 @@ export function ProxiesPage() {
         <h1 className="m-0 text-title-h5 text-text-strong-950">Proxies</h1>
         <ProxyToolbar />
       </div>
-      <ProxyTable />
+      {status === "loading" && (
+        <div role="status" className="py-8 text-center text-paragraph-sm text-text-sub-600">
+          Loading proxies…
+        </div>
+      )}
+      {status === "error" && (
+        <div role="alert" className="flex flex-col items-center gap-2 py-8 text-center">
+          <p className="m-0 text-paragraph-sm text-text-strong-950">Proxies could not be loaded</p>
+          {error && <p className="m-0 text-paragraph-xs text-text-sub-600">{error}</p>}
+          <Button size="xsmall" onClick={() => { void init(); }}>Retry</Button>
+        </div>
+      )}
+      {status === "ready" && <ProxyTable />}
       {editing && (
         <ProxyEditor
           initial={editing}

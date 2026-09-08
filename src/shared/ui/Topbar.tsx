@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Breadcrumb, Input } from "@proxyshard/shardx-ui-kit";
+import { HOST_OS } from "../lib/utils";
 import { SearchIcon } from "../icons";
 
 /// Page header — UI-kit Breadcrumb + search Input.
@@ -17,7 +18,7 @@ export function Topbar({ crumbs, search = "", onSearch }: {
   const section = crumbs[crumbs.length - 1] ?? "";
   const label = section ? `Search ${section}` : "Search";
   const searchable = typeof onSearch === "function";
-  const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || "");
+  const isMac = HOST_OS === "macOS";
 
   useEffect(() => {
     // Do not claim the shortcut on pages with no search box to focus.

@@ -6,6 +6,7 @@ import { toast } from '../../../shared/lib/toast';
 import { clip } from '../../../shared/lib/clipboard';
 import { confirmModal } from '../../../shared/lib/confirm';
 import { storeBus } from '../../../shared/lib/storeBus';
+import { safeUiError } from '../../../shared/lib/utils';
 import { ProfileMeta } from '../../profile/model/types';
 
 export type ProxyInfoTarget = { proxy: ProxyEntry; anchor: { x: number; y: number } };
@@ -37,6 +38,8 @@ export function filterProxies(
 export type ProxyStore = {
 
     status: 'idle' | 'loading' | 'ready' | 'error';
+    /// storeBus subscriptions survive a retry; bind them once.
+    busBound: boolean;
     error: string | null;
 
     proxyTesting: Record<string, boolean>,
@@ -82,6 +85,7 @@ export type ProxyStore = {
 }
 export const useProxy = create<ProxyStore>((set, get) => ({
     status: 'idle',
+    busBound: false,
     error: null,
     proxyTesting: {},
     proxies: new Array<ProxyEntry>(),
@@ -109,9 +113,10 @@ export const useProxy = create<ProxyStore>((set, get) => ({
         }
     },
     init: async () => {
-        // защита от повторного запуска
+        // One list at a time, but a failed attempt must stay retryable —
+        // 'error' deliberately falls through.
         if (get().status === 'loading' || get().status === 'ready') return;
-        set({ status: 'loading' });
+        set({ status: 'loading', error: null });
         try {
             const proxies = await proxyList();
             const profiles = await profileList();
@@ -119,8 +124,12 @@ export const useProxy = create<ProxyStore>((set, get) => ({
             // A profile bound elsewhere changes the count in the Profiles column,
             // and a proxy added from the profile editor belongs in this table.
             // Reload never emits, so the two stores cannot ping-pong.
-            storeBus.on('profiles', () => { void get().reload(); });
-            storeBus.on('proxies', () => { void get().reload(); });
+            // Retry re-runs init; subscribing twice would double every reload.
+            if (!get().busBound) {
+                set({ busBound: true });
+                storeBus.on('profiles', () => { void get().reload(); });
+                storeBus.on('proxies', () => { void get().reload(); });
+            }
 
             if (proxies.length === 0) return;
             const entries = await Promise.all(
@@ -138,7 +147,7 @@ export const useProxy = create<ProxyStore>((set, get) => ({
             set({ snapshots: next });
 
         } catch (e) {
-            set({ status: 'error', error: (e as Error).message });
+            set({ status: 'error', error: safeUiError(e) });
         }
     },
     reload: async () => {
