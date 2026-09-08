@@ -145,7 +145,9 @@ if (scenario === "folder-empty") {
 }
 
 mockIPC(async (cmd: string, payload?: InvokeArgs) => {
-  if (cmd.startsWith("plugin:") || cmd.startsWith("tauri:")) return null;
+  if ((cmd.startsWith("plugin:") || cmd.startsWith("tauri:")) && cmd !== "plugin:dialog|open") {
+    return null;
+  }
   switch (cmd) {
     case "host_platform":
       return "windows";
@@ -291,6 +293,30 @@ mockIPC(async (cmd: string, payload?: InvokeArgs) => {
       };
     case "mcp_status":
       return mcpStatus();
+    // Directory pickers are native; the suite drives the value the operator
+    // would have chosen so the adopt path stays exercisable headlessly.
+    case "plugin:dialog|open":
+      return scenario === "mcp-adopt-cancelled"
+        ? null
+        : "C:\\Users\\Example\\Existing-MCP";
+    // Adopting a folder must move the reported path, otherwise the operator
+    // cannot tell an adopted server from a freshly downloaded one.
+    case "mcp_set_path": {
+      const dir = String((payload as { dir?: string })?.dir ?? "");
+      if (scenario === "mcp-adopt-invalid") {
+        throw new Error("No MCP server found in that folder");
+      }
+      settings.mcp_path = dir;
+      return mcpStatus();
+    }
+    // Raising a page only makes sense for a live profile; the failure path is
+    // what the UI must surface, so keep it reachable from a scenario.
+    case "devtools_activate": {
+      if (scenario === "verification-activate-fails") {
+        throw new Error("No active page to raise");
+      }
+      return null;
+    }
     case "codex_mcp_status":
       if (scenario === "codex-needs-repair") {
         return {

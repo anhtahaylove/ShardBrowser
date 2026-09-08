@@ -303,3 +303,40 @@ test("updater distinguishes checking and up-to-date states", async ({ page }) =>
   await expect(page.getByText("Launcher is up to date")).toBeVisible();
   await expect(page.getByRole("button", { name: "Check again" })).toBeVisible();
 });
+
+test("a running profile can raise its verification tab, and says so when it cannot", async ({ page }) => {
+  await gotoMocked(page);
+
+  // profile-beta is the fixture's running profile; the action is meaningless
+  // for a stopped one, so the menu must gate it rather than fail at click time.
+  await page.getByRole("button", { name: "More actions for profile Beta Research" }).click();
+  const raise = page.getByRole("button", { name: "Bring verification tab to front" });
+  await expect(raise).toBeEnabled();
+  await raise.click();
+  await expect(page.getByText("Verification tab brought to front")).toBeVisible();
+});
+
+test("a failed verification raise reports the reason instead of going quiet", async ({ page }) => {
+  await gotoMocked(page, "/?e2e=verification-activate-fails");
+
+  await page.getByRole("button", { name: "More actions for profile Beta Research" }).click();
+  await page.getByRole("button", { name: "Bring verification tab to front" }).click();
+
+  // Silence here would leave the operator staring at an unchanged window.
+  await expect(page.getByText(/Could not bring verification tab to front/)).toBeVisible();
+  await expect(page.getByText(/No active page to raise/)).toBeVisible();
+});
+
+test("an existing MCP folder can be adopted without downloading a second copy", async ({ page }) => {
+  await gotoMocked(page);
+  await page.getByRole("button", { name: "Settings" }).click();
+
+  const currentFolder = page.locator("code", { hasText: "ShardX-MCP" });
+  await expect(currentFolder).toHaveText("C:\\Users\\Example\\ShardX-MCP");
+  await page.getByRole("button", { name: "Use existing MCP folder" }).click();
+
+  // Adoption is only real if the reported path actually moves.
+  await expect(page.locator("code", { hasText: "Existing-MCP" }))
+    .toHaveText("C:\\Users\\Example\\Existing-MCP");
+  await expect(page.getByText(/Using MCP server at/)).toBeVisible();
+});

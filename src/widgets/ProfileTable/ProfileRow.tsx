@@ -43,6 +43,7 @@ export function ProfileRow({ profile, proxy, onMenu }: {
   const importCookies = useProfile((s) => s.importCookies);
   const copyCdpHttpUrl = useProfile((s) => s.copyCdpHttpUrl);
   const copyDevToolsInspectUrl = useProfile((s) => s.copyDevToolsInspectUrl);
+  const bringVerificationToFront = useProfile((s) => s.bringVerificationToFront);
   const launchError = useProfile((s) => s.launchError[p.id]);
 
   // Shift-presses are handled in mousedown only: a click on the checkbox's
@@ -99,6 +100,11 @@ export function ProfileRow({ profile, proxy, onMenu }: {
     {
       label: "Copy DevTools inspect URL",
       onClick: () => { void copyDevToolsInspectUrl(p.id); },
+      disabledReason: isRunning ? undefined : "Start the profile first",
+    },
+    {
+      label: "Bring verification tab to front",
+      onClick: () => { void bringVerificationToFront(p.id); },
       disabledReason: isRunning ? undefined : "Start the profile first",
     },
     { sep: true, label: "", onClick: () => {} },
