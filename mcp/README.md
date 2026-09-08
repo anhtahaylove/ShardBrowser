@@ -289,6 +289,39 @@ For owner-side Cloudflare tuning and rollback guidance, see
 For an authorized, non-browser fallback for WordPress plugin administration,
 see [`docs/WORDPRESS_WPCLI_FALLBACK.md`](../docs/WORDPRESS_WPCLI_FALLBACK.md).
 
+## Troubleshooting Hermes registration
+
+ShardX Settings can inspect the Hermes entry locally: open **Advanced actions**
+and use **Check Hermes registration**. It reads the resolved entry with
+`hermes config get mcp_servers.shardbrowser` and compares it against the
+selected `index.js` path and the running Automation API URL. As with the Codex
+check, it only reports whether `SHARDX_TOKEN` is present in config and never
+prints the value.
+
+| Reported state | What it means | What to do |
+| --- | --- | --- |
+| `registered` | Entry matches the selected folder and API | Restart Hermes, then call `health_check` |
+| `not_registered` | Hermes has no `shardbrowser` entry | Run the add command above |
+| `disabled` | Entry exists but is switched off | Re-add it, or set `enabled: true` |
+| `needs_repair` | Path, API, or token placement is wrong | Use **Copy Hermes add command**, then run it |
+| `hermes_not_found` | `hermes` is not on `PATH` | Install or open Hermes, reopen the shell |
+| `timeout` | Hermes did not answer within 4 seconds | Retry once Hermes has finished starting |
+
+The specific mismatches it can report are: the entry is disabled, the `index.js`
+path does not match the selected MCP folder, the path could not be verified,
+`SHARDX_API` does not match the current Automation API URL, `SHARDX_API` is not
+configured, and `SHARDX_TOKEN` is stored in Hermes config.
+
+That last one is a configuration problem even though the server still runs: keep
+the token in the Windows User environment so it does not sit in a config file
+that gets copied or shared. Remove it from the entry and re-add the server
+without `SHARDX_TOKEN`.
+
+A repaired entry does not take effect until Hermes restarts, because MCP tools
+are loaded once at startup. If `health_check` still fails afterwards, the
+problem is the Automation API rather than registration: confirm the Launcher is
+running and that the port in `SHARDX_API` matches its current one.
+
 ## Chrome DevTools MCP handoff
 
 `devtools_context` exposes the browser's `cdp.http_url` and
