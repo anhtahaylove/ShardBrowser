@@ -3,6 +3,59 @@
   "repoUrl": "https://github.com/ProxyShard/ShardBrowser",
   "releases": [
     {
+      "version": "2.2.3",
+      "date": "2026-09-09",
+      "entries": [
+        {
+          "id": "test-on-windows-too",
+          "title": "The checks now run on Windows",
+          "lead": "Every automated check ran on Linux, so the Windows-specific half of the app was never tested on the platform most of you use.",
+          "tag": "fix",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "Parts of the launcher behave differently on each operating system: how the key protecting your cookies is stored, how browser processes are stopped, and how the app starts with Windows. All of that code took a different path on Windows than on Linux, and only the Linux path was ever checked automatically."
+            },
+            {
+              "type": "p",
+              "text": "The Rust checks now run on Windows as well. The first run immediately covered a Windows-only test that no previous check could execute."
+            }
+          ]
+        },
+        {
+          "id": "shared-core-tests-run",
+          "title": "153 tests that had never run",
+          "lead": "The shared core is built into the launcher, but its own test suite was never executed by the automated checks.",
+          "tag": "fix",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "Testing the launcher does not test the libraries inside it. The shared core — which handles profile snapshots, cookies and encryption keys — was compiled into every build, yet its 153 tests sat unused."
+            },
+            {
+              "type": "p",
+              "text": "Switching them on found a real problem straight away: two snapshot tests were wrong on Linux and macOS, checking for a file that a restore is not supposed to bring across machines. Both the tests and the automated checks are fixed."
+            }
+          ]
+        },
+        {
+          "id": "release-stops-earlier",
+          "title": "A release stops sooner when something is missing",
+          "lead": "Publishing used to fail only after all three installers had been built.",
+          "tag": "fix",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "If release notes were missing, the problem surfaced at the very last step, after the Windows, macOS and Linux installers had each been built. That check now runs first, so a release stops in under a minute instead of after a full build of every platform."
+            }
+          ]
+        }
+      ]
+    },
+    {
       "version": "2.2.2",
       "date": "2026-09-09",
       "entries": [

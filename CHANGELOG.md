@@ -1,5 +1,32 @@
 # Changelog
 
+## v2.2.3
+
+### Fixed
+
+- Snapshot restore is verified correctly on Linux and macOS. Two round-trip
+  tests asserted that a restored profile contains `Local State`, which
+  snapshots deliberately exclude because the key it holds is bound to one
+  machine. The file reappeared on Windows only because the key lives there and
+  is minted on first read, so a Windows-specific side effect was being
+  asserted as a cross-platform rule.
+
+### Changed
+
+- The Rust crates are tested on Windows in CI. Every runner was Linux, so the
+  `cfg(windows)` half of the codebase — os_crypt key handling, cookie
+  decryption, process control and autostart — was never compiled or tested
+  there, on the launcher's primary platform.
+- The shared core's tests and the interface toolkit's lint run in CI. The
+  shared core is linked into the launcher, yet its tests had never run: a
+  crate compiled as a dependency is not tested by its dependent.
+- A release stops on a missing changelog section before any installer is
+  built, rather than after all three platform builds finish.
+- The interface toolkit is free of lint warnings. The theme and link contexts
+  moved out of their provider modules so those files export components only,
+  which restores state-preserving refreshes during development. The package's
+  public API is unchanged.
+
 ## v2.2.2
 
 ### Security
