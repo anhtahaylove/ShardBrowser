@@ -108,6 +108,9 @@ jobs:
       - name: MCP release manifest tests
         run: npm run test:release-package
 
+      - name: Updater signature verification tests
+        run: npm run test:updater-signatures
+
       - name: MCP release package smoke
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'

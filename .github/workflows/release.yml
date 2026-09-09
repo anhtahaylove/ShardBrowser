@@ -374,6 +374,7 @@ jobs:
             grep -q "\"$helper\"" mcp/index.js
           done
           npm run test:release-package
+          npm run test:updater-signatures
           package_root="$RUNNER_TEMP/ShardX-MCP"
           node scripts/stage-mcp-release.mjs "$package_root"
           node scripts/stage-mcp-release.mjs --verify-directory "$package_root"
