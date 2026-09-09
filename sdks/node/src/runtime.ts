@@ -9,7 +9,6 @@ import { join, dirname, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 import { spawnSync } from "node:child_process";
-import AdmZip from "adm-zip";
 
 export const PUB_BASE = "https://pub-e57a7c60f6934eb09a6600bf2fc59cdc.r2.dev";
 export const CHROMIUM_VERSION = "152.0.7977.65";
@@ -76,9 +75,37 @@ const FINGERPRINTS_TOP_DIR = "shardx-fingerprints";
 
 export type ProgressCb = (label: string, received: number, total: number) => void;
 
-/** @internal Shared extraction boundary for the two Windows/plain-data archives. */
+/** @internal Shared extraction boundary for the two Windows/plain-data archives.
+ *
+ *  Uses bsdtar (`tar.exe`, shipped with Windows since 10 build 17063) rather
+ *  than a bundled zip library: it refuses entries whose paths escape the
+ *  destination, where adm-zip followed them and let a crafted archive
+ *  overwrite arbitrary files (GHSA-vwc7-r8mq-g2x9). */
 export function extractZipArchive(archive: string, destination: string): void {
-  new AdmZip(archive).extractAllTo(destination, true);
+  mkdirSync(destination, { recursive: true });
+  const r = spawnSync(systemTar(), ["-x", "-f", archive, "-C", destination], {
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  if (r.error) {
+    if ((r.error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(
+        "system `tar` not found — Windows 10 build 17063 or newer provides it at %SystemRoot%\\System32\\tar.exe",
+      );
+    }
+    throw r.error;
+  }
+  if ((r.status ?? 0) !== 0) {
+    const err = r.stderr?.toString().slice(0, 400) ?? `exit ${r.status}`;
+    throw new Error(`tar failed for ${archive} (exit ${r.status}): ${err}`);
+  }
+}
+
+/** Prefer the System32 copy on Windows: PATH may lead to an MSYS/Git tar that
+ *  mangles drive-letter arguments like `C:\dest`. */
+function systemTar(): string {
+  if (osPlatform() !== "win32") return "tar";
+  const system32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
+  return existsSync(system32) ? system32 : "tar";
 }
 
 interface Manifest {
@@ -345,11 +372,9 @@ export class Runtime {
     await pipeline(stream, out);
 
     // Extract.  IMPORTANT: on macOS/Linux shell out to the system
-    // `unzip` instead of adm-zip — adm-zip writes symlinks as ordinary
-    // text files (every `Versions/Current/...` link in a `.app`
-    // framework becomes a 24-byte regular file) and drops the +x bit
-    // on every helper executable.  The result extracts cleanly but
-    // fails to launch — GPU helper can't find the framework dylib.
+    // `unzip`, which preserves the symlinks (every `Versions/Current/...`
+    // link in a `.app` framework) and the +x bit on every helper
+    // executable.  bsdtar is used on Windows, where neither applies.
     if (osPlatform() === "win32") {
       extractZipArchive(tmp, dest);
     } else {
@@ -398,8 +423,8 @@ export class Runtime {
     }
     await pipeline(stream, out);
 
-    // Fingerprints bundle is plain JSON files — adm-zip is fine here
-    // (no symlinks / exec bits to preserve).
+    // Fingerprints bundle is plain JSON files — no symlinks or exec bits
+    // to preserve, so the plain zip path is fine on every platform.
     extractZipArchive(tmp, staging);
 
     const srcDir = join(staging, FINGERPRINTS_TOP_DIR);
@@ -416,7 +441,7 @@ export class Runtime {
 }
 
 /** Extract via /usr/bin/unzip — preserves symlinks and permission
- *  bits that adm-zip silently drops.  Required for any macOS .app
+ *  bits that a plain zip reader drops.  Required for any macOS .app
  *  bundle (Versions/Current symlinks + Helper exec bits).
  *
  *  Accepts exit code 0 (clean) and 1 (warnings — e.g. "backslashes in

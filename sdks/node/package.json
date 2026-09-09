@@ -48,7 +48,6 @@
     "access": "public"
   },
   "dependencies": {
-    "adm-zip": "^0.6.0",
     "patchright": "^1.49.0",
     "socks-proxy-agent": "^8.0.4",
     "undici": "^6.28.0"
