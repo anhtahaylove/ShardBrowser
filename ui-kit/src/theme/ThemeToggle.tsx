@@ -1,6 +1,6 @@
 import { cn } from '@/lib/cn'
-import { useTheme } from './ThemeProvider'
-import type { Theme } from './ThemeProvider'
+import { useTheme } from './theme-context'
+import type { Theme } from './theme-context'
 
 const options: { value: Theme; label: string; glyph: string }[] = [
   { value: 'light', label: 'Light', glyph: '☀' },

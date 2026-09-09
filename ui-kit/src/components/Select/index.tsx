@@ -129,7 +129,6 @@ export default function Select({
       document.removeEventListener('mousedown', onPointerDown)
       document.removeEventListener('keydown', onKey)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, isSearchable])
 
   const dropdown =

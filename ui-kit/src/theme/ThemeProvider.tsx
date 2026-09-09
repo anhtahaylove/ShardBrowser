@@ -1,31 +1,12 @@
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-} from 'react'
-
-export type Theme = 'light' | 'dark' | 'system'
-export type ResolvedTheme = 'light' | 'dark'
-
-type ThemeContextValue = {
-  theme: Theme
-  systemTheme: ResolvedTheme
-  resolvedTheme: ResolvedTheme
-  setTheme: (theme: Theme) => void
-  toggleTheme: () => void
-}
-
-const STORAGE_KEY = 'shardx-ui-kit-theme'
-
-const ThemeContext = createContext<ThemeContextValue | null>(null)
-
-function getSystemTheme(): ResolvedTheme {
-  if (typeof window === 'undefined') return 'light'
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-}
+  getSystemTheme,
+  STORAGE_KEY,
+  ThemeContext,
+  type ResolvedTheme,
+  type Theme,
+  type ThemeContextValue,
+} from './theme-context'
 
 function getInitialTheme(): Theme {
   if (typeof window === 'undefined') return 'system'
@@ -68,10 +49,4 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   )
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
-}
-
-export function useTheme(): ThemeContextValue {
-  const ctx = useContext(ThemeContext)
-  if (!ctx) throw new Error('useTheme must be used within a ThemeProvider')
-  return ctx
 }
