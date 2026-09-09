@@ -111,6 +111,16 @@ jobs:
       - name: Updater signature verification tests
         run: npm run test:updater-signatures
 
+      # The release workflow gates on these, but only inside the release job.
+      # Running them here keeps zip-extraction regressions from reaching a tag.
+      - name: Node SDK tests
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+          PATCHRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: |
+          npm ci --prefix sdks/node
+          npm test --prefix sdks/node
+
       - name: MCP release package smoke
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
