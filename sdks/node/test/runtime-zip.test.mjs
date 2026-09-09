@@ -119,7 +119,7 @@ test("preserves the fingerprint bundle directory and Unicode JSON", () => {
   }
 });
 
-test("refuses entries that escape the destination directory", () => {
+test("refuses to write entries outside the destination directory", () => {
   const root = scratch();
   try {
     const archive = join(root, "evil.zip");
@@ -129,11 +129,16 @@ test("refuses entries that escape the destination directory", () => {
     ]));
 
     const destination = join(root, "out");
-    assert.throws(
-      () => extractZipArchive(archive, destination),
-      /tar failed/,
-      "a traversal entry must abort extraction",
-    );
+    // The two extractors disagree on how to reject traversal: bsdtar aborts,
+    // while unzip strips the leading `..` and keeps the entry inside. Assert
+    // the property that matters — nothing lands outside `destination` — rather
+    // than either specific mechanism.
+    try {
+      extractZipArchive(archive, destination);
+    } catch (err) {
+      assert.match(String(err), /(tar|unzip) failed/);
+    }
+
     assert.ok(
       !existsSync(join(root, "escaped.txt")),
       "no file may be written outside the destination directory",
@@ -151,7 +156,7 @@ test("reports a useful error when the archive is not a zip", () => {
 
     assert.throws(
       () => extractZipArchive(archive, join(root, "out")),
-      /tar failed/,
+      /(tar|unzip) failed/,
       "a corrupt download must fail loudly rather than yield an empty dir",
     );
   } finally {

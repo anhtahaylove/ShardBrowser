@@ -77,12 +77,20 @@ export type ProgressCb = (label: string, received: number, total: number) => voi
 
 /** @internal Shared extraction boundary for the two Windows/plain-data archives.
  *
- *  Uses bsdtar (`tar.exe`, shipped with Windows since 10 build 17063) rather
- *  than a bundled zip library: it refuses entries whose paths escape the
- *  destination, where adm-zip followed them and let a crafted archive
- *  overwrite arbitrary files (GHSA-vwc7-r8mq-g2x9). */
+ *  Windows has no `unzip`, so it uses bsdtar (`tar.exe`, shipped since Windows
+ *  10 build 17063), which reads zip archives. Everywhere else GNU tar cannot
+ *  read zip at all, so this defers to the same `unzip` the engine bundles use.
+ *  Both refuse entries whose paths escape the destination, where adm-zip
+ *  followed them and let a crafted archive overwrite arbitrary files
+ *  (GHSA-vwc7-r8mq-g2x9). */
 export function extractZipArchive(archive: string, destination: string): void {
   mkdirSync(destination, { recursive: true });
+
+  if (osPlatform() !== "win32") {
+    systemUnzip(archive, destination);
+    return;
+  }
+
   const r = spawnSync(systemTar(), ["-x", "-f", archive, "-C", destination], {
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -103,7 +111,6 @@ export function extractZipArchive(archive: string, destination: string): void {
 /** Prefer the System32 copy on Windows: PATH may lead to an MSYS/Git tar that
  *  mangles drive-letter arguments like `C:\dest`. */
 function systemTar(): string {
-  if (osPlatform() !== "win32") return "tar";
   const system32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
   return existsSync(system32) ? system32 : "tar";
 }
