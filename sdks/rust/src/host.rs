@@ -141,3 +141,64 @@ fn parse_wxh(s: &str) -> Option<Size> {
     let h: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
     Some((w.trim().parse().ok()?, h.parse().ok()?))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // parse_wxh backs the Windows and Linux screen probes, which parse
+    // "1920x1080" and xrandr tokens like "1920x1080+0+0" respectively.
+    #[test]
+    fn parse_wxh_reads_a_plain_pair() {
+        assert_eq!(parse_wxh("1920x1080"), Some((1920, 1080)));
+    }
+
+    #[test]
+    fn parse_wxh_ignores_an_xrandr_offset_suffix() {
+        assert_eq!(parse_wxh("2560x1440+0+0"), Some((2560, 1440)));
+    }
+
+    #[test]
+    fn parse_wxh_tolerates_surrounding_whitespace() {
+        assert_eq!(parse_wxh("  1280x720  "), Some((1280, 720)));
+    }
+
+    #[test]
+    fn parse_wxh_rejects_malformed_input() {
+        for bad in ["", "1920", "x1080", "abcxdef", "1920*1080"] {
+            assert_eq!(parse_wxh(bad), None, "expected None for {bad:?}");
+        }
+    }
+
+    // Chrome only reports deviceMemory as 8, 16 or 32; every host must land
+    // on one of those, including hosts where the RAM probe fails.
+    #[test]
+    fn ram_bucket_is_always_a_chrome_device_memory_value() {
+        let bucket = host_ram_bucket_gb();
+        assert!(
+            matches!(bucket, 8 | 16 | 32),
+            "bucket {bucket} is not a Chrome deviceMemory value"
+        );
+    }
+
+    #[test]
+    fn logical_cores_is_never_zero() {
+        assert!(host_logical_cores() >= 1);
+    }
+
+    // The probe shells out per OS (sysctl / proc / powershell). It may fail on
+    // a locked-down runner, but a reported value must be physically sane.
+    #[test]
+    fn ram_probe_is_plausible_when_it_succeeds() {
+        if let Some(gb) = host_ram_gb() {
+            assert!((1..=4096).contains(&gb), "implausible RAM: {gb} GiB");
+        }
+    }
+
+    #[test]
+    fn screen_probe_is_plausible_when_it_succeeds() {
+        if let Some((w, h)) = host_screen_size() {
+            assert!(w >= 320 && h >= 240, "implausible screen: {w}x{h}");
+        }
+    }
+}

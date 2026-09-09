@@ -668,3 +668,85 @@ fn fix_unix_exec_bits(root: &Path) {
     }
     walk(root);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // host_spec() is the per-platform archive/layout table. Each runner must
+    // get its own entry, so assert the contract that holds for the host we
+    // are compiled for rather than a lowest common denominator.
+    #[test]
+    fn host_spec_describes_this_platform() {
+        let spec = host_spec().expect("host_spec must support the CI runners");
+
+        assert!(!spec.browser.key.is_empty());
+        assert!(spec.browser.key.ends_with(".zip"));
+        assert!(!spec.binary_subpath.is_empty());
+
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        {
+            assert_eq!(spec.browser.key, "ShardX-Windows.zip");
+            // The launcher joins these parts, so the executable name matters.
+            assert_eq!(spec.binary_subpath.last().unwrap(), "chrome.exe");
+            assert!(spec.widevine.is_some(), "Windows ships a Widevine CDM");
+        }
+
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            assert_eq!(spec.browser.key, "ShardX-Mac-arm64.zip");
+            assert!(spec.binary_subpath.contains(&"ShardX.app".to_string()));
+            assert!(spec.widevine.is_some(), "macOS ships a Widevine CDM");
+        }
+
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        {
+            assert_eq!(spec.browser.key, "ShardX-Linux.zip");
+        }
+    }
+
+    // A Widevine archive without a destination (or the reverse) would extract
+    // into the wrong place, so the pair must always agree.
+    #[test]
+    fn widevine_archive_and_subpath_agree() {
+        let spec = host_spec().expect("host_spec must support the CI runners");
+        if spec.widevine.is_some() {
+            assert!(
+                !spec.widevine_subpath.is_empty(),
+                "a Widevine archive needs a destination subpath"
+            );
+        }
+    }
+
+    // Path components are joined by the caller; an embedded separator would
+    // silently escape the extraction root.
+    #[test]
+    fn subpath_components_are_single_segments() {
+        let spec = host_spec().expect("host_spec must support the CI runners");
+        for part in spec.binary_subpath.iter().chain(spec.widevine_subpath.iter()) {
+            assert!(!part.is_empty(), "empty path component");
+            assert!(
+                !part.contains('/') && !part.contains('\\'),
+                "component {part:?} must not embed a separator"
+            );
+            assert_ne!(part, "..", "component must not traverse upwards");
+        }
+    }
+
+    // default_cache_dir() picks a different root per OS; all we can assert
+    // everywhere is that it is absolute and namespaced to this SDK.
+    #[test]
+    fn default_cache_dir_is_absolute_and_namespaced() {
+        let dir = default_cache_dir();
+        assert!(dir.is_absolute(), "cache dir {dir:?} must be absolute");
+        assert_eq!(dir.file_name().unwrap(), "shardx-sdk");
+
+        #[cfg(target_os = "windows")]
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            assert!(dir.starts_with(std::path::PathBuf::from(local)));
+        }
+
+        #[cfg(target_os = "macos")]
+        assert!(dir.to_string_lossy().contains("Application Support"));
+    }
+}

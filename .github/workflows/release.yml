@@ -261,6 +261,12 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # The SDK's platform-gated branches (host probes, archive layout, cache
+      # paths) only compile on their own OS, so run its tests on every runner
+      # in the matrix rather than on Linux alone.
+      - name: Verify Rust SDK on this platform
+        run: cargo test --manifest-path sdks/rust/Cargo.toml --all-features
+
       - name: Validate Tauri updater signing secrets
         shell: bash
         env:
