@@ -1,5 +1,21 @@
 # Changelog
 
+## v2.2.2
+
+### Security
+
+- The release gate audits every lockfile that ships. It previously covered
+  five of eight: `ui-kit` is compiled into each bundle by the prebuild step,
+  `shared` links into the launcher as `shardx-core`, and `server` is
+  published as a release asset, yet none of the three were scanned.
+- `event-listener` and `spin` are updated in the team server, clearing an
+  unsoundness advisory and a yanked release.
+- RUSTSEC-2023-0071 (`rsa`) has no fixed release and is exempted with the
+  reasoning recorded in the workflow: `rsa` enters the lockfile only through
+  the `sqlx` MySQL feature, which the server does not enable, and a release
+  build emits no `rsa` artifact. The exemption lapses if a MySQL backend is
+  ever switched on.
+
 ## v2.2.1
 
 ### Security
