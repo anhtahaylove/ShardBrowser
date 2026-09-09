@@ -3,6 +3,50 @@
   "repoUrl": "https://github.com/ProxyShard/ShardBrowser",
   "releases": [
     {
+      "version": "2.2.1",
+      "date": "2026-09-09",
+      "entries": [
+        {
+          "id": "zip-extraction-without-adm-zip",
+          "title": "Safer runtime archive extraction",
+          "lead": "The Node SDK dropped a zip library that let a crafted archive write outside the folder it was unpacking into.",
+          "tag": "fix",
+          "scope": "browser",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "The SDK unpacked the Windows runtime and the fingerprint bundle with **adm-zip**, which followed entry paths that climb out of the destination folder. A archive built to exploit that could overwrite files anywhere the SDK could write."
+            },
+            {
+              "type": "p",
+              "text": "There is no fixed release to move to. 0.6.0 is the newest version, and the automated upgrade goes *backwards* to 0.5.8, which carries a separate high-severity flaw where a small archive triggers a 4GB allocation."
+            },
+            {
+              "type": "p",
+              "text": "So the dependency is gone. Windows extracts with the `tar.exe` that ships with Windows 10 build 17063 and later; macOS and Linux keep using the system `unzip` they already relied on for engine bundles. Neither writes outside the destination."
+            }
+          ]
+        },
+        {
+          "id": "updater-signature-gate",
+          "title": "Releases verify their own update signatures",
+          "lead": "The release workflow now checks every updater signature before publishing, so a broken auto-update cannot ship.",
+          "tag": "new",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "Auto-update refuses any download whose signature does not match the key built into the app. That check previously ran for the first time on *your* machine — a manifest signed with the wrong key would publish cleanly and strand everyone on the old version."
+            },
+            {
+              "type": "p",
+              "text": "The workflow now verifies each platform's signature against that same key before the manifest is uploaded, and stops the release if one fails."
+            }
+          ]
+        }
+      ]
+    },
+    {
       "version": "2.2.0",
       "date": "2026-09-09",
       "entries": [

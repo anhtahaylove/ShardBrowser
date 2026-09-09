@@ -1,5 +1,30 @@
 # Changelog
 
+## v2.2.1
+
+### Security
+
+- The Node SDK no longer bundles `adm-zip`, which followed archive entries
+  that escape the extraction directory and let a crafted archive overwrite
+  arbitrary files (GHSA-vwc7-r8mq-g2x9). No patched release exists: 0.6.0 is
+  the newest version, and the automated fix downgrades to 0.5.8, which
+  carries a high-severity 4GB-allocation advisory instead.
+- Windows now extracts runtime archives with bsdtar (`tar.exe`, shipped
+  since Windows 10 build 17063); macOS and Linux continue to use the system
+  `unzip`. Neither writes outside the destination directory.
+- `hono` is pinned past three advisories that reached the MCP package
+  through the Model Context Protocol SDK.
+
+### Release integrity
+
+- The release workflow verifies every updater signature in the generated
+  manifest before uploading it, so a manifest that would fail auto-update
+  cannot be published.
+
+### Continuous integration
+
+- CI runs the Node SDK tests, which previously ran only during a release.
+
 ## v2.2.0
 
 ### MCP host
