@@ -47,6 +47,44 @@ jobs:
           cargo +1.74.1 test --locked --manifest-path sdks/rust/Cargo.toml --all-features
           cargo +1.74.1 test --locked --manifest-path sdks/rust/Cargo.toml --no-default-features
 
+  # Every runner above is Linux, so the cfg(windows) half of the codebase --
+  # os_crypt key handling, cookie decryption, process control, autostart --
+  # had no CI coverage at all. Windows is the launcher's primary platform, so
+  # the crates carrying those branches are tested there too.
+  windows-rust:
+    runs-on: windows-latest
+    name: Rust tests on Windows
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            shared/target
+            server/target
+            src-tauri/target
+          key: windows-rust-${{ hashFiles('shared/Cargo.lock', 'server/Cargo.lock', 'src-tauri/Cargo.lock') }}
+
+      - name: Shared core tests
+        run: cargo test --manifest-path shared/Cargo.toml
+
+      - name: Team server tests
+        run: cargo test --manifest-path server/Cargo.toml
+
+      # Holds the only Windows-gated test in the tree
+      # (windows_resume_uses_the_autostart_argument), which no Linux runner
+      # can execute.
+      - name: Launcher tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
   checks:
     runs-on: ubuntu-22.04
     name: frontend, Rust, and MCP checks
