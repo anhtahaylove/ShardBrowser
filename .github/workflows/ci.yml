@@ -71,7 +71,8 @@ jobs:
             shared/target
             server/target
             src-tauri/target
-          key: windows-rust-${{ hashFiles('shared/Cargo.lock', 'server/Cargo.lock', 'src-tauri/Cargo.lock') }}
+            sdks/rust/target
+          key: windows-rust-${{ hashFiles('shared/Cargo.lock', 'server/Cargo.lock', 'src-tauri/Cargo.lock', 'sdks/rust/Cargo.lock') }}
 
       - name: Shared core tests
         run: cargo test --manifest-path shared/Cargo.toml
@@ -84,6 +85,11 @@ jobs:
       # can execute.
       - name: Launcher tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      # The SDK's Windows-gated branches (host paths, runtime process control)
+      # were otherwise compiled only on Linux and macOS.
+      - name: Rust SDK tests
+        run: cargo test --manifest-path sdks/rust/Cargo.toml --all-features
 
   macos-check:
     runs-on: macos-14
