@@ -71,10 +71,19 @@ jobs:
           cargo +stable test --manifest-path sdks/rust/Cargo.toml --all-features
           cargo +stable test --manifest-path sdks/rust/Cargo.toml --no-default-features
 
-      - name: Verify Rust SDK RustSec gate
+      - name: Verify Rust RustSec gates
         run: |
           cargo +stable install cargo-audit --locked --version 0.22.2
           cargo +stable audit --file sdks/rust/Cargo.lock
+          # The launcher ships to users too, so its lockfile is audited as
+          # well. RUSTSEC-2026-0194/0195 are ignored for one reason only:
+          # the vulnerable quick-xml is pulled by wayland-scanner, a
+          # proc-macro that generates bindings at compile time, so the
+          # parser never runs in a shipped binary. Drop these once a
+          # wayland-scanner release relaxes the pin.
+          cargo +stable audit --file src-tauri/Cargo.lock \
+            --ignore RUSTSEC-2026-0194 \
+            --ignore RUSTSEC-2026-0195
 
       - name: Verify Rust SDK MSRV gates
         env:
