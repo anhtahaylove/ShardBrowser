@@ -169,6 +169,23 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      # The publish job reads its notes from CHANGELOG.md and refuses a tag
+      # with no matching section. Checking it here costs seconds; leaving it
+      # to publish wastes three platform builds first.
+      - name: Verify the changelog documents this release
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          notes=$(awk -v want="## $TAG" '
+            $0 == want { hit = 1; next }
+            hit && /^## / { exit }
+            hit { print }
+          ' CHANGELOG.md)
+          if [ -z "$(printf '%s' "$notes" | tr -d '[:space:]')" ]; then
+            echo "CHANGELOG.md has no section for $TAG." >&2
+            exit 1
+          fi
+
   build:
     needs: validate
     strategy:

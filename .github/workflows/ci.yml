@@ -77,6 +77,13 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # ui-kit is compiled into every bundle by the root prebuild step, so a
+      # lint failure there ships with the app.
+      - name: Lint the interface toolkit
+        run: |
+          npm ci --prefix ui-kit
+          npm run lint --prefix ui-kit
+
       - name: Frontend build
         run: npm run build
 
@@ -151,6 +158,9 @@ jobs:
 
       - name: Rust check
         run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Shared core tests
+        run: cargo test --manifest-path shared/Cargo.toml
 
       - name: Team server tests
         run: cargo test --manifest-path server/Cargo.toml
