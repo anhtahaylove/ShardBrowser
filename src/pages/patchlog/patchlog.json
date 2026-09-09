@@ -3,6 +3,33 @@
   "repoUrl": "https://github.com/ProxyShard/ShardBrowser",
   "releases": [
     {
+      "version": "2.2.2",
+      "date": "2026-09-09",
+      "entries": [
+        {
+          "id": "audit-every-shipped-lockfile",
+          "title": "Security auditing covers everything we ship",
+          "lead": "Three of the parts that go into a release were never scanned for known vulnerabilities. Now all eight are.",
+          "tag": "fix",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "The release checks scanned five of the eight dependency sets in this repository. The three they skipped all reach you: the interface toolkit is compiled into every build, the shared core is linked into the launcher itself, and the team server is published alongside it. A known vulnerability in any of them would have shipped without anyone being told."
+            },
+            {
+              "type": "p",
+              "text": "Turning the checks on found three issues in the team server, two of which are fixed here by moving to newer versions. The third has no fix available, and it never runs: it arrives through a database driver for MySQL that the server does not switch on, and a release build produces no trace of it. That reasoning is written into the release checks, so the exemption has to be justified again rather than quietly inherited."
+            },
+            {
+              "type": "note",
+              "text": "This release changes no behaviour you can see. It exists so the next one cannot ship a known vulnerability unnoticed."
+            }
+          ]
+        }
+      ]
+    },
+    {
       "version": "2.2.1",
       "date": "2026-09-09",
       "entries": [
