@@ -391,6 +391,9 @@ jobs:
       - name: Generate static updater manifest
         run: node scripts/generate-updater-manifest.mjs --dist dist --tag "${{ needs.validate.outputs.tag }}" --repo "${{ github.repository }}"
 
+      - name: Verify updater signatures against the shipped public key
+        run: node scripts/verify-updater-signatures.mjs --dist dist
+
       - name: Verify the server binaries are present
         shell: bash
         run: |

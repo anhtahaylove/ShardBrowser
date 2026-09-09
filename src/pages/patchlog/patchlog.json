@@ -3,6 +3,69 @@
   "repoUrl": "https://github.com/ProxyShard/ShardBrowser",
   "releases": [
     {
+      "version": "2.2.0",
+      "date": "2026-09-09",
+      "entries": [
+        {
+          "id": "hermes-leads-mcp-card",
+          "title": "Hermes leads the MCP card",
+          "lead": "Settings now checks Hermes first, because Hermes is the primary MCP host.",
+          "tag": "new",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "The card picked its main button by looking at Codex alone, so **Check Codex registration** stayed in front even once Hermes was the host that mattered. The Hermes check sat in *Advanced actions*, behind a disclosure most people never opened."
+            },
+            {
+              "type": "p",
+              "text": "Hermes now owns the leading button and Codex moves into *Advanced actions*, where its repair command is always offered rather than appearing only when the launcher had already judged the install broken."
+            },
+            {
+              "type": "code",
+              "text": "hermes config get mcp_servers.shardbrowser"
+            }
+          ]
+        },
+        {
+          "id": "advanced-actions-stay-closed",
+          "title": "Advanced actions stay collapsed",
+          "lead": "The secondary MCP actions keep their disclosure shut until you open it.",
+          "tag": "fix",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "Reordering the card put the less common actions behind a disclosure. A regression test now asserts they are genuinely hidden on load, so a future change cannot quietly spill them back into the card."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.1.2",
+      "date": "2026-09-08",
+      "entries": [
+        {
+          "id": "patch-log-catches-up",
+          "title": "The log records 2.1.0 and 2.1.1",
+          "lead": "This release ships the two entries that were written after the 2.1.1 tag was cut.",
+          "tag": "fix",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "The 2.1.0 and 2.1.1 entries landed on the main branch after their own releases had already been built, so the installed app kept badging 2.0.1 as the newest entry and said nothing about the two releases since."
+            },
+            {
+              "type": "note",
+              "text": "Nothing else changed in the app; this release exists to carry the log forward."
+            }
+          ]
+        }
+      ]
+    },
+    {
       "version": "2.1.1",
       "date": "2026-09-08",
       "entries": [
