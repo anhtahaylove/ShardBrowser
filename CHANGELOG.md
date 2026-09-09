@@ -20,6 +20,42 @@
 - `mcp/README.md` documents Hermes registration and maps each reported
   state to the action that resolves it.
 
+## v2.1.2
+
+### Patch log
+
+- Ships the 2.1.0 and 2.1.1 patch log entries, which landed on main after the
+  2.1.1 tag was cut. Without this release the installed app badges 2.0.1 as
+  the latest entry and records nothing about the two releases since.
+
+## v2.1.1
+
+### Launcher
+
+- An engine install now stops before deleting anything when a profile still
+  has the browser open, and names the profiles it is waiting on. Replacing a
+  held-open engine previously left it half written, which made the setup
+  screen reappear on every launch.
+- Settings offers **Use existing MCP folder** beside the download button, so
+  the launcher can adopt an MCP server you already have instead of
+  downloading a second copy.
+- A running profile's window can be raised when a site is waiting on a human
+  check.
+- The Ctrl K search shortcut hint no longer wraps onto two lines.
+
+## v2.1.0
+
+### Team and profiles
+
+- A device can be enrolled with a team server to sync encrypted profiles
+  between machines.
+- Profiles can be backed up and restored as ciphertext, keyed to your fleet.
+
+### Engine
+
+- The launcher checks the published engine hash before deciding an update is
+  needed, so the pinned manifest decides rather than a version string.
+
 ## v0.2.4
 
 ### Root key custody

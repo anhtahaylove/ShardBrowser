@@ -345,6 +345,8 @@ Download the build for your OS from [GitHub Releases](../../releases),
 then run it. Use `.dmg` for macOS, `.msi` or the portable `.exe` for
 Windows, and `.AppImage` or `.deb` for Linux.
 
+Vietnamese walkthrough: [Hướng dẫn cài đặt](docs/CAI-DAT-TIENG-VIET.md).
+
 The release is not code-signed with Apple Developer ID or Authenticode,
 so the operating system may show a warning on first launch:
 
