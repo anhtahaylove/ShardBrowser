@@ -65,6 +65,8 @@ jobs:
           npm ci --prefix sdks/node
           npm audit --prefix sdks/node --audit-level=moderate
           npm test --prefix sdks/node
+          npm ci --prefix ui-kit
+          npm audit --prefix ui-kit --audit-level=moderate
 
       - name: Verify Rust SDK stable gates
         run: |
@@ -84,6 +86,15 @@ jobs:
           cargo +stable audit --file src-tauri/Cargo.lock \
             --ignore RUSTSEC-2026-0194 \
             --ignore RUSTSEC-2026-0195
+          # shared builds into the launcher as shardx-core, and server is
+          # published as a release asset, so both ship and both are audited.
+          cargo +stable audit --file shared/Cargo.lock
+          # RUSTSEC-2023-0071 has no fixed release. rsa reaches the lockfile
+          # only through sqlx's unused mysql feature: server enables just
+          # sqlite, and a release build produces no rsa artifact. Drop this
+          # ignore if the server ever enables a MySQL backend.
+          cargo +stable audit --file server/Cargo.lock \
+            --ignore RUSTSEC-2023-0071
 
       - name: Verify Rust SDK MSRV gates
         env:
