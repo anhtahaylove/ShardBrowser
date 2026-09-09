@@ -126,22 +126,35 @@ fn assert_seed_present(root: &Path, files: &[(PathBuf, Vec<u8>)], original_root:
     for (p, body) in files {
         let rel = p.strip_prefix(original_root).expect("seed under root");
         let restored = root.join(rel);
-        let got = fs::read(&restored)
-            .unwrap_or_else(|e| panic!("restored file missing: {} ({e})", restored.display()));
 
-        // `Local State` is deliberately NOT byte-identical: the v1 restore path
-        // rewrites os_crypt's `encrypted_key` so the profile is decryptable by
-        // *this* machine's DPAPI/keyring. Requiring equality here would assert
-        // the opposite of the intended portability behaviour, so only the
-        // structural invariant is checked.
+        // `Local State` is machine-bound, so snapshots deliberately exclude it
+        // and a restore never recreates it from the archive. Whether one exists
+        // afterwards depends on where the platform keeps its os_crypt key:
+        // Windows stores it in this very file and mints one on first use, while
+        // Linux and macOS derive a fixed key and never touch the file. Assert
+        // each platform's real contract instead of Windows' side effect.
         if rel == Path::new("Local State") {
-            let text = String::from_utf8(got).expect("Local State is UTF-8");
-            assert!(
-                text.contains("\"os_crypt\""),
-                "restored Local State lost its os_crypt block"
-            );
+            if cfg!(target_os = "windows") {
+                let got = fs::read(&restored).unwrap_or_else(|e| {
+                    panic!("restored Local State missing: {} ({e})", restored.display())
+                });
+                let text = String::from_utf8(got).expect("Local State is UTF-8");
+                assert!(
+                    text.contains("\"os_crypt\""),
+                    "restored Local State lost its os_crypt block"
+                );
+            } else {
+                assert!(
+                    !restored.exists(),
+                    "snapshots must not carry Local State across machines: {}",
+                    restored.display()
+                );
+            }
             continue;
         }
+
+        let got = fs::read(&restored)
+            .unwrap_or_else(|e| panic!("restored file missing: {} ({e})", restored.display()));
 
         assert_eq!(&got, body, "content mismatch for {}", rel.display());
     }
