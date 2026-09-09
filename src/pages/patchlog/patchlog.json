@@ -3,6 +3,42 @@
   "repoUrl": "https://github.com/ProxyShard/ShardBrowser",
   "releases": [
     {
+      "version": "2.2.4",
+      "date": "2026-09-09",
+      "entries": [
+        {
+          "id": "sdk-tested-every-platform",
+          "title": "The developer kit is tested on your platform",
+          "lead": "The kit that automates ShardX passed its checks while running no tests at all.",
+          "tag": "fix",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "The developer kit works out details that differ per operating system: the size of your screen, how much memory the machine has, what the browser file is called and where downloaded files are kept. Each of those takes a different path on Windows, macOS and Linux."
+            },
+            {
+              "type": "p",
+              "text": "None of it was ever checked. The kit reported success while running no tests whatsoever, so the checks looked green for code nobody had verified. Twelve tests now cover it, and each one was confirmed to catch a fault deliberately introduced into the code it guards."
+            }
+          ]
+        },
+        {
+          "id": "sdk-checked-before-publishing",
+          "title": "A platform fault stops a release",
+          "lead": "The kit's tests now run on Windows, macOS and Linux while a release is being built.",
+          "tag": "fix",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "A fault that only appears on one operating system can pass every check made on another. The kit's tests are now part of building a release on all three, so a problem specific to one platform stops publishing rather than arriving on your machine."
+            }
+          ]
+        }
+      ]
+    },
+    {
       "version": "2.2.3",
       "date": "2026-09-09",
       "entries": [

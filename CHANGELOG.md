@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.2.4
+
+### Changed
+
+- The Rust SDK is tested on Windows and macOS. Its host probes and runtime
+  layout branch on the operating system, and those branches were compiled but
+  never exercised anywhere: the crate reported `0 tests` while passing.
+- The SDK's suite runs in the release build on all three platforms, so a
+  platform-specific fault blocks publishing instead of reaching an installer.
+
+### Fixed
+
+- The SDK's display parsing rejects malformed geometry instead of accepting it.
+  Twelve unit tests now cover screen and memory probing, the archive and
+  executable layout for each platform, and the cache directory each one uses.
+  Each assertion was verified against a deliberately broken build.
+
 ## v2.2.3
 
 ### Fixed
