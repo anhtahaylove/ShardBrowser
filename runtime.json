@@ -1,15 +1,15 @@
 {
   "archives": {
-    "ShardX-Fingerprints.zip": "de9a683b423a3d123572468e36cf896f",
-    "ShardX-Linux.zip": "30b0d584d557380dd646600f1c88b09d-25",
-    "ShardX-Mac-arm64.zip": "dd3da40f0bfb342757b3a270a77d9718-20",
+    "ShardX-Fingerprints.zip": "e2f22d25690c2590b3e087a79e141bf2",
+    "ShardX-Linux.zip": "3116458af9948b31324980680f7f1194-25",
+    "ShardX-Mac-arm64.zip": "753ea795c8949dca00fc73047db4f3de-20",
     "ShardX-Widevine-Linux.zip": "9b7d2697bc8ede2bd9fe72ccaaa2f15f-3",
     "ShardX-Widevine-Mac-arm64.zip": "c54f3fb0b47c47d8f4663ddd3b1f2cf4",
     "ShardX-Widevine-Win.zip": "8852779330edb7ac2096e0d21dc3afb5",
-    "ShardX-Windows.zip": "dc9da8907d40d91e8b0e964ed7dc43c7-24"
+    "ShardX-Windows.zip": "eb861fc080cb30f6e84bee3b449abee1-24"
   },
   "chromium_version": "152.0.7977.65",
-  "engine_build": "2",
+  "engine_build": "4",
   "min_launcher_version": "2.0.1",
   "min_sdk_version": "2.0.2",
   "grease_brand": "Not?A_Brand",
@@ -46,5 +46,5 @@
       53
     ]
   },
-  "revision": 6
+  "revision": 7
 }
