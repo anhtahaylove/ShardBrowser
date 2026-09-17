@@ -64,7 +64,7 @@ export function ProfileTable() {
 
   return (
     <>
-      <div className="overflow-hidden rounded-lg bg-bg-white-0 shadow-[var(--shadow-xs)] ring-1 ring-inset ring-stroke-soft-200">
+      <div className="overflow-x-auto overflow-y-hidden rounded-lg bg-bg-white-0 shadow-[var(--shadow-xs)] ring-1 ring-inset ring-stroke-soft-200">
         <div className="t-cols border-b border-stroke-soft-200 bg-bg-weak-50 text-subheading-2xs text-text-soft-400">
           <div></div>
           <div>
@@ -80,9 +80,9 @@ export function ProfileTable() {
           <div>Name</div>
           <div>Status</div>
           <div>Proxy</div>
-          <div>Notes</div>
-          <div>Time</div>
-          <div>Last run</div>
+          <div className="head-notes">Notes</div>
+          <div className="head-time">Time</div>
+          <div className="head-lastrun">Last run</div>
           <div></div>
         </div>
         {expanded === "__new__" && (
