@@ -1,5 +1,19 @@
 # Changelog
 
+## v2.2.7
+
+### Fixed
+
+- The profile and proxy tables no longer run past the right edge of a narrow
+  window. On a portrait monitor the content column is about 780px wide, but
+  the narrowest layout still asked for 904px, and the table clipped the
+  overflow instead of scrolling it — the Start button and the row menu were
+  simply unreachable. Narrow windows now drop the columns that repeat
+  elsewhere, and anything still too wide scrolls rather than disappearing.
+- Column headings line up with their rows again below 1280px. The Last run
+  cell was hidden in the rows but not in the heading, so every heading after
+  Notes sat above the wrong column.
+
 ## v2.2.6
 
 ### Added

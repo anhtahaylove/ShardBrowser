@@ -3,6 +3,33 @@
   "repoUrl": "https://github.com/ProxyShard/ShardBrowser",
   "releases": [
     {
+      "version": "2.2.7",
+      "date": "2026-09-18",
+      "entries": [
+        {
+          "id": "tables-fit-narrow-windows",
+          "title": "The table stays inside the window",
+          "lead": "On a portrait screen the Start button sat past the right edge, with no way to scroll to it.",
+          "tag": "fix",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "A portrait monitor leaves the table about 780px of room, but the narrowest layout still asked for 904px. The extra width was cut off rather than scrolled, so the Start button and the row menu were not just hard to reach — they were gone."
+            },
+            {
+              "type": "p",
+              "text": "Narrow windows now hand back the columns that repeat elsewhere: Notes first, then Time, and on the proxy list the country and the bound-profile count. The name, the status and the row actions keep their space. If a window is still too narrow for what is left, the table scrolls sideways instead of hiding anything."
+            },
+            {
+              "type": "note",
+              "text": "Column headings also line up with their rows again below 1280px, where Last run was hidden in the rows but not in the heading."
+            }
+          ]
+        }
+      ]
+    },
+    {
       "version": "2.2.6",
       "date": "2026-09-17",
       "entries": [
