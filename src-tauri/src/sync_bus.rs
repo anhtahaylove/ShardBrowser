@@ -194,18 +194,34 @@ impl Bus {
         }
 
         // EOF: the browser closed or died. No heartbeats, no stale entries.
-        {
-            let mut st = self.state.lock().unwrap();
-            if let Some(members) = st.groups.get_mut(&group) {
-                members.retain(|m| m.id != id);
-                if members.is_empty() {
-                    st.groups.remove(&group);
-                }
-            }
-            // The window is gone, so its offer goes with it.
-            st.helper.remove(&hello.profile);
-        }
+        self.drop_member(&group, id, &hello.profile);
         writer.abort();
+    }
+
+    /// Remove one member and, once a group empties, every trace of that group.
+    ///
+    /// `paused` and `arranged` are keyed by group name and outlive `groups`
+    /// unless they are cleared here. A group that was suspended, then fully
+    /// closed, would otherwise leave `paused` set: the next browser to join
+    /// under the same name is suspended on arrival for a reason nobody can
+    /// see, because the group it belonged to no longer exists.
+    fn drop_member(&self, group: &str, id: u64, profile: &str) {
+        let mut st = self.state.lock().unwrap();
+        let emptied = match st.groups.get_mut(group) {
+            Some(members) => {
+                members.retain(|m| m.id != id);
+                members.is_empty()
+            }
+            None => false,
+        };
+        if emptied {
+            st.groups.remove(group);
+            st.paused.remove(group);
+            st.arranged.remove(group);
+            st.driving.remove(group);
+        }
+        // The window is gone, so its offer goes with it.
+        st.helper.remove(profile);
     }
 
     fn fan_out(&self, group: &str, from: u64, line: &str) {
@@ -413,5 +429,125 @@ impl Bus {
                 let _ = m.tx.send(line.clone());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Bus, Layout, Member, State};
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::mpsc;
+
+    /// A bus with no listener: these tests exercise bookkeeping, not I/O.
+    fn test_bus() -> Bus {
+        Bus {
+            port: 0,
+            token: "test-token".to_string(),
+            state: Arc::new(Mutex::new(State::default())),
+        }
+    }
+
+    /// Adds a member the way `serve` does, returning its id.
+    fn join(bus: &Bus, group: &str, profile: &str) -> u64 {
+        let (tx, rx) = mpsc::unbounded_channel::<String>();
+        // Keep the receiver alive for the test's duration; a dropped receiver
+        // would make sends fail and mask what we are asserting.
+        std::mem::forget(rx);
+        let mut st = bus.state.lock().unwrap();
+        st.next_id += 1;
+        let id = st.next_id;
+        st.groups.entry(group.to_string()).or_default().push(Member {
+            id,
+            profile: profile.to_string(),
+            excluded: false,
+            tx,
+        });
+        id
+    }
+
+    /// Everything keyed by group name must go when the group empties. A
+    /// surviving `paused` entry silently suspends the next browser to use the
+    /// same group name, with no group on screen to explain why.
+    #[test]
+    fn emptying_a_group_clears_its_group_keyed_state() {
+        let bus = test_bus();
+        let id = join(&bus, "alpha", "profile-1");
+        bus.set_paused("alpha", true);
+        bus.arrange("alpha", Layout::Grid, (0, 0, 800, 600));
+
+        {
+            let st = bus.state.lock().unwrap();
+            assert!(st.paused.contains_key("alpha"), "precondition: paused set");
+            assert!(
+                st.arranged.contains_key("alpha"),
+                "precondition: arrangement recorded"
+            );
+        }
+
+        bus.drop_member("alpha", id, "profile-1");
+
+        let st = bus.state.lock().unwrap();
+        assert!(!st.groups.contains_key("alpha"), "group should be gone");
+        assert!(
+            !st.paused.contains_key("alpha"),
+            "paused outlived its group: the next joiner is suspended for no visible reason"
+        );
+        assert!(
+            !st.arranged.contains_key("alpha"),
+            "arrangement outlived its group"
+        );
+        assert!(
+            !st.driving.contains_key("alpha"),
+            "driving member outlived its group"
+        );
+        assert!(
+            !st.helper.contains_key("profile-1"),
+            "helper offer outlived its window"
+        );
+    }
+
+    /// The cleanup must not fire while other members remain: a group loses one
+    /// window at a time, and the survivors keep their suspension and layout.
+    #[test]
+    fn dropping_one_of_several_members_keeps_the_group() {
+        let bus = test_bus();
+        let first = join(&bus, "beta", "profile-1");
+        join(&bus, "beta", "profile-2");
+        bus.set_paused("beta", true);
+
+        bus.drop_member("beta", first, "profile-1");
+
+        let st = bus.state.lock().unwrap();
+        assert_eq!(
+            st.groups.get("beta").map(|m| m.len()),
+            Some(1),
+            "the surviving member should still be in the group"
+        );
+        assert_eq!(
+            st.paused.get("beta"),
+            Some(&true),
+            "a group that still has members keeps its suspension"
+        );
+        assert!(
+            !st.helper.contains_key("profile-1"),
+            "the departing window's helper offer should still be dropped"
+        );
+    }
+
+    /// `HashMap` lookups by group name are exact; a member id from one group
+    /// must never remove a member from another.
+    #[test]
+    fn dropping_an_unknown_group_is_a_no_op() {
+        let bus = test_bus();
+        let id = join(&bus, "gamma", "profile-1");
+
+        bus.drop_member("no-such-group", id, "profile-2");
+
+        let st = bus.state.lock().unwrap();
+        assert_eq!(
+            st.groups.get("gamma").map(|m| m.len()),
+            Some(1),
+            "an unrelated group should be untouched"
+        );
     }
 }
