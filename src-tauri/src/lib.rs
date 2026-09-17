@@ -1596,8 +1596,13 @@ fn open_helper_panel(app: &tauri::AppHandle, profile: &str) {
     }
 }
 
+/// `async` is load-bearing. A sync command runs on the main thread, and building
+/// a webview there deadlocks on Windows: WebView2 needs the message loop this
+/// command is sitting on, so the panel comes up white and the whole launcher
+/// stops answering. An async command runs off that thread and the builder hands
+/// the work to the loop properly.
 #[tauri::command]
-fn helper_show(app: tauri::AppHandle, profile: String) -> Result<(), String> {
+async fn helper_show(app: tauri::AppHandle, profile: String) -> Result<(), String> {
     open_helper_panel(&app, &profile);
     Ok(())
 }
