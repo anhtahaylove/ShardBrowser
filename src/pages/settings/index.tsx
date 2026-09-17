@@ -6,6 +6,7 @@ import { DownloadIcon } from "../../shared/icons";
 import { Topbar } from "../../shared/ui/Topbar";
 import { CopyField } from "../../shared/ui/CopyField";
 import { toast } from "../../shared/model/toast";
+import { useNav } from "../../shared/model/navigation";
 import { withUtm } from "../../shared/lib/utils";
 import type { Settings, ApiInfo, StartupStatus, McpStatus, CodexMcpStatus, HermesMcpStatus } from "../../entities/settings";
 import { HELPER_KINDS } from "../../entities/settings";
@@ -63,6 +64,8 @@ export function SettingsPage() {
   const checkHermes = () =>
     hermesMcpStatus().then((v) => { setHermes(v); setHermesError(null); })
       .catch((e) => setHermesError(safeUiError(e)));
+
+  const setSection = useNav((n) => n.setSection);
 
   useEffect(() => {
     settingsGet().then((v) => { setS(v); setBaseline(v); });
@@ -365,6 +368,28 @@ export function SettingsPage() {
       </SettingsCard>
 
 
+
+      <SettingsCard title="What's new">
+        <p className="m-0 mb-2 text-paragraph-xs text-text-soft-400">
+          After an update the launcher opens the patch log once, so the changes
+          get seen before they surprise anyone. This reopens it on demand —
+          useful when that first run went by in a hurry, or when someone else
+          installed the update on this machine.
+        </p>
+        <div className="flex items-center gap-2.5">
+          <Button
+            variant="neutral"
+            mode="stroke"
+            size="small"
+            onClick={() => setSection("patchlog")}
+          >
+            View the update notes
+          </Button>
+          <span className="text-paragraph-xs text-text-soft-400">
+            Also in the sidebar, under Patch log.
+          </span>
+        </div>
+      </SettingsCard>
 
       <div
         role="region"
