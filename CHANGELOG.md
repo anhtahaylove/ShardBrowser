@@ -24,6 +24,9 @@
 - Losing contact with the backend surfaces an error and empties the running
   list after three consecutive failures, rather than freezing the last known
   state on screen indefinitely.
+- Starting or stopping several selected profiles at once reports what failed.
+  Both paths discarded every error, so ten selected profiles yielding three
+  browsers looked exactly like success.
 - `rustls` is updated to 0.23.45 in the launcher and server lockfiles, clearing
   RUSTSEC-2026-0285.
 
