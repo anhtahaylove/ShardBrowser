@@ -3,6 +3,67 @@
   "repoUrl": "https://github.com/ProxyShard/ShardBrowser",
   "releases": [
     {
+      "version": "2.2.5",
+      "date": "2026-09-17",
+      "entries": [
+        {
+          "id": "stop-button-that-does-nothing",
+          "title": "A closed browser no longer sits there saying Running",
+          "lead": "The row stayed lit with a Stop button that did nothing, long after the browser was gone.",
+          "tag": "fix",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "A profile could sit in the list marked Running, showing hours or even days of uptime, when its browser had already closed. Pressing Stop did nothing at all: no error, no change, the row just stayed."
+            },
+            {
+              "type": "p",
+              "text": "The launcher keeps a note of each browser it starts and tears that note up when the browser exits. Tearing it up was the last step after writing down how long the profile had run, and if that writing step failed, the note survived the browser it described. Nothing afterwards ever cleaned it up."
+            },
+            {
+              "type": "p",
+              "text": "The note is now torn up no matter what else goes wrong. Stop on a row whose browser has already gone clears the row and tells you so, and if the launcher loses track of its browsers entirely it now says so instead of leaving the last thing it knew frozen on screen."
+            }
+          ]
+        },
+        {
+          "id": "bulk-start-stop-tells-you",
+          "title": "Starting several profiles at once tells you what failed",
+          "lead": "Ten selected, three opened, and nothing on screen to say the other seven did not.",
+          "tag": "fix",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "Selecting a group of profiles and starting them threw away every error along the way. If seven of ten failed to open, the result looked exactly like complete success."
+            },
+            {
+              "type": "p",
+              "text": "Both starting and stopping a selection now report how many failed and why, the same way starting a single profile always has."
+            }
+          ]
+        },
+        {
+          "id": "sync-group-suspend-sticks",
+          "title": "A closed sync group no longer suspends the next one",
+          "lead": "Reusing a group name could suspend a new window the moment it joined.",
+          "tag": "fix",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "Pausing a sync group, then closing every window in it, left the pause behind with no group to belong to. Opening a browser later under that same group name suspended it on arrival, while the group on screen showed nothing paused."
+            },
+            {
+              "type": "p",
+              "text": "Closing the last window in a group now clears the group completely: its pause, its window layout, and which window was driving."
+            }
+          ]
+        }
+      ]
+    },
+    {
       "version": "2.2.4",
       "date": "2026-09-09",
       "entries": [
