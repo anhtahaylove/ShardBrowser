@@ -677,18 +677,38 @@ export const useProfile = create<ProfileStore>((set, get) => ({
 
   bulkLaunch: async () => {
     const { selected, running } = get();
+    const failures: string[] = [];
     for (const id of selected) {
       if (running[id]) continue;
-      try { await launch(id); } catch {}
+      try { await launch(id); }
+      catch (e) { failures.push(safeUiError(e)); }
     }
     get().clearSelected();
+    // Silence here means a user who selected ten profiles and got three
+    // browsers has no idea the other seven failed, or why.
+    if (failures.length) {
+      toast.err(
+        failures.length === 1
+          ? `Could not start one browser: ${failures[0]}`
+          : `Could not start ${failures.length} browsers: ${failures[0]}`,
+      );
+    }
   },
 
   bulkStop: async () => {
+    const failures: string[] = [];
     for (const id of get().selected) {
-      try { await processKill(id); } catch {}
+      try { await processKill(id); }
+      catch (e) { failures.push(safeUiError(e)); }
     }
     get().clearSelected();
+    if (failures.length) {
+      toast.err(
+        failures.length === 1
+          ? `Could not stop one browser: ${failures[0]}`
+          : `Could not stop ${failures.length} browsers: ${failures[0]}`,
+      );
+    }
   },
 
   bulkDelete: async () => {
