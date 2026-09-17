@@ -143,17 +143,27 @@ impl Tracker {
             }
             // Bump the persisted total runtime; non-temporary only (temp
             // profiles get deleted next line so their counter is moot).
+            // Every step below is best-effort: a panic here used to abort the
+            // task before the tracker entry was dropped, leaving a phantom
+            // "running" row whose Stop button could never clear it.
             if !temporary {
                 let elapsed_ms = started_at.elapsed().as_millis() as u64;
-                if let Err(e) = crate::profile::add_runtime(&profile_id, elapsed_ms) {
-                    eprintln!("[launcher] add_runtime({profile_id}) failed: {e}");
+                let bump = std::panic::catch_unwind(|| {
+                    crate::profile::add_runtime(&profile_id, elapsed_ms)
+                });
+                match bump {
+                    Ok(Err(e)) => eprintln!("[launcher] add_runtime({profile_id}) failed: {e}"),
+                    Err(_) => eprintln!("[launcher] add_runtime({profile_id}) panicked"),
+                    Ok(Ok(())) => {}
                 }
             }
             // Tear down temporary profile (config + udd) on close.
             if temporary {
-                match crate::profile::delete(&profile_id) {
-                    Ok(()) => eprintln!("[launcher] temporary profile {profile_id} deleted on close"),
-                    Err(e) => eprintln!("[launcher] temporary profile {profile_id} cleanup failed: {e}"),
+                let cleanup = std::panic::catch_unwind(|| crate::profile::delete(&profile_id));
+                match cleanup {
+                    Ok(Ok(())) => eprintln!("[launcher] temporary profile {profile_id} deleted on close"),
+                    Ok(Err(e)) => eprintln!("[launcher] temporary profile {profile_id} cleanup failed: {e}"),
+                    Err(_) => eprintln!("[launcher] temporary profile {profile_id} cleanup panicked"),
                 }
             }
             // Keep the entry visible until every final profile write/delete is
@@ -385,6 +395,36 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn temporary_immediate_exit_is_finalized() {
         assert_immediate_exit_is_finalized(true).await;
+    }
+
+    /// The tracker entry outlives the child only until finalization runs. That
+    /// bookkeeping writes to the profile on disk, and a profile that cannot be
+    /// written (missing, unreadable, corrupt JSON) must not strand the entry:
+    /// a stranded entry shows the user a Running row with a Stop button that
+    /// can never clear, because the child it refers to is already gone.
+    #[tokio::test(flavor = "current_thread")]
+    async fn exit_is_finalized_even_when_profile_bookkeeping_fails() {
+        // No profile of this id exists on disk, so add_runtime's load fails.
+        let profile_id = format!("process-missing-profile-{}", uuid::Uuid::new_v4());
+        let mut command = if cfg!(windows) {
+            let mut command = Command::new("cmd.exe");
+            command.args(["/C", "exit", "0"]);
+            command
+        } else {
+            let mut command = Command::new("sh");
+            command.args(["-c", "exit 0"]);
+            command
+        };
+        let child = command.spawn().expect("spawn immediate exit child");
+        Tracker::shared().track(profile_id.clone(), child, false);
+
+        for _ in 0..100 {
+            if !Tracker::shared().is_running(&profile_id) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("failed bookkeeping stranded a phantom running entry: {profile_id}");
     }
 
     #[tokio::test(flavor = "current_thread")]

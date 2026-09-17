@@ -1,5 +1,32 @@
 # Changelog
 
+## v2.2.5
+
+### Added
+
+- A profile's session restore can be turned on and off from the profile editor,
+  under Privacy. Automation profiles accumulate tabs nobody closes, and
+  reopening all of them on every launch costs time for no gain. Profiles
+  without the setting keep restoring, exactly as before.
+
+### Fixed
+
+- The Shard Helper panel no longer deadlocks the launcher on Windows. Building
+  the webview from a synchronous command occupied the message loop WebView2
+  itself needs, so the panel came up blank and the whole window stopped
+  responding.
+- A browser that exits no longer leaves a phantom "Running" row behind. The
+  bookkeeping that runs at exit could fail (a profile that is missing or has
+  unreadable JSON) and abandon the tracker entry, stranding a Stop button that
+  could never clear because the process it referred to was already gone.
+- Pressing Stop on a row whose browser has already exited clears that row and
+  says so, instead of doing nothing.
+- Losing contact with the backend surfaces an error and empties the running
+  list after three consecutive failures, rather than freezing the last known
+  state on screen indefinitely.
+- `rustls` is updated to 0.23.45 in the launcher and server lockfiles, clearing
+  RUSTSEC-2026-0285.
+
 ## v2.2.4
 
 ### Changed

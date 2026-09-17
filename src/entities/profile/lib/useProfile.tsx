@@ -208,10 +208,15 @@ export const useProfile = create<ProfileStore>((set, get) => ({
   // total_runtime_ms — re-fetch so the Time column reflects the new total.
   startProcessPolling: () => {
     let cancelled = false;
+    // A single failed poll is normal during a backend restart; a run of them
+    // means the status on screen is frozen, and a frozen Running row with a
+    // dead Stop button is worse than an empty list.
+    let consecutiveFailures = 0;
     const tick = async () => {
       try {
         const list = await processList();
         if (cancelled) return;
+        consecutiveFailures = 0;
         const now = Date.now();
         const prev = get().running;
         const next: Record<string, number> = {};
@@ -223,7 +228,16 @@ export const useProfile = create<ProfileStore>((set, get) => ({
         const justExited = Object.keys(prev).some((id) => !(id in next));
         set({ running: next, runningCdp: cdp });
         if (justExited) get().reload();
-      } catch {}
+      } catch (e) {
+        if (cancelled) return;
+        consecutiveFailures += 1;
+        // Three strikes (~6s) before clearing, so a brief blip doesn't wipe
+        // a legitimately running list out from under the user.
+        if (consecutiveFailures === 3) {
+          set({ running: {}, runningCdp: {} });
+          toast.err(`Lost track of running browsers: ${safeUiError(e)}`);
+        }
+      }
     };
     tick();
     const handle = setInterval(tick, 2000);
@@ -370,7 +384,21 @@ export const useProfile = create<ProfileStore>((set, get) => ({
   // pre-warm); surfacing the busy state is what the user reads as "did it work?".
   startStop: async (p) => {
     if (get().running[p.id]) {
-      try { await processKill(p.id); }
+      try {
+        // False means the backend has no child for this profile: the row is a
+        // leftover from a process that already died. Drop it so the button
+        // stops lying instead of leaving the user pressing a dead Stop.
+        const stopping = await processKill(p.id);
+        if (!stopping) {
+          const next = { ...get().running };
+          delete next[p.id];
+          const cdp = { ...get().runningCdp };
+          delete cdp[p.id];
+          set({ running: next, runningCdp: cdp });
+          toast.ok("That browser had already exited; cleared its status");
+          get().reload();
+        }
+      }
       catch (e) { toast.err(String(e)); }
       return;
     }
