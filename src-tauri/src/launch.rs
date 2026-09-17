@@ -16,10 +16,24 @@ pub struct LaunchOutcome {
     pub cdp: Option<process::CdpInfo>,
 }
 
-#[derive(Default)]
 struct LaunchOptions {
     args: Vec<String>,
     extension_dirs: Vec<PathBuf>,
+    /// Restore the previous session on an interactive launch. Default true,
+    /// matching what the browser does on its own. Automation profiles set this
+    /// false: a profile driven by CDP accumulates tabs nobody closes, and
+    /// reopening it then reloads all of them at once.
+    restore_session: bool,
+}
+
+impl Default for LaunchOptions {
+    fn default() -> Self {
+        Self {
+            args: Vec::new(),
+            extension_dirs: Vec::new(),
+            restore_session: true,
+        }
+    }
 }
 
 /// Resolve the ShardX executable from settings, runtime cache, or dev guess.
@@ -196,8 +210,13 @@ pub async fn launch_profile_synced(
     }
 
     // Interactive launches: restore previous session, suppress crash bubble.
+    // `launch.restore_session: false` opts a profile out — automation profiles
+    // pile up tabs that nobody closes, and restoring them all at once is what
+    // makes a long-idle profile crawl on reopen.
     if !headless && !enable_cdp {
-        cmd.arg("--restore-last-session");
+        if launch_options.restore_session {
+            cmd.arg("--restore-last-session");
+        }
         cmd.arg("--hide-crash-restore-bubble");
     }
 
@@ -366,6 +385,12 @@ fn parse_launch_options(value: Option<Value>) -> Result<LaunchOptions> {
     Ok(LaunchOptions {
         args: parse_launch_args(obj.get("args"))?,
         extension_dirs: parse_dirs(obj.get("extension_dirs"), "launch.extension_dirs")?,
+        restore_session: match obj.get("restore_session") {
+            None | Some(Value::Null) => true,
+            Some(v) => v
+                .as_bool()
+                .context("`launch.restore_session` must be a boolean")?,
+        },
     })
 }
 
@@ -791,6 +816,28 @@ mod launch_option_tests {
 
         assert_eq!(opts.args, vec!["--mute-audio", "--window-size=1200,900"]);
         assert_eq!(opts.extension_dirs.len(), 1);
+    }
+
+    #[test]
+    fn launch_options_restore_session_defaults_on_and_opts_out() {
+        // Absent key keeps the browser's own behaviour.
+        assert!(parse_launch_options(None).unwrap().restore_session);
+        assert!(parse_launch_options(Some(json!({}))).unwrap().restore_session);
+        assert!(
+            parse_launch_options(Some(json!({"restore_session": null})))
+                .unwrap()
+                .restore_session
+        );
+
+        // Automation profiles opt out explicitly.
+        assert!(
+            !parse_launch_options(Some(json!({"restore_session": false})))
+                .unwrap()
+                .restore_session
+        );
+
+        // A non-boolean is a profile authoring mistake, not a silent default.
+        assert!(parse_launch_options(Some(json!({"restore_session": "no"}))).is_err());
     }
 
     #[test]
