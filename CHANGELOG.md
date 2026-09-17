@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.2.6
+
+### Added
+
+- The patch log can be reopened from Settings, under What's new. The launcher
+  shows it once after an update and records the version, so closing the page
+  put the notes out of reach — awkward when the update lands mid-task, or when
+  somebody else installs it on a shared machine. The sidebar's Patch log entry
+  already led there; the button puts a door where people go looking.
+
 ## v2.2.5
 
 ### Added
