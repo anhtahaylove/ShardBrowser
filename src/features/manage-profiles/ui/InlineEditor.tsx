@@ -234,6 +234,18 @@ export function InlineEditor({
           </div>
 
           <label className="flex flex-col gap-1">
+            <CSSelect
+              title="Session restore"
+              value={f.restore_session ? "1" : "0"}
+              onChange={(v) => u("restore_session", v === "1")}
+              options={[
+                { value: "1", label: "Reopen last session's tabs" },
+                { value: "0", label: "Always start fresh" },
+              ]}
+            />
+          </label>
+
+          <label className="flex flex-col gap-1">
             <span className="text-label-base font-medium text-text-strong-900">Geolocation</span>
             <SegmentControl
               size="small"

@@ -46,6 +46,10 @@ export type ProfileForm = {
 
   webrtc: WebRtcMode;
   do_not_track: boolean;
+  /// False keeps the browser from reopening last session's tabs on launch.
+  /// Automation profiles accumulate tabs nobody closes; restoring them all
+  /// makes every reopen slower for no gain.
+  restore_session: boolean;
 
   noise_canvas: NoiseMode;
   noise_webgl: NoiseMode;

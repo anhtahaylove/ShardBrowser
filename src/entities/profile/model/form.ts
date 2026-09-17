@@ -25,6 +25,8 @@ export const defaultForm = (): ProfileForm => ({
 
   webrtc: "auto",
   do_not_track: false,
+  // Matches the browser's own default and the Rust side's absent-key default.
+  restore_session: true,
 
   noise_canvas: "real",
   noise_webgl: "real",
@@ -66,6 +68,8 @@ export function fromStored(stored: any): ProfileForm {
   f.language = stored?.navigator?.language ?? AUTO_LANG;
   f.webrtc = (stored?.webrtc === "replace" ? "tcp_only" : stored?.webrtc) ?? "auto";
   f.do_not_track = !!stored?.navigator?.do_not_track;
+  // Absent means "restore", matching the Rust parser and pre-existing profiles.
+  f.restore_session = stored?.launch?.restore_session !== false;
 
   const noise = stored?.noise ?? {};
   const noiseMode = (n: any): NoiseMode => (n?.enabled ? "auto" : "real");
@@ -117,6 +121,15 @@ export function toStored(f: ProfileForm, lib: FingerprintEntry | null): any {
   base.timezone = f.timezone;
   base.icu_locale = f.language === AUTO_LANG ? null : f.language;
   base.webrtc = f.webrtc;
+
+  // Keep any other launch keys (args, extension_dirs) the editor never renders.
+  // True is the default, so write the key only when opting out — an absent key
+  // reads as "restore" on the Rust side and keeps profiles free of noise.
+  const priorLaunch = { ...(base.launch || {}) };
+  delete priorLaunch.restore_session;
+  const launch = f.restore_session ? priorLaunch : { ...priorLaunch, restore_session: false };
+  if (Object.keys(launch).length > 0) base.launch = launch;
+  else delete base.launch;
 
   base.navigator = {
     ...(base.navigator || {}),
