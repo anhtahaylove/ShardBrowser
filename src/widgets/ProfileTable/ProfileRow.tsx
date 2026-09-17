@@ -228,7 +228,7 @@ export function ProfileRow({ profile, proxy, onMenu }: {
           ) : <span className="text-paragraph-xs text-text-soft-400">— direct —</span>}
         </div>
         <div
-          className="min-w-0 cursor-pointer overflow-hidden text-ellipsis whitespace-nowrap text-paragraph-xs text-text-sub-600 transition-colors hover:text-primary-base"
+          className="cell-notes min-w-0 cursor-pointer overflow-hidden text-ellipsis whitespace-nowrap text-paragraph-xs text-text-sub-600 transition-colors hover:text-primary-base"
           title={p.notes || "Click to edit notes"}
           onClick={() => { if (!shiftPress.current) setQuickEdit({ kind: "notes", profile: p }); }}
         >

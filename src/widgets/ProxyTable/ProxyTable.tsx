@@ -36,7 +36,7 @@ export function ProxyTable() {
 
   return (
     <>
-      <div className="overflow-hidden rounded-12 bg-bg-white-0 shadow-[var(--shadow-xs)] ring-1 ring-inset ring-stroke-soft-200">
+      <div className="overflow-x-auto overflow-y-hidden rounded-12 bg-bg-white-0 shadow-[var(--shadow-xs)] ring-1 ring-inset ring-stroke-soft-200">
         <div className="p-cols w-full justify-between border-b border-stroke-soft-200 bg-bg-weak-50 text-subheading-2xs text-text-soft-400">
           <div>
             <Checkbox
@@ -49,8 +49,8 @@ export function ProxyTable() {
           <div>Name</div>
           <div>Type</div>
           <div>Host:Port</div>
-          <div>Country</div>
-          <div>Profiles</div>
+          <div className="head-country">Country</div>
+          <div className="head-profiles">Profiles</div>
           <div>Test result</div>
           <div></div>
         </div>
