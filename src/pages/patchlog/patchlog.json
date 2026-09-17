@@ -3,6 +3,33 @@
   "repoUrl": "https://github.com/ProxyShard/ShardBrowser",
   "releases": [
     {
+      "version": "2.2.6",
+      "date": "2026-09-17",
+      "entries": [
+        {
+          "id": "reopen-the-patch-log",
+          "title": "The update notes are no longer a one-time offer",
+          "lead": "The page opened once after an update, and closing it put the notes out of reach.",
+          "tag": "new",
+          "scope": "launcher",
+          "blocks": [
+            {
+              "type": "p",
+              "text": "After an update the launcher opens this page once, so the changes get seen before they surprise anyone. Close it and that was the end of it: the launcher had written down which version you had been shown, and the page never opened itself again."
+            },
+            {
+              "type": "p",
+              "text": "That first run is often a bad moment to read release notes. The update lands while you are in the middle of something, or somebody else installs it on a shared machine, and whoever sits down afterwards has no way back to what changed."
+            },
+            {
+              "type": "p",
+              "text": "Settings now has a What's new card with a button that reopens the page whenever you want it. The sidebar's Patch log entry has always led here too; the button simply puts a door where people go looking after an update."
+            }
+          ]
+        }
+      ]
+    },
+    {
       "version": "2.2.5",
       "date": "2026-09-17",
       "entries": [
