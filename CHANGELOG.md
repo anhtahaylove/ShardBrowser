@@ -27,6 +27,10 @@
 - Starting or stopping several selected profiles at once reports what failed.
   Both paths discarded every error, so ten selected profiles yielding three
   browsers looked exactly like success.
+- Closing every window in a sync group clears that group's state. Suspension,
+  layout, and driving-member records were keyed by group name and outlived the
+  group itself, so a new browser joining under a previously suspended group
+  name arrived suspended with nothing on screen to explain why.
 - `rustls` is updated to 0.23.45 in the launcher and server lockfiles, clearing
   RUSTSEC-2026-0285.
 
