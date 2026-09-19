@@ -5,7 +5,7 @@ này đều lấy từ bản v2.2.0 thực tế.
 
 ## 1. Tải bản cài đặt
 
-Vào trang [GitHub Releases](https://github.com/anhtahaylove/ShardBrowser/releases/latest) và tải tệp theo hệ điều hành:
+Vào trang [GitHub Releases](https://github.com/huuhungn/ShardBrowser/releases/latest) và tải tệp theo hệ điều hành:
 
 | Hệ điều hành | Tệp nên tải | Ghi chú |
 | --- | --- | --- |

@@ -16,7 +16,7 @@ const PUB_BASE: &str = "https://pub-e57a7c60f6934eb09a6600bf2fc59cdc.r2.dev";
 /// otherwise re-target every installed custom Launcher without review. Our
 /// runtime.json is updated deliberately, after the launcher can honour it.
 const MANIFEST_URL: &str =
-    "https://raw.githubusercontent.com/anhtahaylove/ShardBrowser/main/runtime.json";
+    "https://raw.githubusercontent.com/huuhungn/ShardBrowser/main/runtime.json";
 /// Chromium version baked into the current bundle (used for Mac Framework path).
 pub const CHROMIUM_VERSION: &str = "152.0.7977.65";
 
