@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 /// Pinning the tag prevents an older Launcher from downloading a future MCP
 /// bundle that may require a newer Automation API.
 const MCP_ARCHIVE_URL: &str = concat!(
-    "https://github.com/anhtahaylove/ShardBrowser/releases/download/v",
+    "https://github.com/huuhungn/ShardBrowser/releases/download/v",
     env!("CARGO_PKG_VERSION"),
     "/ShardX-MCP.tar.gz"
 );

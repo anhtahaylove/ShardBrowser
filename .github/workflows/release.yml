@@ -489,7 +489,7 @@ jobs:
       - name: Write release notes
         run: |
           cat > release-notes.md <<'EOF'
-          Custom integration release for [anhtahaylove/ShardBrowser](https://github.com/anhtahaylove/ShardBrowser).
+          Custom integration release for [huuhungn/ShardBrowser](https://github.com/huuhungn/ShardBrowser).
 
           ## Highlights
 

@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use tauri::{ipc::Channel, AppHandle, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-const RELEASE_URL: &str = "https://github.com/anhtahaylove/ShardBrowser/releases/latest";
+const RELEASE_URL: &str = "https://github.com/huuhungn/ShardBrowser/releases/latest";
 
 #[derive(Default)]
 struct Pending {

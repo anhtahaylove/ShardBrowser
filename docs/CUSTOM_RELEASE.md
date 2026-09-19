@@ -5,7 +5,7 @@ matching `mcp/` source as `ShardX-MCP.tar.gz`. Launcher Settings downloads that
 asset from:
 
 ```text
-https://github.com/anhtahaylove/ShardBrowser/releases/download/v<version>/ShardX-MCP.tar.gz
+https://github.com/huuhungn/ShardBrowser/releases/download/v<version>/ShardX-MCP.tar.gz
 ```
 
 The URL is compiled from `CARGO_PKG_VERSION`, so an older Launcher keeps using
@@ -57,7 +57,7 @@ When the custom release workflow is still only on a feature branch, run it from
 that branch explicitly, for example:
 
 ```powershell
-gh workflow run Release --repo anhtahaylove/ShardBrowser --ref codex/next-dependency-patch-rust-sdk -f tag=v0.1.29 -f publish_release=false
+gh workflow run Release --repo huuhungn/ShardBrowser --ref codex/next-dependency-patch-rust-sdk -f tag=v0.1.29 -f publish_release=false
 ```
 
 The internal workflow artifacts are enough to test updater-signed Launcher installation.

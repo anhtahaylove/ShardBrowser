@@ -7,7 +7,7 @@ Last verified: 2026-09-09 (Hermes Desktop as the MCP host)
 | Purpose | Path / branch |
 | --- | --- |
 | Development fork | `%USERPROFILE%\Documents\GitHub\ShardBrowser` |
-| Fork remote | `origin = https://github.com/anhtahaylove/ShardBrowser.git` |
+| Fork remote | `origin = https://github.com/huuhungn/ShardBrowser.git` |
 | Upstream remote | `upstream = https://github.com/ProxyShard/ShardBrowser.git` |
 | Upstream push | Disabled intentionally |
 | Custom integration branch | `feat/upstream-v2.0.1-integration` |
@@ -22,7 +22,7 @@ to `origin`; upstream changes are proposed only through a scoped pull request.
 ## Current version state
 
 - Released Launcher and MCP archive: `v0.2.4`.
-- Release: <https://github.com/anhtahaylove/ShardBrowser/releases/tag/v0.2.4>.
+- Release: <https://github.com/huuhungn/ShardBrowser/releases/tag/v0.2.4>.
 - The working tree has merged upstream `v2.0.1` and is versioned `2.1.2`: the
   fork must stay at or above `2.0.1`, because the runtime manifest now carries
   `min_launcher_version`.
@@ -237,7 +237,7 @@ the final proof for the Windows session-restore path.
 
 The v0.1.27 release supersedes v0.1.26 for security and profile-lifecycle
 safety. Release workflow run
-<https://github.com/anhtahaylove/ShardBrowser/actions/runs/31711893861>
+<https://github.com/huuhungn/ShardBrowser/actions/runs/31711893861>
 passed validation plus Windows x64, Linux x64, macOS arm64, and public publish.
 All 16 entries in `SHA256SUMS.txt` match the downloaded assets; public NSIS and
 MSI updater signatures verify against the Launcher key. The public MCP archive

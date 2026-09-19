@@ -101,7 +101,7 @@ function updateInfo() {
     current: "0.1.29",
     latest: available ? "v0.1.29" : null,
     update_available: available,
-    release_url: "https://github.com/anhtahaylove/ShardBrowser/releases/tag/v0.1.29",
+    release_url: "https://github.com/huuhungn/ShardBrowser/releases/tag/v0.1.29",
     notes: "Sanitized update fixture.",
     pub_date: "2026-07-18T00:00:00Z",
   };
